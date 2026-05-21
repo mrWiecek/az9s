@@ -1,0 +1,7 @@
+.venv/
+.pytest_cache/
+.aztui-builder/
+__pycache__/
+*.pyc
+workspaces/
+.env
