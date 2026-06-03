@@ -31,8 +31,15 @@ def load_settings(
     allow_git_commits: bool,
     use_memory_checkpointer: bool,
 ) -> RuntimeSettings:
+    app_name = str(app_name).strip()
+    workspace_subdir = str(workspace_subdir).strip()
+    if app_name.startswith("app="):
+        app_name = app_name.removeprefix("app=")
+    if workspace_subdir.startswith("workspace="):
+        workspace_subdir = workspace_subdir.removeprefix("workspace=")
+
     project_root = _project_root()
-    workspace_root_env = os.getenv("AZTUI_BUILDER_WORKSPACE_ROOT", "workspaces")
+    workspace_root_env = os.getenv("AZTUI_BUILDER_WORKSPACE_ROOT", "src/apps")
     checkpoint_db_env = os.getenv("AZTUI_BUILDER_CHECKPOINT_DB", ".aztui-builder/checkpoints.sqlite")
     workspace_root = (project_root / workspace_root_env / workspace_subdir).resolve()
     workspace_root.mkdir(parents=True, exist_ok=True)
@@ -78,7 +85,7 @@ def run(
     spec_file: Path = typer.Option(..., exists=True, readable=True, help="Path to the app specification markdown file."),
     thread_id: str = typer.Option(..., help="Persistent thread identifier used for checkpointed runs."),
     app_name: str = typer.Option("aztui", help="Target application name."),
-    workspace_subdir: str = typer.Option("aztui", help="Directory under workspaces/ that will hold the generated app."),
+    workspace_subdir: str = typer.Option("aztui", help="Directory under src/apps/ that will hold the generated app."),
     max_iterations: int = typer.Option(18, min=1, help="Maximum specialist iterations before the graph stops."),
     allow_git_commits: bool = typer.Option(False, help="Allow git commits after HITL approval."),
     use_memory_checkpointer: bool = typer.Option(False, help="Use in-memory checkpointing instead of SQLite."),
@@ -108,7 +115,7 @@ def resume(
     thread_id: str = typer.Option(..., help="Persistent thread identifier to resume."),
     resume_json: str = typer.Option(..., help="JSON payload returned to the pending interrupt."),
     app_name: str = typer.Option("aztui", help="Target application name."),
-    workspace_subdir: str = typer.Option("aztui", help="Directory under workspaces/ that holds the generated app."),
+    workspace_subdir: str = typer.Option("aztui", help="Directory under src/apps/ that holds the generated app."),
     allow_git_commits: bool = typer.Option(False, help="Allow git commits after HITL approval."),
     use_memory_checkpointer: bool = typer.Option(False, help="Use in-memory checkpointing instead of SQLite."),
 ) -> None:
@@ -130,7 +137,7 @@ def resume(
 def show_state(
     thread_id: str = typer.Option(..., help="Persistent thread identifier to inspect."),
     app_name: str = typer.Option("aztui", help="Target application name."),
-    workspace_subdir: str = typer.Option("aztui", help="Directory under workspaces/."),
+    workspace_subdir: str = typer.Option("aztui", help="Directory under src/apps/."),
     use_memory_checkpointer: bool = typer.Option(False, help="Use in-memory checkpointing instead of SQLite."),
 ) -> None:
     """Display the latest checkpointed graph state."""

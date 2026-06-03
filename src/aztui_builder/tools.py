@@ -22,10 +22,18 @@ class WorkspaceSandbox:
     settings: RuntimeSettings
 
     def resolve_path(self, relative_path: str) -> Path:
-        candidate = (self.settings.workspace_root / relative_path).resolve()
-        if self.settings.workspace_root.resolve() in candidate.parents or candidate == self.settings.workspace_root.resolve():
+        normalized = str(relative_path).strip()
+        if not normalized:
+            normalized = "."
+        raw_path = Path(normalized)
+        if raw_path.is_absolute():
+            candidate = raw_path.resolve()
+        else:
+            candidate = (self.settings.workspace_root / normalized).resolve()
+        workspace_root = self.settings.workspace_root.resolve()
+        if workspace_root in candidate.parents or candidate == workspace_root:
             return candidate
-        raise ValueError(f"Path escapes project sandbox: {relative_path}")
+        raise ValueError(f"Path escapes project sandbox: {normalized}")
 
     def list_dir(self, relative_path: str = ".") -> dict[str, Any]:
         path = self.resolve_path(relative_path)

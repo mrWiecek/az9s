@@ -32,11 +32,13 @@ def _make_checkpointer(settings: RuntimeSettings):
 
 def supervisor_node(state: BuildState, settings: RuntimeSettings) -> BuildState:
     decision = run_supervisor(state, settings)
+    next_agent = decision.next_agent
+    approved_next_agent = next_agent if next_agent in SPECIALIST_AGENTS else "feature_implementer"
     updates: BuildState = {
-        "active_agent": decision.next_agent,
+        "active_agent": next_agent,
         "last_decision": decision.model_dump(),
         "interrupt_payload": None,
-        "logs": [f"Supervisor selected {decision.next_agent}: {decision.rationale}"],
+        "logs": [f"Supervisor selected {next_agent}: {decision.rationale}"],
     }
     if decision.target_file:
         updates["current_file"] = decision.target_file
@@ -44,6 +46,7 @@ def supervisor_node(state: BuildState, settings: RuntimeSettings) -> BuildState:
         updates["interrupt_payload"] = {
             "question": decision.checkpoint_reason or "Human approval required.",
             "decision": decision.model_dump(),
+            "approved_next_agent": approved_next_agent,
         }
         updates["active_agent"] = "human_checkpoint"
     if decision.next_agent == "END":
@@ -55,6 +58,7 @@ def human_checkpoint_node(state: BuildState) -> BuildState:
     payload = state.get("interrupt_payload") or {
         "question": "Approve the next step?",
         "decision": state.get("last_decision", {}),
+        "approved_next_agent": "feature_implementer",
     }
     response = interrupt(payload)
     approved = response if isinstance(response, bool) else bool(getattr(response, "get", lambda *_args, **_kwargs: False)("approved", False))
@@ -63,7 +67,9 @@ def human_checkpoint_node(state: BuildState) -> BuildState:
     logs = [f"Human checkpoint response received: {response}"]
     updates: BuildState = {"human_response": response, "logs": logs, "interrupt_payload": None}
     if approved:
-        next_agent = state.get("last_decision", {}).get("next_agent", "project_architect")
+        next_agent = payload.get("approved_next_agent") or state.get("last_decision", {}).get("next_agent", "project_architect")
+        if next_agent in {"human_checkpoint", "END"}:
+            next_agent = "feature_implementer"
         updates["active_agent"] = next_agent
     else:
         updates["active_agent"] = "supervisor"

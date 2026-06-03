@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aztui",
+    "crates/aztui-core",
+    "crates/aztui-azure",
+    "crates/aztui-tui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["aztui contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/aztui/aztui"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+futures = "0.3"
+
+# TUI
+ratatui = "0.26"
+crossterm = "0.27"
+
+# Azure SDK
+azure_core = "0.19"
+azure_identity = "0.19"
+azure_mgmt_resources = "0.19"
+azure_mgmt_compute = "0.19"
+azure_mgmt_network = "0.19"
+
+# Data & serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }

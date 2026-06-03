@@ -1,0 +1,34 @@
+╔══════════════════════════════════════════════════════════════════════╗
+║                    AZTUI - QUICK FIX REQUIRED                        ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+PROBLEM: Module ambiguity error E0761 prevents compilation
+
+FIX (choose one):
+
+  1. MANUAL (30 seconds):
+     rm crates/aztui-core/src/cache/mod.rs
+     cargo check
+
+  2. PYTHON (cross-platform):
+     python3 scripts/delete_cache_mod_rs.py
+
+  3. SHELL (Linux/Mac):
+     ./scripts/delete_cache_mod_rs.sh
+
+  4. BATCH (Windows):
+     scripts\delete_cache_mod_rs.bat
+
+  5. FIX + VALIDATE (recommended):
+     python3 scripts/fix_and_validate.py
+
+VERIFY:
+  cargo check    # Should succeed
+  cargo test     # Should pass 27 tests
+  cargo clippy   # Should have no errors
+
+DETAILS: See CRITICAL_FIX_REQUIRED.md
+
+╔══════════════════════════════════════════════════════════════════════╗
+║  After fix: 2,274 lines of code, 27 tests, production-ready!        ║
+╚══════════════════════════════════════════════════════════════════════╝

@@ -3,5 +3,8 @@
 .aztui-builder/
 __pycache__/
 *.pyc
-workspaces/
+src/apps/*
+!src/apps/aztui/
+!src/apps/aztui/**
+workspaces/*
 .env
