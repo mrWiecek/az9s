@@ -5,16 +5,19 @@
 // - Repository pattern for data access
 // - TTL-based cache invalidation
 // - Optimized queries for terminal rendering
+// - Cache warming strategies
 
 mod migrations;
 mod repository;
+mod warming;
 
-use crate::{models::*, Result};
+use crate::Result;
 use rusqlite::Connection;
 use std::path::Path;
-use tracing::{debug, info};
+use tracing::info;
 
 pub use repository::{CacheRepository, ResourceFilter};
+pub use warming::{CacheWarmer, WarmingStats, WarmingStrategy};
 
 // ==================== Cache ====================
 
@@ -42,8 +45,13 @@ impl Cache {
     }
 
     /// Get a repository for data access
-    pub fn repository(&self) -> CacheRepository {
+    pub fn repository(&self) -> CacheRepository<'_> {
         CacheRepository::new(&self.conn)
+    }
+
+    /// Get a cache warmer for pre-loading data
+    pub fn warmer(&self) -> CacheWarmer<'_> {
+        CacheWarmer::new(self)
     }
 
     /// Clear all cached data
@@ -138,6 +146,7 @@ pub struct CacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{Resource, ResourceGroup, Subscription};
     use tempfile::NamedTempFile;
     use std::collections::HashMap;
 
@@ -247,6 +256,16 @@ mod tests {
         let cache = Cache::new(temp_file.path()).unwrap();
         let repo = cache.repository();
         
+        // First create the subscription (required by foreign key)
+        let sub = Subscription {
+            id: "sub-1".to_string(),
+            name: "Test Sub".to_string(),
+            state: "Enabled".to_string(),
+            tenant_id: "tenant-1".to_string(),
+        };
+        repo.cache_subscription(&sub).unwrap();
+        
+        // Now create the resource
         let resource = Resource {
             id: "res-1".to_string(),
             name: "test-vm".to_string(),
@@ -298,5 +317,29 @@ mod tests {
         
         // Vacuum should succeed
         cache.vacuum().unwrap();
+    }
+
+    #[test]
+    fn test_warmer() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let cache = Cache::new(temp_file.path()).unwrap();
+        
+        // Add test data
+        let repo = cache.repository();
+        let sub = Subscription {
+            id: "sub-1".to_string(),
+            name: "Test".to_string(),
+            state: "Enabled".to_string(),
+            tenant_id: "tenant-1".to_string(),
+        };
+        repo.cache_subscription(&sub).unwrap();
+        
+        // Test warmer
+        let warmer = cache.warmer();
+        assert!(!warmer.is_cache_empty());
+        assert!(warmer.has_subscription_data("sub-1"));
+        
+        let stats = warmer.warm(WarmingStrategy::Minimal).unwrap();
+        assert_eq!(stats.subscriptions_loaded, 1);
     }
 }

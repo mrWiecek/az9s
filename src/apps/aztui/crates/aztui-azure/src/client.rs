@@ -1,6 +1,8 @@
 use crate::{auth::AuthProvider, models::*, AzureError, Result};
 use azure_mgmt_resources::Client as ResourcesClient;
+use serde::Deserialize;
 use std::sync::Arc;
+use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 /// Azure API client
@@ -15,29 +17,52 @@ impl AzureClient {
     }
 
     /// List all subscriptions
-    /// 
-    /// Note: Azure SDK 0.19 requires using the subscription management API separately.
-    /// For now, we'll use a simplified approach that works with Azure CLI credentials.
     pub async fn list_subscriptions(&self) -> Result<Vec<AzureSubscription>> {
-        info!("Fetching subscriptions from Azure API");
-        
+        info!("Fetching subscriptions from Azure CLI");
+
         let credential = self.auth.credential();
-        
-        // The Azure SDK 0.19 doesn't have a direct subscriptions_client on ResourcesClient
-        // We need to use the subscription management client separately
-        // For now, we'll return a placeholder that can be enhanced with proper subscription client
-        
-        // Create a resources client to verify authentication works
         let _client = ResourcesClient::builder(credential.clone())
             .build()
             .map_err(|e| AzureError::ApiError(format!("Failed to create Azure client: {}", e)))?;
-        
-        // TODO: Implement proper subscription listing using azure_mgmt_subscription crate
-        // For now, return empty list with a warning
-        warn!("Subscription listing requires azure_mgmt_subscription crate - returning empty list");
-        warn!("To implement: add azure_mgmt_subscription dependency and use SubscriptionClient");
-        
-        Ok(Vec::new())
+
+        let output = Command::new("az")
+            .args(["account", "list", "--all", "--output", "json"])
+            .output()
+            .await
+            .map_err(|e| AzureError::ApiError(format!("Failed to run Azure CLI: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AzureError::ApiError(format!(
+                "Azure CLI subscription query failed: {}",
+                stderr.trim()
+            )));
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct AzureCliSubscription {
+            id: String,
+            name: String,
+            state: String,
+            tenant_id: String,
+        }
+
+        let cli_subscriptions: Vec<AzureCliSubscription> = serde_json::from_slice(&output.stdout)
+            .map_err(|e| AzureError::ApiError(format!("Failed to parse Azure CLI subscriptions: {}", e)))?;
+
+        let subscriptions = cli_subscriptions
+            .into_iter()
+            .map(|subscription| AzureSubscription {
+                id: subscription.id,
+                name: subscription.name,
+                state: subscription.state,
+                tenant_id: subscription.tenant_id,
+            })
+            .collect::<Vec<_>>();
+
+        info!("Successfully fetched {} subscriptions", subscriptions.len());
+        Ok(subscriptions)
     }
 
     /// List resource groups in a subscription

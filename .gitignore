@@ -1,10 +1,11 @@
-.venv/
-.pytest_cache/
-.aztui-builder/
-__pycache__/
-*.pyc
-src/apps/*
-!src/apps/aztui/
-!src/apps/aztui/**
-workspaces/*
+# Rust build artifacts
+target/
+
+# Local environment
 .env
+.venv/
+.aztui-builder/
+.pytest_cache/
+
+# Editor/local state
+.vscode/

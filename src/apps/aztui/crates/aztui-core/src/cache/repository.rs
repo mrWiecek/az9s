@@ -495,6 +495,16 @@ mod tests {
         let conn = setup_test_db();
         let repo = CacheRepository::new(&conn);
 
+        // First create the subscription (required by foreign key)
+        let sub = Subscription {
+            id: "sub-1".to_string(),
+            name: "Test Sub".to_string(),
+            state: "Enabled".to_string(),
+            tenant_id: "tenant-1".to_string(),
+        };
+        repo.cache_subscription(&sub).unwrap();
+
+        // Now create the resource
         let resource = Resource {
             id: "res-1".to_string(),
             name: "test-vm".to_string(),
