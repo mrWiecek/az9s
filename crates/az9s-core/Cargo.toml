@@ -11,6 +11,7 @@ directories = { workspace = true }
 az9s-azure = { path = "../az9s-azure" }
 
 tokio = { workspace = true }
+futures = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

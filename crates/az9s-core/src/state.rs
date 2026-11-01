@@ -47,8 +47,17 @@ pub struct AppState {
     /// Loading state
     pub loading: bool,
 
-    /// Error message
+    /// Error message (modal; dismissed with Esc)
     pub error: Option<String>,
+
+    /// Non-blocking notice shown in the status bar (e.g. partial load failures)
+    pub notice: Option<String>,
+
+    /// Resource group whose resources are shown in the resource list, if any
+    pub current_resource_group: Option<String>,
+
+    /// Spinner animation frame, advanced on ticks while loading
+    pub spinner_frame: usize,
 
     /// Data source indicator (for UX transparency)
     pub data_source: DataSource,

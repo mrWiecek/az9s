@@ -40,3 +40,40 @@ pub struct ResourceDetail {
     pub sku: Option<String>,
     pub kind: Option<String>,
 }
+
+impl From<&az9s_azure::models::AzureSubscription> for Subscription {
+    fn from(s: &az9s_azure::models::AzureSubscription) -> Self {
+        Self {
+            id: s.id.clone(),
+            name: s.name.clone(),
+            state: s.state.clone(),
+            tenant_id: s.tenant_id.clone(),
+        }
+    }
+}
+
+impl From<&az9s_azure::models::AzureResourceGroup> for ResourceGroup {
+    fn from(rg: &az9s_azure::models::AzureResourceGroup) -> Self {
+        Self {
+            id: rg.id.clone(),
+            name: rg.name.clone(),
+            location: rg.location.clone(),
+            subscription_id: rg.subscription_id.clone(),
+            tags: rg.tags.clone(),
+        }
+    }
+}
+
+impl From<&az9s_azure::models::AzureResource> for Resource {
+    fn from(r: &az9s_azure::models::AzureResource) -> Self {
+        Self {
+            id: r.id.clone(),
+            name: r.name.clone(),
+            resource_type: r.resource_type.clone(),
+            location: r.location.clone(),
+            resource_group: r.resource_group.clone(),
+            subscription_id: r.subscription_id.clone(),
+            tags: r.tags.clone(),
+        }
+    }
+}

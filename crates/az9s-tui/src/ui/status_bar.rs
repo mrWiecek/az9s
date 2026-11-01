@@ -4,6 +4,9 @@ use ratatui::{
     text::{Line, Span},
 };
 
+/// Braille spinner frames, advanced on each 100 ms tick while loading.
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 /// Status bar component
 ///
 /// Displays connection status, context information, and statistics
@@ -44,11 +47,24 @@ impl StatusBar {
             spans.push(Span::raw("| "));
         }
 
-        // Loading indicator
+        // Loading indicator (animated while background loads run)
         if state.loading {
-            spans.push(Span::styled("⟳ Loading", Style::default().fg(Color::Green)));
+            let frame = SPINNER[state.spinner_frame % SPINNER.len()];
+            spans.push(Span::styled(
+                format!("{frame} Loading"),
+                Style::default().fg(Color::Green),
+            ));
         } else {
             spans.push(Span::styled("Ready", Style::default().fg(Color::Green)));
+        }
+
+        // Non-blocking notice, e.g. some subscriptions failed to load
+        if let Some(notice) = &state.notice {
+            spans.push(Span::raw(" | "));
+            spans.push(Span::styled(
+                format!("⚠ {notice}"),
+                Style::default().fg(Color::Yellow),
+            ));
         }
 
         Line::from(spans)
@@ -167,7 +183,7 @@ mod tests {
         let text = format!("{:?}", line);
 
         assert!(text.contains("Loading"));
-        assert!(text.contains("⟳"));
+        assert!(text.contains(SPINNER[0]));
     }
 
     #[test]

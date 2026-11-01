@@ -48,7 +48,24 @@ No version has been released yet. The first public release is planned as **v0.1.
 - New `--timings` flag prints Azure, cache, frame and keypress timings on exit.
   New `just run-timings` and `just perf` recipes.
 
+### Performance (M1, step 2)
+- **Azure calls run in the background; the UI never freezes.** Opening a view
+  switches to it immediately, with an animated spinner in the status bar, and the
+  list fills in when Azure answers. You can keep navigating, go back, or open
+  something else. A superseded request is cancelled and its result discarded.
+- **Startup no longer waits for Azure.** Cached subscriptions are shown at once and
+  refreshed in the background.
+- **"All subscriptions" views (`:rg all`, `:res all`) load 16 subscriptions at a
+  time** instead of one after another, and skip disabled subscriptions. If some
+  subscriptions fail, the rest still show, with a warning in the status bar.
+
 ### Fixed
+- Opening a resource group showed every resource in its subscription. It now
+  requests only that group's resources from Azure.
+- In `:rg all`, opening a resource group used the wrong subscription. It now uses
+  the group's own subscription.
+- Going back to an "all subscriptions" list lost its scope, so `r` refreshed
+  nothing.
 - Scrolling up in a long list no longer pins the selection to the bottom row. The
   scroll offset is now kept between frames.
 - A resource name longer than 35 characters containing non-ASCII characters could
@@ -75,8 +92,8 @@ Already in the codebase before this changelog was started:
 - A Rust workspace with 4 crates and 65 passing tests.
 
 ### Known issues
-- The UI is slow and freezes during Azure calls. "All subscriptions" views make one
-  sequential call per subscription, which takes minutes at 400+ subscriptions (fix
-  planned in milestone M1).
-- Opening a resource group lists every resource in its subscription instead of only
-  that group's resources (fix planned in milestone M1).
+- "All subscriptions" views still make one ARM call per subscription (16 in
+  parallel). At 400+ subscriptions that is still slow; Resource Graph (M1 step 3)
+  replaces it with one query.
+- Resource groups and resources are not yet shown from the cache before Azure
+  answers (M1 step 4).

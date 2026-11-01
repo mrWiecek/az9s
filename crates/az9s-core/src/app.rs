@@ -1,7 +1,10 @@
 use crate::{
     cache::Cache,
+    loader::{
+        AzureFetcher, Fetcher, LoadKind, LoadReceiver, LoadRequest, LoadResult, LoadedData, Loader,
+    },
     state::{AppState, DataSource},
-    timing, CoreError, Result,
+    timing,
 };
 use anyhow::Context;
 use az9s_azure::{AzureAuth, AzureClient};
@@ -9,133 +12,157 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
 
-/// Main application coordinator
+/// Main application coordinator.
+///
+/// Owns the UI state, the local cache and the background [`Loader`]. Nothing
+/// here awaits the network on the UI path: [`App::request`] starts a load and
+/// returns immediately, and the event loop hands results back via
+/// [`App::apply`].
 pub struct App {
     state: AppState,
     cache: Cache,
-    azure_client: Option<Arc<AzureClient>>,
+    loader: Loader,
 }
 
 impl App {
-    /// Create a new application instance
+    /// Create the application: open the cache, show cached subscriptions right
+    /// away, and start fetching fresh subscriptions in the background.
     pub async fn new() -> anyhow::Result<Self> {
         let _t = timing::timer("startup.app_init");
         info!("Initializing az9s application");
 
-        // Determine cache directory
         let cache_dir = Self::cache_dir()?;
         std::fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
+        let cache = Cache::new(&cache_dir.join("az9s.db"))?;
 
-        // Initialize cache
-        let cache_path = cache_dir.join("az9s.db");
-        let cache = Cache::new(&cache_path)?;
-
-        // Initialize state
-        let mut state = AppState::new();
-
-        // Attempt Azure authentication and load subscriptions
-        let azure_client = match Self::initialize_azure(&cache, &mut state).await {
-            Ok(client) => Some(client),
+        let fetcher: Option<Arc<dyn Fetcher>> = match AzureAuth::new_auto().await {
+            Ok(auth) => Some(Arc::new(AzureFetcher::new(Arc::new(AzureClient::new(
+                Arc::new(auth),
+            ))))),
             Err(e) => {
-                warn!("Azure initialization failed: {}", e);
-                state.set_error(Some(format!("Azure authentication failed: {}", e)));
+                warn!("Azure authentication failed: {}", e);
                 None
             }
         };
 
-        Ok(Self {
-            state,
-            cache,
-            azure_client,
-        })
+        let mut app = Self::with_fetcher(cache, fetcher);
+        app.load_cached_subscriptions();
+        app.request(LoadRequest::Subscriptions);
+        Ok(app)
     }
 
     /// Create an application with no Azure connection, backed by `cache`.
-    ///
-    /// Used by tests and benchmarks today; also the basis for rendering cached
-    /// data before Azure answers (M1 "cache-first").
+    /// Every load request fails with a "not connected" error.
     pub fn offline(cache: Cache) -> Self {
+        Self::with_fetcher(cache, None)
+    }
+
+    /// Create an application that loads data through `fetcher`.
+    pub fn with_fetcher(cache: Cache, fetcher: Option<Arc<dyn Fetcher>>) -> Self {
         Self {
             state: AppState::new(),
             cache,
-            azure_client: None,
+            loader: Loader::new(fetcher),
         }
     }
 
-    /// Initialize Azure authentication and load subscriptions
-    async fn initialize_azure(cache: &Cache, state: &mut AppState) -> Result<Arc<AzureClient>> {
-        info!("Initializing Azure authentication");
+    /// Show cached subscriptions immediately (before Azure answers).
+    fn load_cached_subscriptions(&mut self) {
+        let _t = timing::timer("cache.get_subscriptions");
+        match self.cache.repository().get_subscriptions() {
+            Ok(subs) if !subs.is_empty() => {
+                info!("Showing {} cached subscriptions", subs.len());
+                self.state.subscriptions = subs;
+                self.state.set_data_source(DataSource::Cache);
+            }
+            Ok(_) => {}
+            Err(e) => warn!("Failed to read cached subscriptions: {}", e),
+        }
+    }
 
-        // Try automatic authentication (Azure CLI first, then default credential chain)
-        let auth = AzureAuth::new_auto().await?;
-        let client = Arc::new(AzureClient::new(Arc::new(auth)));
+    /// Start loading `request` in the background. Never blocks.
+    ///
+    /// Errors (e.g. not connected) are shown in the UI; there is nothing for
+    /// the caller to handle.
+    pub fn request(&mut self, request: LoadRequest) {
+        self.state.notice = None;
+        if let Err(e) = self.loader.request(request) {
+            self.state.set_error(Some(e));
+        }
+        self.state.set_loading(self.loader.is_loading());
+    }
 
-        // Load subscriptions on startup
-        info!("Loading subscriptions from Azure");
-        state.set_loading(true);
+    /// The channel on which load results arrive. The event loop takes it once
+    /// and passes each result to [`App::apply`].
+    pub fn take_load_receiver(&mut self) -> Option<LoadReceiver> {
+        self.loader.take_receiver()
+    }
 
-        let fetched = {
-            let _t = timing::timer("azure.list_subscriptions");
-            client.list_subscriptions().await
-        };
-        match fetched {
-            Ok(azure_subscriptions) => {
-                info!(
-                    "Successfully loaded {} subscriptions",
-                    azure_subscriptions.len()
-                );
+    /// Whether a load of `kind` is in flight.
+    pub fn is_loading(&self, kind: LoadKind) -> bool {
+        self.loader.is_loading_kind(kind)
+    }
 
-                // Convert Azure subscriptions to core model
-                let subscriptions: Vec<crate::models::Subscription> = azure_subscriptions
-                    .iter()
-                    .map(|s| crate::models::Subscription {
-                        id: s.id.clone(),
-                        name: s.name.clone(),
-                        state: s.state.clone(),
-                        tenant_id: s.tenant_id.clone(),
-                    })
-                    .collect();
+    /// Apply a finished load: update state and the cache. Stale results (a
+    /// newer request of the same kind was made) are ignored.
+    pub fn apply(&mut self, result: LoadResult) {
+        if !self.loader.complete(&result) {
+            return;
+        }
+        self.state.set_loading(self.loader.is_loading());
 
-                // Cache subscriptions for offline access
-                let repo = cache.repository();
-                let cached = {
-                    let _t = timing::timer("cache.cache_subscriptions");
-                    repo.cache_subscriptions(&subscriptions)
-                };
-                if let Err(e) = cached {
-                    warn!("Failed to cache subscriptions: {}", e);
+        let failed = result.outcome.failed_subscriptions.len();
+        match result.outcome.data {
+            Ok(data) => {
+                self.store(data);
+                self.state.set_data_source(DataSource::Azure);
+                if failed > 0 {
+                    self.state.notice = Some(format!(
+                        "{} subscription(s) failed to load {}",
+                        failed,
+                        result.kind.label()
+                    ));
                 }
-
-                // Update state with loaded subscriptions
-                state.subscriptions = subscriptions;
-                state.set_loading(false);
-                state.set_data_source(DataSource::Azure);
-
-                Ok(client)
             }
             Err(e) => {
-                warn!("Failed to load subscriptions from Azure: {}", e);
-
-                // Try to load from cache as fallback
-                let repo = cache.repository();
-                match repo.get_subscriptions() {
-                    Ok(cached_subs) if !cached_subs.is_empty() => {
-                        info!("Loaded {} subscriptions from cache", cached_subs.len());
-                        state.subscriptions = cached_subs;
-                        state.set_loading(false);
-                        state.set_data_source(DataSource::Cache);
-                        state.set_error(Some(format!(
-                            "Using cached data (Azure API unavailable: {})",
-                            e
-                        )));
-                        Ok(client)
-                    }
-                    _ => {
-                        state.set_loading(false);
-                        Err(CoreError::Azure(e))
-                    }
-                }
+                warn!("Loading {} failed: {}", result.kind.label(), e);
+                let message = if result.kind == LoadKind::Subscriptions
+                    && !self.state.subscriptions.is_empty()
+                {
+                    format!("Using cached subscriptions (Azure unavailable: {})", e)
+                } else {
+                    format!("Failed to load {}: {}", result.kind.label(), e)
+                };
+                self.state.set_error(Some(message));
             }
+        }
+    }
+
+    /// Put loaded data into state and write it to the cache.
+    fn store(&mut self, data: LoadedData) {
+        let repo = self.cache.repository();
+        let cached = match &data {
+            LoadedData::Subscriptions(items) => {
+                let _t = timing::timer("cache.cache_subscriptions");
+                repo.cache_subscriptions(items)
+            }
+            LoadedData::ResourceGroups(items) => {
+                let _t = timing::timer("cache.cache_resource_groups");
+                repo.cache_resource_groups(items)
+            }
+            LoadedData::Resources(items) => {
+                let _t = timing::timer("cache.cache_resources");
+                repo.cache_resources(items)
+            }
+        };
+        if let Err(e) = cached {
+            warn!("Failed to write cache: {}", e);
+        }
+
+        match data {
+            LoadedData::Subscriptions(items) => self.state.subscriptions = items,
+            LoadedData::ResourceGroups(items) => self.state.resource_groups = items,
+            LoadedData::Resources(items) => self.state.resources = items,
         }
     }
 
@@ -154,181 +181,112 @@ impl App {
         &self.cache
     }
 
-    /// Get the Azure client if available
-    pub fn azure_client(&self) -> Option<Arc<AzureClient>> {
-        self.azure_client.clone()
-    }
-
-    /// Refresh subscriptions from Azure
-    pub async fn refresh_subscriptions(&mut self) -> Result<()> {
-        let client = self
-            .azure_client
-            .as_ref()
-            .ok_or_else(|| CoreError::InvalidState("Azure client not initialized".to_string()))?;
-
-        info!("Refreshing subscriptions");
-        self.state.set_loading(true);
-        self.state.clear_error();
-
-        let fetched = {
-            let _t = timing::timer("azure.list_subscriptions");
-            client.list_subscriptions().await
-        };
-        match fetched {
-            Ok(azure_subscriptions) => {
-                let subscriptions: Vec<crate::models::Subscription> = azure_subscriptions
-                    .iter()
-                    .map(|s| crate::models::Subscription {
-                        id: s.id.clone(),
-                        name: s.name.clone(),
-                        state: s.state.clone(),
-                        tenant_id: s.tenant_id.clone(),
-                    })
-                    .collect();
-
-                // Cache the refreshed subscriptions
-                let repo = self.cache.repository();
-                {
-                    let _t = timing::timer("cache.cache_subscriptions");
-                    repo.cache_subscriptions(&subscriptions)
-                }?;
-
-                // Update state
-                self.state.subscriptions = subscriptions;
-                self.state.set_loading(false);
-                self.state.set_data_source(DataSource::Azure);
-
-                info!("Successfully refreshed subscriptions");
-                Ok(())
-            }
-            Err(e) => {
-                self.state.set_loading(false);
-                self.state
-                    .set_error(Some(format!("Failed to refresh: {}", e)));
-                Err(CoreError::Azure(e))
-            }
-        }
-    }
-
-    /// Load resource groups for a subscription
-    pub async fn load_resource_groups(&mut self, subscription_id: &str) -> Result<()> {
-        let client = self
-            .azure_client
-            .as_ref()
-            .ok_or_else(|| CoreError::InvalidState("Azure client not initialized".to_string()))?;
-
-        info!(
-            "Loading resource groups for subscription {}",
-            subscription_id
-        );
-        self.state.set_loading(true);
-        self.state.clear_error();
-
-        let fetched = {
-            let _t = timing::timer("azure.list_resource_groups");
-            client.list_resource_groups(subscription_id).await
-        };
-        match fetched {
-            Ok(azure_rgs) => {
-                let resource_groups: Vec<crate::models::ResourceGroup> = azure_rgs
-                    .iter()
-                    .map(|rg| crate::models::ResourceGroup {
-                        id: rg.id.clone(),
-                        name: rg.name.clone(),
-                        location: rg.location.clone(),
-                        subscription_id: rg.subscription_id.clone(),
-                        tags: rg.tags.clone(),
-                    })
-                    .collect();
-
-                // Cache resource groups
-                let repo = self.cache.repository();
-                {
-                    let _t = timing::timer("cache.cache_resource_groups");
-                    repo.cache_resource_groups(&resource_groups)
-                }?;
-
-                // Update state with loaded resource groups
-                self.state.resource_groups = resource_groups;
-                self.state.set_loading(false);
-                self.state.set_data_source(DataSource::Azure);
-
-                info!(
-                    "Successfully loaded {} resource groups",
-                    self.state.resource_groups.len()
-                );
-                Ok(())
-            }
-            Err(e) => {
-                self.state.set_loading(false);
-                self.state
-                    .set_error(Some(format!("Failed to load resource groups: {}", e)));
-                Err(CoreError::Azure(e))
-            }
-        }
-    }
-
-    /// Load resources for a subscription
-    pub async fn load_resources(&mut self, subscription_id: &str) -> Result<()> {
-        let client = self
-            .azure_client
-            .as_ref()
-            .ok_or_else(|| CoreError::InvalidState("Azure client not initialized".to_string()))?;
-
-        info!("Loading resources for subscription {}", subscription_id);
-        self.state.set_loading(true);
-        self.state.clear_error();
-
-        let fetched = {
-            let _t = timing::timer("azure.list_resources");
-            client.list_resources(subscription_id).await
-        };
-        match fetched {
-            Ok(azure_resources) => {
-                let resources: Vec<crate::models::Resource> = azure_resources
-                    .iter()
-                    .map(|r| crate::models::Resource {
-                        id: r.id.clone(),
-                        name: r.name.clone(),
-                        resource_type: r.resource_type.clone(),
-                        location: r.location.clone(),
-                        resource_group: r.resource_group.clone(),
-                        subscription_id: r.subscription_id.clone(),
-                        tags: r.tags.clone(),
-                    })
-                    .collect();
-
-                // Cache resources
-                let repo = self.cache.repository();
-                {
-                    let _t = timing::timer("cache.cache_resources");
-                    repo.cache_resources(&resources)
-                }?;
-
-                // Update state
-                self.state.resources = resources;
-                self.state.set_loading(false);
-                self.state.set_data_source(DataSource::Azure);
-
-                info!(
-                    "Successfully loaded {} resources",
-                    self.state.resources.len()
-                );
-                Ok(())
-            }
-            Err(e) => {
-                self.state.set_loading(false);
-                self.state
-                    .set_error(Some(format!("Failed to load resources: {}", e)));
-                Err(CoreError::Azure(e))
-            }
-        }
-    }
-
     /// Determine the cache directory (platform-specific local data dir)
     fn cache_dir() -> anyhow::Result<PathBuf> {
         let dirs = directories::ProjectDirs::from("", "", "az9s")
             .context("Could not determine data directory")?;
         Ok(dirs.data_local_dir().to_path_buf())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::loader::FetchOutcome;
+    use crate::models::Subscription;
+    use futures::future::BoxFuture;
+    use futures::FutureExt;
+    use std::path::Path;
+
+    struct Fake(Result<Vec<Subscription>, String>, Vec<String>);
+
+    impl Fetcher for Fake {
+        fn fetch(&self, _request: LoadRequest) -> BoxFuture<'static, FetchOutcome> {
+            let data = self.0.clone().map(LoadedData::Subscriptions);
+            let failed = self.1.clone();
+            async move {
+                FetchOutcome {
+                    data,
+                    failed_subscriptions: failed,
+                }
+            }
+            .boxed()
+        }
+    }
+
+    fn sub(name: &str) -> Subscription {
+        Subscription {
+            id: format!("id-{name}"),
+            name: name.into(),
+            state: "Enabled".into(),
+            tenant_id: "t".into(),
+        }
+    }
+
+    fn app(fake: Fake) -> App {
+        App::with_fetcher(
+            Cache::new(Path::new(":memory:")).unwrap(),
+            Some(Arc::new(fake)),
+        )
+    }
+
+    async fn run_one(app: &mut App, rx: &mut LoadReceiver, request: LoadRequest) {
+        app.request(request);
+        assert!(app.state().loading);
+        let result = rx.recv().await.unwrap();
+        app.apply(result);
+    }
+
+    #[tokio::test]
+    async fn successful_load_updates_state_and_cache() {
+        let mut app = app(Fake(Ok(vec![sub("a"), sub("b")]), vec![]));
+        let mut rx = app.take_load_receiver().unwrap();
+        run_one(&mut app, &mut rx, LoadRequest::Subscriptions).await;
+
+        assert!(!app.state().loading);
+        assert_eq!(app.state().subscriptions.len(), 2);
+        assert_eq!(app.state().data_source, DataSource::Azure);
+        assert_eq!(
+            app.cache().repository().get_subscriptions().unwrap().len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn failure_keeps_cached_data_and_explains() {
+        let mut app = app(Fake(Err("token expired".into()), vec![]));
+        app.state_mut().subscriptions = vec![sub("cached")];
+        let mut rx = app.take_load_receiver().unwrap();
+        run_one(&mut app, &mut rx, LoadRequest::Subscriptions).await;
+
+        assert_eq!(app.state().subscriptions.len(), 1);
+        let err = app.state().error.clone().unwrap();
+        assert!(
+            err.contains("cached") && err.contains("token expired"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn partial_failures_become_a_notice() {
+        let mut app = app(Fake(Ok(vec![sub("a")]), vec!["sub-x".into()]));
+        let mut rx = app.take_load_receiver().unwrap();
+        run_one(&mut app, &mut rx, LoadRequest::Subscriptions).await;
+
+        assert!(app.state().error.is_none());
+        assert!(app
+            .state()
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("1 subscription"));
+    }
+
+    #[test]
+    fn offline_request_shows_error_and_does_not_load() {
+        let mut app = App::offline(Cache::new(Path::new(":memory:")).unwrap());
+        app.request(LoadRequest::Subscriptions);
+        assert!(!app.state().loading);
+        assert!(app.state().error.as_deref().unwrap().contains("az login"));
     }
 }

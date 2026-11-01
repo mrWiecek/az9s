@@ -99,9 +99,11 @@ Work items, in order:
       description.
 - [x] **Event loop rewrite.** A dedicated input thread forwards every event
       immediately. The main loop drains all pending events before redrawing.
-- [ ] **Async architecture.** Move all I/O into background tasks that report
+- [x] **Async architecture.** Move all I/O into background tasks that report
       results to the UI over a channel (an action/message pattern). The UI thread
       only renders and updates state. Cancel stale requests when the user moves on.
+      *(Done: `az9s_core::loader`. Also, multi-subscription views now run up to 16
+      ARM calls at a time as a stopgap until Resource Graph.)*
 - [ ] **Azure Resource Graph as the read backend.** One KQL query lists resource
       groups and resources across all subscriptions, with server-side filtering
       (by RG, type, location or tag) and paging. The same backend serves Policy
@@ -123,8 +125,9 @@ Work items, in order:
       the scroll offset, filter without allocating, and memoize the filter result.
       With 100k rows, a frame went from 78 ms to 0.4 ms (101 ms to 0.6 ms with a
       filter active), measured with `just perf`.
-- [ ] **Fix the RG view bug.** Resources shown under a resource group are filtered to
-      that group (server-side through Resource Graph).
+- [x] **Fix the RG view bug.** Resources shown under a resource group are filtered to
+      that group on the server (ARM `list_by_resource_group` for now; Resource
+      Graph in step 3).
 - [ ] **Cache-first (stale-while-revalidate).** Render cached data immediately,
       refresh in the background, and show data age in the status bar.
 - [ ] **Scope-aware queries.** Resource Graph queries can target a management group

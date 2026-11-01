@@ -30,11 +30,20 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
 
 ## az9s-core
 
-- `app.rs`: `App` owns `AppState`, the `Cache` and an optional `AzureClient`.
-  - `App::new()` authenticates and loads subscriptions **before the first frame**.
-    If Azure is unreachable, it falls back to cached subscriptions.
-  - `load_resource_groups` and `load_resources` fetch from Azure, write to the cache
-    and replace the lists in state.
+- `app.rs`: `App` owns `AppState`, the `Cache` and the `Loader`.
+  - `App::new()` opens the cache, shows cached subscriptions immediately, and
+    starts a background fetch of fresh ones. It never waits for Azure.
+  - `App::request(LoadRequest)` starts a background load and returns at once.
+    `App::apply(LoadResult)` stores a finished load in state and the cache.
+- `loader.rs`: background loading.
+  - `Loader` runs each `LoadRequest` on a tokio task and sends a `LoadResult` over
+    a channel.
+  - One request per `LoadKind` (subscriptions, resource groups, resources) is in
+    flight at a time. A newer request aborts the older one, and stale results
+    are dropped by generation number.
+  - `Fetcher` is the data-source trait. `AzureFetcher` calls ARM, and
+    multi-subscription loads run up to 16 at a time (`fetch_per_subscription`).
+    Tests use fake fetchers. Resource Graph will plug in here (M1 step 3).
 - `state.rs`: `AppState` holds:
   - the current `ViewMode` (`SubscriptionList`, `ResourceGroupList`, `ResourceList`,
     `ResourceDetail`)
@@ -61,12 +70,15 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
 ## az9s-tui
 
 - `lib.rs`: terminal setup and teardown (raw mode, alternate screen, panic hook),
-  plus the main loop: draw → wait for one event → handle it and **every event
-  already queued** → draw. A burst of key repeats costs one redraw.
+  plus the main loop: draw → wait for terminal input **or** a load result
+  (`tokio::select!`) → handle it and everything else already queued → draw. A
+  burst of key repeats costs one redraw.
 - `event.rs`: a dedicated input thread blocks on crossterm and forwards every event
-  as soon as it arrives. It sends `Tick` after 250 ms without input.
+  as soon as it arrives. It sends `Tick` after 100 ms without input, which drives
+  the loading spinner.
 - `app.rs`: `TuiApp` wraps `App`. It handles keys per mode (normal, filter, command,
-  help), moves between views, and calls `App` loaders directly.
+  help) and moves between views. Opening a view switches to it immediately and
+  calls `App::request`; the list fills in when the result arrives.
 - `command.rs`: parses `:` commands (`:sub`, `:rg [all|<sub>]`,
   `:res [all|<sub>]`). Command names are always singular.
 - `ui/`: rendering. List views are **virtualized**: `ListState::visible_range`
@@ -77,19 +89,24 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
 ## Data flow (current)
 
 ```
-key press → input thread → channel → run_loop (drains queue) → TuiApp::handle_key
-          → App::load_* (await Azure, UI still blocked) → AppState updated → next draw
+key press → input thread ─┐
+                          ├─ run_loop (select!, drains queues) → draw
+load task (tokio) ────────┘
+   ▲                         │
+   └── App::request ◄── TuiApp::handle_key       App::apply ◄── LoadResult
 ```
 
 ## Known limitations (addressed in M1)
 
 1. ~~The event task forwards at most one terminal event per 250 ms tick.~~ Fixed.
-2. Azure calls are awaited inside the key handler, so the UI is frozen while they run
-   and the loading state is never drawn.
-3. Opening a resource group fetches every resource in the subscription. Nothing
-   filters on the server.
-4. "All subscriptions" views query subscriptions one after another.
-5. The cache is only read as a startup fallback. It is not used to render first and
+2. ~~Azure calls are awaited inside the key handler, so the UI froze.~~ Fixed
+   (background `Loader`).
+3. ~~Opening a resource group fetched every resource in the subscription.~~ Fixed
+   (ARM `list_by_resource_group`).
+4. "All subscriptions" views still make one ARM call per subscription, now 16 at a
+   time instead of sequentially. Resource Graph (step 3) replaces this with one
+   query.
+5. The cache is read at startup for subscriptions only. It is not used to render first and
    refresh afterwards.
 
 The M1 target design:

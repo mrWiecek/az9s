@@ -8,8 +8,9 @@ Browse every subscription, resource group and resource from the terminal, filter
 instantly, and (soon) act on resources and check Azure Policy compliance, the way k9s
 works for Kubernetes.
 
-> ⚠️ **Status: early development.** No release yet. The app can browse resources but is
-> slow and read-only for now. See the [Roadmap](ROADMAP.md).
+> ⚠️ **Status: early development.** No release yet. The app can browse resources and
+> no longer freezes while loading, but "all subscriptions" views are still slow at
+> large scale, and it is read-only for now. See the [Roadmap](ROADMAP.md).
 
 ## Features
 
