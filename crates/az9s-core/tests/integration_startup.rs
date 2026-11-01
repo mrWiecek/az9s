@@ -32,3 +32,46 @@ async fn startup_does_not_block_and_subscriptions_arrive_in_background() {
         assert!(!sub.name.is_empty());
     }
 }
+
+/// End-to-end timing of the "all subscriptions" resource group view against
+/// a real tenant. Run with:
+/// `cargo test --release -p az9s-core --test integration_startup -- --ignored --nocapture`
+#[tokio::test(flavor = "multi_thread")]
+#[ignore] // Requires Azure CLI login
+async fn all_resource_groups_via_resource_graph_live() {
+    use az9s_core::loader::LoadRequest;
+
+    let mut app = App::new().await.expect("app init");
+    let mut rx = app.take_load_receiver().expect("receiver");
+    while app.state().loading {
+        app.apply(rx.recv().await.unwrap());
+    }
+    let subscription_ids: Vec<String> = app
+        .state()
+        .subscriptions
+        .iter()
+        .filter(|s| !s.state.eq_ignore_ascii_case("Disabled"))
+        .map(|s| s.id.clone())
+        .collect();
+    println!("{} enabled subscriptions", subscription_ids.len());
+
+    let started = Instant::now();
+    app.request(LoadRequest::ResourceGroups { subscription_ids });
+    let mut first_rows = None;
+    while app.state().loading {
+        app.apply(rx.recv().await.unwrap());
+        if first_rows.is_none() && !app.state().resource_groups.is_empty() {
+            first_rows = Some(started.elapsed());
+        }
+    }
+    println!(
+        "resource groups: {} total in {:?}; first rows after {:?}; notice: {:?}; error: {:?}",
+        app.state().resource_groups.len(),
+        started.elapsed(),
+        first_rows,
+        app.state().notice,
+        app.state().error
+    );
+    println!("{}", az9s_core::timing::summary());
+    assert!(app.state().error.is_none());
+}

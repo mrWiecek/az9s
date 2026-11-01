@@ -1,13 +1,16 @@
 use crate::{
     cache::Cache,
     loader::{
-        AzureFetcher, Fetcher, LoadKind, LoadReceiver, LoadRequest, LoadResult, LoadedData, Loader,
+        Accept, AzureFetcher, Fetcher, GraphFetcher, LoadKind, LoadReceiver, LoadRequest,
+        LoadResult, LoadedData, Loader,
     },
     state::{AppState, DataSource},
     timing,
 };
 use anyhow::Context;
-use az9s_azure::{AzureAuth, AzureClient};
+use az9s_azure::resource_graph::CredentialTokenSource;
+use az9s_azure::{AuthProvider, AzureAuth, AzureClient, ResourceGraphClient};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -22,6 +25,8 @@ pub struct App {
     state: AppState,
     cache: Cache,
     loader: Loader,
+    /// Generation of the request whose chunks are currently streaming, per kind
+    streaming: HashMap<LoadKind, u64>,
 }
 
 impl App {
@@ -36,9 +41,7 @@ impl App {
         let cache = Cache::new(&cache_dir.join("az9s.db"))?;
 
         let fetcher: Option<Arc<dyn Fetcher>> = match AzureAuth::new_auto().await {
-            Ok(auth) => Some(Arc::new(AzureFetcher::new(Arc::new(AzureClient::new(
-                Arc::new(auth),
-            ))))),
+            Ok(auth) => Some(Self::azure_fetcher(Arc::new(auth))),
             Err(e) => {
                 warn!("Azure authentication failed: {}", e);
                 None
@@ -49,6 +52,21 @@ impl App {
         app.load_cached_subscriptions();
         app.request(LoadRequest::Subscriptions);
         Ok(app)
+    }
+
+    /// Resource Graph for lists (with ARM fallback), unless `AZ9S_BACKEND=arm`.
+    fn azure_fetcher(auth: Arc<AzureAuth>) -> Arc<dyn Fetcher> {
+        let arm: Arc<dyn Fetcher> =
+            Arc::new(AzureFetcher::new(Arc::new(AzureClient::new(auth.clone()))));
+        if std::env::var("AZ9S_BACKEND").is_ok_and(|v| v.eq_ignore_ascii_case("arm")) {
+            info!("Using ARM backend (AZ9S_BACKEND=arm)");
+            return arm;
+        }
+        let tokens = Arc::new(CredentialTokenSource(auth.credential()));
+        Arc::new(GraphFetcher::new(
+            Arc::new(ResourceGraphClient::new(tokens)),
+            arm,
+        ))
     }
 
     /// Create an application with no Azure connection, backed by `cache`.
@@ -63,6 +81,7 @@ impl App {
             state: AppState::new(),
             cache,
             loader: Loader::new(fetcher),
+            streaming: HashMap::new(),
         }
     }
 
@@ -106,40 +125,52 @@ impl App {
     /// Apply a finished load: update state and the cache. Stale results (a
     /// newer request of the same kind was made) are ignored.
     pub fn apply(&mut self, result: LoadResult) {
-        if !self.loader.complete(&result) {
+        let kind = result.kind;
+        let accept = self.loader.accept(&result);
+        if accept == Accept::Stale {
             return;
         }
-        self.state.set_loading(self.loader.is_loading());
+        // The first chunk of a request replaces the list; later chunks append.
+        let append = self.streaming.get(&kind) == Some(&result.generation);
+        if accept == Accept::Partial {
+            self.streaming.insert(kind, result.generation);
+        } else {
+            self.streaming.remove(&kind);
+            self.state.set_loading(self.loader.is_loading());
+        }
 
+        if let Some(notice) = result.outcome.notice {
+            self.state.notice = Some(notice);
+        }
         let failed = result.outcome.failed_subscriptions.len();
         match result.outcome.data {
             Ok(data) => {
-                self.store(data);
+                self.store(data, append);
                 self.state.set_data_source(DataSource::Azure);
                 if failed > 0 {
                     self.state.notice = Some(format!(
                         "{} subscription(s) failed to load {}",
                         failed,
-                        result.kind.label()
+                        kind.label()
                     ));
                 }
             }
             Err(e) => {
-                warn!("Loading {} failed: {}", result.kind.label(), e);
-                let message = if result.kind == LoadKind::Subscriptions
-                    && !self.state.subscriptions.is_empty()
-                {
-                    format!("Using cached subscriptions (Azure unavailable: {})", e)
-                } else {
-                    format!("Failed to load {}: {}", result.kind.label(), e)
-                };
+                warn!("Loading {} failed: {}", kind.label(), e);
+                let message =
+                    if kind == LoadKind::Subscriptions && !self.state.subscriptions.is_empty() {
+                        format!("Using cached subscriptions (Azure unavailable: {})", e)
+                    } else {
+                        format!("Failed to load {}: {}", kind.label(), e)
+                    };
                 self.state.set_error(Some(message));
             }
         }
     }
 
-    /// Put loaded data into state and write it to the cache.
-    fn store(&mut self, data: LoadedData) {
+    /// Put loaded data into state (replacing or appending) and write it to
+    /// the cache.
+    fn store(&mut self, data: LoadedData, append: bool) {
         let repo = self.cache.repository();
         let cached = match &data {
             LoadedData::Subscriptions(items) => {
@@ -159,10 +190,19 @@ impl App {
             warn!("Failed to write cache: {}", e);
         }
 
+        fn put<T>(list: &mut Vec<T>, items: Vec<T>, append: bool) {
+            if append {
+                list.extend(items);
+            } else {
+                *list = items;
+            }
+        }
         match data {
-            LoadedData::Subscriptions(items) => self.state.subscriptions = items,
-            LoadedData::ResourceGroups(items) => self.state.resource_groups = items,
-            LoadedData::Resources(items) => self.state.resources = items,
+            LoadedData::Subscriptions(items) => put(&mut self.state.subscriptions, items, append),
+            LoadedData::ResourceGroups(items) => {
+                put(&mut self.state.resource_groups, items, append)
+            }
+            LoadedData::Resources(items) => put(&mut self.state.resources, items, append),
         }
     }
 
@@ -192,7 +232,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::loader::FetchOutcome;
+    use crate::loader::{ChunkSink, FetchOutcome};
     use crate::models::Subscription;
     use futures::future::BoxFuture;
     use futures::FutureExt;
@@ -201,13 +241,18 @@ mod tests {
     struct Fake(Result<Vec<Subscription>, String>, Vec<String>);
 
     impl Fetcher for Fake {
-        fn fetch(&self, _request: LoadRequest) -> BoxFuture<'static, FetchOutcome> {
+        fn fetch(
+            &self,
+            _request: LoadRequest,
+            _sink: ChunkSink,
+        ) -> BoxFuture<'static, FetchOutcome> {
             let data = self.0.clone().map(LoadedData::Subscriptions);
             let failed = self.1.clone();
             async move {
                 FetchOutcome {
                     data,
                     failed_subscriptions: failed,
+                    notice: None,
                 }
             }
             .boxed()

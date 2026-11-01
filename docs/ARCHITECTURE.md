@@ -25,6 +25,16 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   - `list_subscriptions` shells out to `az account list --all`.
   - `list_resource_groups` and `list_resources` call ARM through
     `azure_mgmt_resources`, one subscription per call, and page through all results.
+- `resource_graph.rs`: Azure Resource Graph REST client.
+  - `query_pages` POSTs KQL scoped to a management group or a subscription list,
+    follows `$skipToken` (1000 rows per page) and hands each page to a callback.
+  - It respects the per-user quota headers and retries 429s. Errors carry the HTTP
+    status and the ARM error message (`AzureError::Http`).
+  - It also holds the KQL builders and row → model mapping. The resource group
+    name is taken from the resource ID to keep its casing, because Resource
+    Graph lowercases the `resourceGroup` column.
+- `testing.rs` (feature `test-util`): a static token source and a local mock HTTP
+  server, used by tests in this crate and in `az9s-core`.
 - `models.rs`: Azure-side DTOs (`AzureSubscription`, `AzureResourceGroup`,
   `AzureResource`).
 
@@ -41,9 +51,20 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   - One request per `LoadKind` (subscriptions, resource groups, resources) is in
     flight at a time. A newer request aborts the older one, and stale results
     are dropped by generation number.
-  - `Fetcher` is the data-source trait. `AzureFetcher` calls ARM, and
-    multi-subscription loads run up to 16 at a time (`fetch_per_subscription`).
-    Tests use fake fetchers. Resource Graph will plug in here (M1 step 3).
+  - Fetchers may **stream** partial results through a `ChunkSink`. The first
+    chunk of a request replaces the list, later chunks append, and a final
+    message ends the request (`Accept::{Partial, Final, Stale}`).
+  - `Fetcher` is the data-source trait.
+    - `GraphFetcher` (the default) lists resource groups and resources through
+      Resource Graph. "All subscriptions" queries go to the tenant root
+      management group (ID = the token's `tid`) and are filtered to the requested
+      subscriptions; if that scope is forbidden, it retries with the
+      subscription list. It streams each page. If it fails before any rows
+      arrive, it falls back to ARM and sets a notice.
+    - `AzureFetcher` uses ARM (one call per subscription, 16 at a time) and
+      handles the subscription list (Azure CLI). Set `AZ9S_BACKEND=arm` to use it
+      for everything.
+    - Tests use fake fetchers.
 - `state.rs`: `AppState` holds:
   - the current `ViewMode` (`SubscriptionList`, `ResourceGroupList`, `ResourceList`,
     `ResourceDetail`)
@@ -103,9 +124,8 @@ load task (tokio) ────────┘
    (background `Loader`).
 3. ~~Opening a resource group fetched every resource in the subscription.~~ Fixed
    (ARM `list_by_resource_group`).
-4. "All subscriptions" views still make one ARM call per subscription, now 16 at a
-   time instead of sequentially. Resource Graph (step 3) replaces this with one
-   query.
+4. ~~"All subscriptions" views made one ARM call per subscription.~~ Fixed: one
+   Resource Graph query at the tenant root, streamed page by page.
 5. The cache is read at startup for subscriptions only. It is not used to render first and
    refresh afterwards.
 

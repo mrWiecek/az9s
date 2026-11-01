@@ -104,7 +104,7 @@ Work items, in order:
       only renders and updates state. Cancel stale requests when the user moves on.
       *(Done: `az9s_core::loader`. Also, multi-subscription views now run up to 16
       ARM calls at a time as a stopgap until Resource Graph.)*
-- [ ] **Azure Resource Graph as the read backend.** One KQL query lists resource
+- [x] **Azure Resource Graph as the read backend.** One KQL query lists resource
       groups and resources across all subscriptions, with server-side filtering
       (by RG, type, location or tag) and paging. The same backend serves Policy
       later (`policyresources` table).
@@ -130,8 +130,10 @@ Work items, in order:
       Graph in step 3).
 - [ ] **Cache-first (stale-while-revalidate).** Render cached data immediately,
       refresh in the background, and show data age in the status bar.
-- [ ] **Scope-aware queries.** Resource Graph queries can target a management group
+- [x] **Scope-aware queries.** Resource Graph queries can target a management group
       as well as a list of subscriptions.
+      *(Done in step 3. Still to validate against a real 400+ subscription tenant:
+      run the ignored live test in `crates/az9s-core/tests/integration_startup.rs`.)*
 - [ ] **Shared clients.** Create one HTTP client and one credential at startup and
       cache the token.
 - [ ] **Performance budget in CI.** Add benchmarks for rendering and filtering

@@ -59,7 +59,24 @@ No version has been released yet. The first public release is planned as **v0.1.
   time** instead of one after another, and skip disabled subscriptions. If some
   subscriptions fail, the rest still show, with a warning in the status bar.
 
+### Performance (M1, step 3)
+- **Resource Graph backend.** Resource group and resource lists now come from Azure
+  Resource Graph instead of one ARM call per subscription.
+  - `:rg all` and `:res all` run one query at the tenant root management group,
+    limited to your enabled subscriptions. If you can't read the root, az9s
+    retries scoped to your subscriptions.
+  - Results stream in page by page (1000 rows per page), so the first rows show
+    before the whole list has loaded.
+  - Opening a resource group runs a filtered query in that subscription.
+  - Resource Graph throttling is respected: az9s waits out the quota and retries
+    429s.
+  - If Resource Graph fails before returning any rows, az9s falls back to ARM and
+    says so in the status bar. `AZ9S_BACKEND=arm` forces the old ARM path.
+  - Trade-off: Resource Graph can lag behind ARM by a short time after changes.
+
 ### Fixed
+- Resource types from Resource Graph come in lowercase. Short type labels and
+  colours are now matched case-insensitively.
 - Opening a resource group showed every resource in its subscription. It now
   requests only that group's resources from Azure.
 - In `:rg all`, opening a resource group used the wrong subscription. It now uses
@@ -92,8 +109,7 @@ Already in the codebase before this changelog was started:
 - A Rust workspace with 4 crates and 65 passing tests.
 
 ### Known issues
-- "All subscriptions" views still make one ARM call per subscription (16 in
-  parallel). At 400+ subscriptions that is still slow; Resource Graph (M1 step 3)
-  replaces it with one query.
+- The Resource Graph backend is tested against a mock API but not yet against a
+  live 400+ subscription tenant.
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).

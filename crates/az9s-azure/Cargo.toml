@@ -6,6 +6,10 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+# Mock Azure HTTP server and token source for tests in other crates.
+test-util = []
+
 [dependencies]
 tokio = { workspace = true }
 futures = { workspace = true }
@@ -14,6 +18,8 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+reqwest = { version = "0.11", default-features = false, features = ["default-tls"] }
+base64 = "0.13"
 
 # Azure SDK
 azure_core = { workspace = true }

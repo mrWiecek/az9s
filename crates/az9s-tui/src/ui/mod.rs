@@ -326,15 +326,16 @@ fn draw_resource_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()>
             let short_type = resource_type::short_label(&res.resource_type);
             let display_type = format!("{:<20}", short_type);
 
-            let type_color = match res.resource_type.as_str() {
-                t if t.contains("VirtualMachine") => Color::Cyan,
-                t if t.contains("Storage") => Color::Yellow,
-                t if t.contains("Network") => Color::Blue,
-                t if t.contains("Database") || t.contains("Sql") || t.contains("Cosmos") => {
+            // Lowercase first: Resource Graph returns types in lowercase.
+            let type_color = match res.resource_type.to_ascii_lowercase().as_str() {
+                t if t.contains("virtualmachine") => Color::Cyan,
+                t if t.contains("storage") => Color::Yellow,
+                t if t.contains("network") => Color::Blue,
+                t if t.contains("database") || t.contains("sql") || t.contains("cosmos") => {
                     Color::Magenta
                 }
-                t if t.contains("KeyVault") => Color::Red,
-                t if t.contains("Container") || t.contains("Kubernetes") => Color::Green,
+                t if t.contains("keyvault") => Color::Red,
+                t if t.contains("container") || t.contains("kubernetes") => Color::Green,
                 _ => Color::White,
             };
 

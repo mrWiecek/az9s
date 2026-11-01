@@ -2,7 +2,7 @@
 //! events against a deliberately slow fake fetcher.
 
 use az9s_core::cache::Cache;
-use az9s_core::loader::{FetchOutcome, Fetcher, LoadRequest, LoadedData};
+use az9s_core::loader::{ChunkSink, FetchOutcome, Fetcher, LoadRequest, LoadedData};
 use az9s_core::models::{Resource, ResourceGroup, Subscription};
 use az9s_core::state::ViewMode;
 use az9s_core::App;
@@ -24,7 +24,7 @@ struct SlowAzure {
 }
 
 impl Fetcher for SlowAzure {
-    fn fetch(&self, request: LoadRequest) -> BoxFuture<'static, FetchOutcome> {
+    fn fetch(&self, request: LoadRequest, _sink: ChunkSink) -> BoxFuture<'static, FetchOutcome> {
         self.requests.lock().unwrap().push(request.clone());
         async move {
             tokio::time::sleep(AZURE_LATENCY).await;
@@ -63,6 +63,7 @@ impl Fetcher for SlowAzure {
             FetchOutcome {
                 data: Ok(data),
                 failed_subscriptions: vec![],
+                notice: None,
             }
         }
         .boxed()

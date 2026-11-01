@@ -6,15 +6,16 @@
 //!
 //! Each request gets a generation number. Starting a new request of the same
 //! [`LoadKind`] aborts the previous task, and a result that is no longer the
-//! latest for its kind is discarded by [`Loader::complete`], so a slow answer
+//! latest for its kind is discarded by [`Loader::accept`], so a slow answer
 //! for a view the user already left can never overwrite a newer one.
 
 use crate::models::{Resource, ResourceGroup, Subscription};
 use crate::timing;
-use az9s_azure::AzureClient;
+use az9s_azure::resource_graph::{self, GraphScope, ResourceGraphClient};
+use az9s_azure::{AzureClient, AzureError};
 use futures::future::BoxFuture;
 use futures::{stream, FutureExt, StreamExt};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -76,20 +77,72 @@ pub enum LoadedData {
 /// failed when several were loaded at once.
 #[derive(Debug)]
 pub struct FetchOutcome {
+    /// Shown to the user in the status bar (e.g. "fell back to ARM").
+    pub notice: Option<String>,
     pub data: Result<LoadedData, String>,
     pub failed_subscriptions: Vec<String>,
 }
 
 #[derive(Debug)]
 pub struct LoadResult {
+    /// `false` for a partial chunk streamed while the load continues; `true`
+    /// for the final message of a request.
+    pub done: bool,
     pub kind: LoadKind,
     pub generation: u64,
     pub outcome: FetchOutcome,
 }
 
 /// Source of data. [`AzureFetcher`] talks to ARM; tests use fakes.
+/// Lets a fetcher deliver rows as they arrive (e.g. one Resource Graph page at
+/// a time), so the first page is visible before the whole load finishes.
+#[derive(Clone)]
+pub struct ChunkSink {
+    tx: mpsc::UnboundedSender<LoadResult>,
+    kind: LoadKind,
+    generation: u64,
+}
+
+impl ChunkSink {
+    /// Deliver a chunk of rows. The final [`FetchOutcome`] then carries only
+    /// rows not already sent through the sink.
+    pub fn send(&self, data: LoadedData) {
+        let _ = self.tx.send(LoadResult {
+            done: false,
+            kind: self.kind,
+            generation: self.generation,
+            outcome: FetchOutcome {
+                data: Ok(data),
+                failed_subscriptions: Vec::new(),
+                notice: None,
+            },
+        });
+    }
+
+    /// A sink whose chunks go nowhere (for fetchers called outside a Loader).
+    pub fn discard() -> Self {
+        let (tx, _) = mpsc::unbounded_channel();
+        Self {
+            tx,
+            kind: LoadKind::Subscriptions,
+            generation: 0,
+        }
+    }
+}
+
+/// How the loader treats an incoming [`LoadResult`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Accept {
+    /// A newer request of the same kind exists; ignore it.
+    Stale,
+    /// A chunk of the current request; more will follow.
+    Partial,
+    /// The last message of the current request.
+    Final,
+}
+
 pub trait Fetcher: Send + Sync + 'static {
-    fn fetch(&self, request: LoadRequest) -> BoxFuture<'static, FetchOutcome>;
+    fn fetch(&self, request: LoadRequest, _sink: ChunkSink) -> BoxFuture<'static, FetchOutcome>;
 }
 
 pub type LoadReceiver = mpsc::UnboundedReceiver<LoadResult>;
@@ -137,10 +190,16 @@ impl Loader {
         }
 
         let tx = self.tx.clone();
+        let sink = ChunkSink {
+            tx: tx.clone(),
+            kind,
+            generation,
+        };
         let handle = tokio::spawn(async move {
-            let outcome = fetcher.fetch(request).await;
+            let outcome = fetcher.fetch(request, sink).await;
             // The receiver may be gone during shutdown; nothing to do then.
             let _ = tx.send(LoadResult {
+                done: true,
                 kind,
                 generation,
                 outcome,
@@ -150,15 +209,19 @@ impl Loader {
         Ok(generation)
     }
 
-    /// Mark `result` as received. Returns `true` if it is the latest request
-    /// of its kind and should be applied; stale results return `false`.
-    pub fn complete(&mut self, result: &LoadResult) -> bool {
+    /// Classify an incoming result. A final result of the current request
+    /// also marks the request as finished.
+    pub fn accept(&mut self, result: &LoadResult) -> Accept {
         match self.in_flight.get(&result.kind) {
             Some((generation, _)) if *generation == result.generation => {
-                self.in_flight.remove(&result.kind);
-                true
+                if result.done {
+                    self.in_flight.remove(&result.kind);
+                    Accept::Final
+                } else {
+                    Accept::Partial
+                }
             }
-            _ => false,
+            _ => Accept::Stale,
         }
     }
 
@@ -192,7 +255,7 @@ impl AzureFetcher {
 }
 
 impl Fetcher for AzureFetcher {
-    fn fetch(&self, request: LoadRequest) -> BoxFuture<'static, FetchOutcome> {
+    fn fetch(&self, request: LoadRequest, _sink: ChunkSink) -> BoxFuture<'static, FetchOutcome> {
         let client = self.client.clone();
         async move {
             match request {
@@ -207,6 +270,7 @@ impl Fetcher for AzureFetcher {
                             })
                             .map_err(|e| e.to_string()),
                         failed_subscriptions: Vec::new(),
+                        notice: None,
                     }
                 }
                 LoadRequest::ResourceGroups { subscription_ids } => {
@@ -225,6 +289,7 @@ impl Fetcher for AzureFetcher {
                     FetchOutcome {
                         data: items.map(LoadedData::ResourceGroups),
                         failed_subscriptions: failed,
+                        notice: None,
                     }
                 }
                 LoadRequest::Resources {
@@ -253,12 +318,197 @@ impl Fetcher for AzureFetcher {
                     FetchOutcome {
                         data: items.map(LoadedData::Resources),
                         failed_subscriptions: failed,
+                        notice: None,
                     }
                 }
             }
         }
         .boxed()
     }
+}
+
+/// Fetches lists from Azure Resource Graph: one paged query instead of one
+/// ARM call per subscription. Pages are streamed to the UI as they arrive.
+///
+/// Scope: a single subscription is queried directly. Several subscriptions
+/// ("all") are queried through the tenant root management group (its ID is
+/// the tenant ID), and the rows are limited to the requested subscriptions.
+/// If the management group is not readable, the query is retried scoped to
+/// the subscription list. If Resource Graph fails before any rows were
+/// delivered, the request falls back to ARM and a notice says so.
+pub struct GraphFetcher {
+    graph: Arc<ResourceGraphClient>,
+    /// Used for subscriptions, and as a fallback when Resource Graph fails.
+    arm: Arc<dyn Fetcher>,
+    home_tenant: tokio::sync::OnceCell<Option<String>>,
+}
+
+impl GraphFetcher {
+    pub fn new(graph: Arc<ResourceGraphClient>, arm: Arc<dyn Fetcher>) -> Self {
+        Self {
+            graph,
+            arm,
+            home_tenant: tokio::sync::OnceCell::new(),
+        }
+    }
+}
+
+impl Fetcher for GraphFetcher {
+    fn fetch(&self, request: LoadRequest, sink: ChunkSink) -> BoxFuture<'static, FetchOutcome> {
+        // Subscriptions come from the Azure CLI (with tenant information).
+        if request == LoadRequest::Subscriptions {
+            return self.arm.fetch(request, sink);
+        }
+        let graph = self.graph.clone();
+        let arm = self.arm.clone();
+        let home_tenant = self.home_tenant.clone();
+        async move {
+            let (query, subscription_ids, kind) = match &request {
+                LoadRequest::ResourceGroups { subscription_ids } => (
+                    resource_graph::resource_groups_query(),
+                    subscription_ids.clone(),
+                    LoadKind::ResourceGroups,
+                ),
+                LoadRequest::Resources {
+                    subscription_ids,
+                    resource_group,
+                } => (
+                    resource_graph::resources_query(resource_group.as_deref()),
+                    subscription_ids.clone(),
+                    LoadKind::Resources,
+                ),
+                LoadRequest::Subscriptions => unreachable!("handled above"),
+            };
+            if subscription_ids.is_empty() {
+                return FetchOutcome {
+                    data: Ok(empty(kind)),
+                    failed_subscriptions: vec![],
+                    notice: None,
+                };
+            }
+
+            let tenant = if subscription_ids.len() > 1 {
+                home_tenant
+                    .get_or_init(|| async { graph.home_tenant_id().await.ok() })
+                    .await
+                    .clone()
+            } else {
+                None
+            };
+
+            let _t = timing::timer("azure.graph_query");
+            let mut delivered = 0usize;
+            let mut result = Err(AzureError::InvalidConfig("no scope".into()));
+            if let Some(tenant) = tenant {
+                result = query_into_sink(
+                    &graph,
+                    &query,
+                    &GraphScope::ManagementGroup(tenant),
+                    &subscription_ids,
+                    kind,
+                    &sink,
+                    &mut delivered,
+                )
+                .await;
+                if let Err(e) = &result {
+                    warn!("Resource Graph at tenant root failed: {}", e);
+                }
+            }
+            if result.is_err() && delivered == 0 {
+                result = query_into_sink(
+                    &graph,
+                    &query,
+                    &GraphScope::Subscriptions(subscription_ids.clone()),
+                    &subscription_ids,
+                    kind,
+                    &sink,
+                    &mut delivered,
+                )
+                .await;
+            }
+
+            match result {
+                Ok(_) => FetchOutcome {
+                    // Everything was streamed through the sink already.
+                    data: Ok(empty(kind)),
+                    failed_subscriptions: vec![],
+                    notice: None,
+                },
+                Err(e) if delivered == 0 => {
+                    warn!("Resource Graph failed, falling back to ARM: {}", e);
+                    let mut outcome = arm.fetch(request, sink).await;
+                    outcome.notice = Some(format!("Resource Graph unavailable ({e}); used ARM"));
+                    outcome
+                }
+                Err(e) => FetchOutcome {
+                    data: Err(format!("Resource Graph failed after {delivered} rows: {e}")),
+                    failed_subscriptions: vec![],
+                    notice: None,
+                },
+            }
+        }
+        .boxed()
+    }
+}
+
+fn empty(kind: LoadKind) -> LoadedData {
+    match kind {
+        LoadKind::Subscriptions => LoadedData::Subscriptions(vec![]),
+        LoadKind::ResourceGroups => LoadedData::ResourceGroups(vec![]),
+        LoadKind::Resources => LoadedData::Resources(vec![]),
+    }
+}
+
+/// Run a Resource Graph query and stream each page into `sink`, keeping only
+/// rows from the requested subscriptions. `delivered` counts rows sent.
+async fn query_into_sink(
+    graph: &ResourceGraphClient,
+    query: &str,
+    scope: &GraphScope,
+    subscription_ids: &[String],
+    kind: LoadKind,
+    sink: &ChunkSink,
+    delivered: &mut usize,
+) -> az9s_azure::Result<usize> {
+    let wanted: HashSet<String> = subscription_ids
+        .iter()
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+    let wanted_sub = |sub: &str| wanted.contains(&sub.to_ascii_lowercase());
+    let started = std::time::Instant::now();
+    let mut first_page = true;
+
+    graph
+        .query_pages(query, scope, |rows| {
+            if first_page {
+                first_page = false;
+                timing::record("azure.graph_first_page", started.elapsed());
+            }
+            let chunk = match kind {
+                LoadKind::ResourceGroups => {
+                    let items: Vec<ResourceGroup> = rows
+                        .iter()
+                        .filter_map(resource_graph::resource_group_from_row)
+                        .filter(|rg| wanted_sub(&rg.subscription_id))
+                        .map(|rg| ResourceGroup::from(&rg))
+                        .collect();
+                    *delivered += items.len();
+                    LoadedData::ResourceGroups(items)
+                }
+                _ => {
+                    let items: Vec<Resource> = rows
+                        .iter()
+                        .filter_map(resource_graph::resource_from_row)
+                        .filter(|r| wanted_sub(&r.subscription_id))
+                        .map(|r| Resource::from(&r))
+                        .collect();
+                    *delivered += items.len();
+                    LoadedData::Resources(items)
+                }
+            };
+            sink.send(chunk);
+        })
+        .await
 }
 
 /// Run `fetch_one` for every subscription, up to [`MAX_CONCURRENT_REQUESTS`]
@@ -321,7 +571,11 @@ mod tests {
     }
 
     impl Fetcher for FakeFetcher {
-        fn fetch(&self, request: LoadRequest) -> BoxFuture<'static, FetchOutcome> {
+        fn fetch(
+            &self,
+            request: LoadRequest,
+            _sink: ChunkSink,
+        ) -> BoxFuture<'static, FetchOutcome> {
             let delay = self.delay;
             async move {
                 tokio::time::sleep(delay).await;
@@ -342,6 +596,7 @@ mod tests {
                             .collect(),
                     )),
                     failed_subscriptions: vec![],
+                    notice: None,
                 }
             }
             .boxed()
@@ -370,7 +625,7 @@ mod tests {
         assert!(loader.is_loading_kind(LoadKind::ResourceGroups));
 
         let result = rx.recv().await.unwrap();
-        assert!(loader.complete(&result));
+        assert_eq!(loader.accept(&result), Accept::Final);
         assert!(!loader.is_loading());
         match result.outcome.data {
             Ok(LoadedData::ResourceGroups(rgs)) => assert_eq!(rgs.len(), 3),
@@ -392,18 +647,20 @@ mod tests {
         // The first task was aborted, so only the second result arrives.
         let result = rx.recv().await.unwrap();
         assert_eq!(result.generation, second);
-        assert!(loader.complete(&result));
+        assert_eq!(loader.accept(&result), Accept::Final);
 
         // A late result with an old generation is rejected.
         let stale = LoadResult {
+            done: true,
             kind: LoadKind::ResourceGroups,
             generation: first,
             outcome: FetchOutcome {
                 data: Ok(LoadedData::ResourceGroups(vec![])),
                 failed_subscriptions: vec![],
+                notice: None,
             },
         };
-        assert!(!loader.complete(&stale));
+        assert_eq!(loader.accept(&stale), Accept::Stale);
     }
 
     #[tokio::test]

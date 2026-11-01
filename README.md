@@ -8,9 +8,9 @@ Browse every subscription, resource group and resource from the terminal, filter
 instantly, and (soon) act on resources and check Azure Policy compliance, the way k9s
 works for Kubernetes.
 
-> ⚠️ **Status: early development.** No release yet. The app can browse resources and
-> no longer freezes while loading, but "all subscriptions" views are still slow at
-> large scale, and it is read-only for now. See the [Roadmap](ROADMAP.md).
+> ⚠️ **Status: early development.** No release yet. The app browses resources across
+> all your subscriptions with Azure Resource Graph and never freezes while loading.
+> It is read-only for now. See the [Roadmap](ROADMAP.md).
 
 ## Features
 
@@ -89,6 +89,15 @@ crates/
 ```
 
 How it fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Troubleshooting
+
+| Symptom | Try |
+|---|---|
+| "Not connected to Azure" | Run `az login`, then press `r` |
+| Status bar says "Resource Graph unavailable … used ARM" | Lists still load, but more slowly; check `just run-debug` logs |
+| A resource you just changed looks stale | Resource Graph can lag ARM briefly; press `r`, or run with `AZ9S_BACKEND=arm` |
+| Something feels slow | Run `az9s --timings` and include the table in an issue |
 
 ## Contributing
 

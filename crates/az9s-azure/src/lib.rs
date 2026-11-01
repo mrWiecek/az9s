@@ -1,9 +1,13 @@
 pub mod auth;
 pub mod client;
 pub mod models;
+pub mod resource_graph;
+#[cfg(any(test, feature = "test-util"))]
+pub mod testing;
 
 pub use auth::{AuthProvider, AzureAuth};
 pub use client::AzureClient;
+pub use resource_graph::{GraphScope, ResourceGraphClient};
 
 use thiserror::Error;
 
@@ -17,6 +21,9 @@ pub enum AzureError {
 
     #[error("Resource not found: {0}")]
     NotFound(String),
+
+    #[error("HTTP {status}: {message}")]
+    Http { status: u16, message: String },
 
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
