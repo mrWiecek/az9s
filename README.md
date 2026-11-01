@@ -2,86 +2,96 @@
 
 ![az9s logo](assets/az9s-logo.jpg)
 
-az9s is a keyboard-first Azure browser for the terminal.
+**A fast, keyboard-first terminal UI for operating Azure, built for platform engineers.**
 
-This repository contains only the app codebase.
+Browse every subscription, resource group and resource from the terminal, filter
+instantly, and (soon) act on resources and check Azure Policy compliance, the way k9s
+works for Kubernetes.
 
-## Quick Product View
+> ⚠️ **Status: early development.** No release yet. The app can browse resources but is
+> slow and read-only for now. See the [Roadmap](ROADMAP.md).
 
-| Component | Purpose | Location |
-|---|---|---|
-| az9s app | Terminal Azure browser | `src/apps/aztui/` |
+## Features
 
-## Install az9s
+| Today | Planned |
+|---|---|
+| Subscriptions → resource groups → resources → detail | Instant, non-blocking UI backed by Azure Resource Graph (M1) |
+| Cross-subscription views (`:rgs all`, `:res all`) | Management-group tree, rich detail views, JSON, open in Portal, command palette (M2) |
+| `/` filtering, vim keys, `:` commands, `?` help | Azure Policy at management-group scope: assignments, compliance, exemptions (M3) |
+| Offline fallback through a local SQLite cache | Safe actions: VM start/stop, restarts, tags, delete, policy scans (M4) |
 
-From repository root:
+## Requirements
 
-```bash
-cargo install --path src/apps/aztui/crates/aztui --locked
-```
+- [Rust](https://rustup.rs) (stable)
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), logged in with
+  `az login`
+- A terminal with true color support (recommended)
 
-Note: the installed binary is currently named `aztui`.
-
-If you prefer not to install globally:
-
-```bash
-cd src/apps/aztui
-RUST_LOG=off cargo run --release --quiet
-```
-
-## Use az9s
-
-1. Authenticate to Azure:
+## Install
 
 ```bash
-az login
+git clone https://github.com/mrWiecek/az9s.git
+cd az9s
+cargo install --path crates/az9s --locked   # or: just install
 ```
 
-2. Optional: pick a subscription:
+## Quick start
 
 ```bash
-az account set --subscription "<subscription-name-or-id>"
+az login                                   # authenticate once (az9s uses your Azure CLI login)
+az9s                                       # launch
 ```
 
-3. Launch the app:
+## Keys
+
+| Key | Action |
+|---|---|
+| `j` / `k`, `↑` / `↓` | Move down / up |
+| `g` / `G` | First / last item |
+| `Ctrl+D` / `Ctrl+U` | Page down / up |
+| `Enter` | Open |
+| `Esc` / `Backspace` | Back, clear filter, or dismiss error |
+| `/` | Filter |
+| `:` | Command mode |
+| `r` | Refresh |
+| `?` | Help |
+| `q` / `Ctrl+C` | Quit |
+
+## Commands
+
+| Command | Shows |
+|---|---|
+| `:subs` | Subscriptions |
+| `:rgs [all\|<sub>]` | Resource groups (all subscriptions or one) |
+| `:res [all\|<sub>]` | Resources (all subscriptions or one) |
+
+## Development
+
+Requires [just](https://github.com/casey/just).
 
 ```bash
-aztui
+just run         # run (release mode, logs off)
+just run-debug   # run with debug logs written to az9s.log
+just ci          # everything CI runs: fmt check, clippy, tests
+just --list      # all recipes
 ```
 
-## Common Run Modes
-
-```bash
-# run from source (recommended)
-cd src/apps/aztui
-cargo run --release --quiet
-
-# run with debug logs
-RUST_LOG=debug cargo run
-
-# build release
-cargo build --release
-./target/release/aztui
+```
+crates/
+├── az9s         # binary entry point
+├── az9s-core    # state, navigation, SQLite cache
+├── az9s-azure   # Azure auth + API client
+└── az9s-tui     # ratatui UI
 ```
 
-## Just Recipes
+How it fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-From repo root:
+## Contributing
 
-```bash
-just help
-just app-run
-just app-run-debug
-just build
-just test
-```
+Issues and PRs are welcome. Start with [ROADMAP.md](ROADMAP.md) and
+[CONTRIBUTING.md](CONTRIBUTING.md). Record user-visible changes under
+`[Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
 
-## Documentation Map
+## License
 
-App documentation lives in `src/apps/aztui/docs/`:
-
-- `BUILDING.md`
-- `ARCHITECTURE.md`
-- `AZURE_AUTHENTICATION.md`
-- `KEYBOARD_SHORTCUTS.md`
-- `TUI_ARCHITECTURE.md`
+[Apache License 2.0](LICENSE).

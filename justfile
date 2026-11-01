@@ -1,42 +1,46 @@
 set shell := ["bash", "-cu"]
 
 default:
-    @just help
+    @just --list
 
-help:
-    @echo "Available recipes:"
-    @echo "  just build                       # build app (debug)"
-    @echo "  just build-release               # build app (release)"
-    @echo "  just app-run                     # run app in release mode (recommended)"
-    @echo "  just app-run-debug               # run app in debug mode"
-    @echo "  just test"
-    @echo "  just fmt"
-    @echo "  just clippy"
-    @echo "  just clean"
-
+# Build (debug)
 build:
-    @cd src/apps/aztui && cargo build
+    cargo build
 
+# Build (release)
 build-release:
-    @cd src/apps/aztui && cargo build --release
+    cargo build --release
 
+# Run the app (release profile, logging off for clean rendering)
+run:
+    RUST_LOG=off cargo run --release --quiet
+
+# Run the app with debug logging to az9s.log
+run-debug:
+    RUST_LOG=debug cargo run 2> az9s.log
+
+# Run all tests
 test:
-    @cd src/apps/aztui && cargo test
+    cargo test --workspace
 
+# Format all code
 fmt:
-    @cd src/apps/aztui && cargo fmt --all
+    cargo fmt --all
 
+# Lint (warnings are errors)
 clippy:
-    @cd src/apps/aztui && cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
 
-# Run the TUI app with release profile and logging disabled for stable rendering.
-app-run:
-    @cd src/apps/aztui && RUST_LOG=off cargo run --release --quiet
+# Everything CI checks
+ci:
+    cargo fmt --all --check
+    cargo clippy --workspace --all-targets -- -D warnings
+    cargo test --workspace
 
-# Run the TUI app in debug mode with logging disabled.
-app-run-debug:
-    @cd src/apps/aztui && RUST_LOG=off cargo run --quiet
+# Install the az9s binary from source
+install:
+    cargo install --path crates/az9s --locked
 
-# Remove local build/test artifacts.
+# Remove build artifacts
 clean:
-        @cd src/apps/aztui && cargo clean
+    cargo clean
