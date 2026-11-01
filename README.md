@@ -2,86 +2,105 @@
 
 ![az9s logo](assets/az9s-logo.jpg)
 
-az9s is a keyboard-first Azure browser for the terminal.
+**A fast, keyboard-first terminal UI for operating Azure, built for platform engineers.**
 
-This repository contains only the app codebase.
+Browse every subscription, resource group and resource from the terminal, filter
+instantly, and (soon) act on resources and check Azure Policy compliance, the way k9s
+works for Kubernetes.
 
-## Quick Product View
+> ⚠️ **Status: early development.** No release yet. The app can browse resources but is
+> slow and read-only for now. See the [Roadmap](ROADMAP.md).
 
-| Component | Purpose | Location |
-|---|---|---|
-| az9s app | Terminal Azure browser | `src/apps/aztui/` |
+## Features
 
-## Install az9s
+| Today | Planned |
+|---|---|
+| Subscriptions → resource groups → resources → detail | Instant, non-blocking UI backed by Azure Resource Graph (M1) |
+| Cross-subscription views (`:rgs all`, `:res all`) | Rich detail views, JSON, open in Portal, command palette (M2) |
+| `/` filtering, vim keys, `:` commands, `?` help | Safe actions: VM start/stop, restarts, tags, delete (M3) |
+| Offline fallback through a local SQLite cache | Azure Policy assignments, compliance and exemptions (M4) |
 
-From repository root:
+## Requirements
+
+- [Rust](https://rustup.rs) 1.75+
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), logged in with
+  `az login`
+- A terminal with true color support (recommended)
+
+## Install
 
 ```bash
+git clone https://github.com/mrWiecek/az9s.git
+cd az9s
 cargo install --path src/apps/aztui/crates/aztui --locked
 ```
 
-Note: the installed binary is currently named `aztui`.
+> The binary is still named `aztui` until the rename in milestone M0.
 
-If you prefer not to install globally:
-
-```bash
-cd src/apps/aztui
-RUST_LOG=off cargo run --release --quiet
-```
-
-## Use az9s
-
-1. Authenticate to Azure:
+## Quick start
 
 ```bash
-az login
+az login                                   # authenticate once
+az account set --subscription "<name-or-id>"   # optional
+aztui                                      # launch
 ```
 
-2. Optional: pick a subscription:
+## Keys
+
+| Key | Action |
+|---|---|
+| `j` / `k`, `↑` / `↓` | Move down / up |
+| `g` / `G` | First / last item |
+| `Ctrl+D` / `Ctrl+U` | Page down / up |
+| `Enter` | Open |
+| `Esc` / `Backspace` | Back, clear filter, or dismiss error |
+| `/` | Filter |
+| `:` | Command mode |
+| `r` | Refresh |
+| `?` | Help |
+| `q` / `Ctrl+C` | Quit |
+
+## Commands
+
+| Command | Shows |
+|---|---|
+| `:subs` | Subscriptions |
+| `:rgs [all\|<sub>]` | Resource groups (all subscriptions or one) |
+| `:res [all\|<sub>]` | Resources (all subscriptions or one) |
+
+## Development
+
+Requires [just](https://github.com/casey/just).
 
 ```bash
-az account set --subscription "<subscription-name-or-id>"
+just build        # debug build
+just app-run      # run (release mode, logs off)
+just test         # run tests
+just fmt          # format
+just clippy       # lint (warnings are errors)
 ```
 
-3. Launch the app:
+Debug logging: `cd src/apps/aztui && RUST_LOG=debug cargo run`.
 
-```bash
-aztui
+Project layout (will be flattened in M0):
+
+```
+src/apps/aztui/crates/
+├── aztui        # binary entry point
+├── aztui-core   # state, navigation, SQLite cache
+├── aztui-azure  # Azure auth + API client
+└── aztui-tui    # ratatui UI
 ```
 
-## Common Run Modes
+More docs: [`src/apps/aztui/docs/`](src/apps/aztui/docs/), including
+[ARCHITECTURE.md](src/apps/aztui/docs/ARCHITECTURE.md).
 
-```bash
-# run from source (recommended)
-cd src/apps/aztui
-cargo run --release --quiet
+## Contributing
 
-# run with debug logs
-RUST_LOG=debug cargo run
+Issues and PRs are welcome. Start with [ROADMAP.md](ROADMAP.md) and
+[CONTRIBUTING.md](src/apps/aztui/CONTRIBUTING.md). Record user-visible changes under
+`[Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
 
-# build release
-cargo build --release
-./target/release/aztui
-```
+## License
 
-## Just Recipes
-
-From repo root:
-
-```bash
-just help
-just app-run
-just app-run-debug
-just build
-just test
-```
-
-## Documentation Map
-
-App documentation lives in `src/apps/aztui/docs/`:
-
-- `BUILDING.md`
-- `ARCHITECTURE.md`
-- `AZURE_AUTHENTICATION.md`
-- `KEYBOARD_SHORTCUTS.md`
-- `TUI_ARCHITECTURE.md`
+MIT. See [LICENSE](LICENSE). (Final licensing is an open decision in the roadmap.)
