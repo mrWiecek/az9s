@@ -1,11 +1,20 @@
-# Rust build artifacts
-target/
+# Rust
+/target/
+**/*.rs.bk
 
-# Local environment
+# Local app data / logs
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Environment
 .env
-.venv/
-.aztui-builder/
-.pytest_cache/
 
-# Editor/local state
+# Editors / OS
 .vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db

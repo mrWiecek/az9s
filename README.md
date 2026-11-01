@@ -16,13 +16,13 @@ works for Kubernetes.
 | Today | Planned |
 |---|---|
 | Subscriptions → resource groups → resources → detail | Instant, non-blocking UI backed by Azure Resource Graph (M1) |
-| Cross-subscription views (`:rgs all`, `:res all`) | Rich detail views, JSON, open in Portal, command palette (M2) |
-| `/` filtering, vim keys, `:` commands, `?` help | Safe actions: VM start/stop, restarts, tags, delete (M3) |
-| Offline fallback through a local SQLite cache | Azure Policy assignments, compliance and exemptions (M4) |
+| Cross-subscription views (`:rgs all`, `:res all`) | Management-group tree, rich detail views, JSON, open in Portal, command palette (M2) |
+| `/` filtering, vim keys, `:` commands, `?` help | Azure Policy at management-group scope: assignments, compliance, exemptions (M3) |
+| Offline fallback through a local SQLite cache | Safe actions: VM start/stop, restarts, tags, delete, policy scans (M4) |
 
 ## Requirements
 
-- [Rust](https://rustup.rs) 1.75+
+- [Rust](https://rustup.rs) (stable)
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), logged in with
   `az login`
 - A terminal with true color support (recommended)
@@ -32,17 +32,14 @@ works for Kubernetes.
 ```bash
 git clone https://github.com/mrWiecek/az9s.git
 cd az9s
-cargo install --path src/apps/aztui/crates/aztui --locked
+cargo install --path crates/az9s --locked   # or: just install
 ```
-
-> The binary is still named `aztui` until the rename in milestone M0.
 
 ## Quick start
 
 ```bash
-az login                                   # authenticate once
-az account set --subscription "<name-or-id>"   # optional
-aztui                                      # launch
+az login                                   # authenticate once (az9s uses your Azure CLI login)
+az9s                                       # launch
 ```
 
 ## Keys
@@ -73,34 +70,28 @@ aztui                                      # launch
 Requires [just](https://github.com/casey/just).
 
 ```bash
-just build        # debug build
-just app-run      # run (release mode, logs off)
-just test         # run tests
-just fmt          # format
-just clippy       # lint (warnings are errors)
+just run         # run (release mode, logs off)
+just run-debug   # run with debug logs written to az9s.log
+just ci          # everything CI runs: fmt check, clippy, tests
+just --list      # all recipes
 ```
 
-Debug logging: `cd src/apps/aztui && RUST_LOG=debug cargo run`.
-
-Project layout (will be flattened in M0):
-
 ```
-src/apps/aztui/crates/
-├── aztui        # binary entry point
-├── aztui-core   # state, navigation, SQLite cache
-├── aztui-azure  # Azure auth + API client
-└── aztui-tui    # ratatui UI
+crates/
+├── az9s         # binary entry point
+├── az9s-core    # state, navigation, SQLite cache
+├── az9s-azure   # Azure auth + API client
+└── az9s-tui     # ratatui UI
 ```
 
-More docs: [`src/apps/aztui/docs/`](src/apps/aztui/docs/), including
-[ARCHITECTURE.md](src/apps/aztui/docs/ARCHITECTURE.md).
+How it fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Contributing
 
 Issues and PRs are welcome. Start with [ROADMAP.md](ROADMAP.md) and
-[CONTRIBUTING.md](src/apps/aztui/CONTRIBUTING.md). Record user-visible changes under
+[CONTRIBUTING.md](CONTRIBUTING.md). Record user-visible changes under
 `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE). (Final licensing is an open decision in the roadmap.)
+[Apache License 2.0](LICENSE).
