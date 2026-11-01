@@ -1,11 +1,12 @@
 /// Command mode parser and executor
 ///
 /// Handles k9s-like colon commands for quick navigation:
-/// - `:subs` - Go to subscriptions view
-/// - `:rgs <sub>` - Go to resource groups for a subscription
-/// - `:rgs all` - Go to resource groups across all subscriptions
-/// - `:resources <sub>` or `:res <sub>` - Go to resources for a subscription
-/// - `:resources all` or `:res all` - Go to resources across all subscriptions
+/// Command names are always singular (k9s style); plural forms are not accepted.
+/// - `:sub` / `:subscription` - Go to subscriptions view
+/// - `:rg <sub>` / `:resourcegroup <sub>` - Go to resource groups for a subscription
+/// - `:rg all` - Go to resource groups across all subscriptions
+/// - `:res <sub>` / `:resource <sub>` - Go to resources for a subscription
+/// - `:res all` - Go to resources across all subscriptions
 #[derive(Debug, Clone)]
 pub struct Command {
     pub kind: CommandKind,
@@ -50,10 +51,10 @@ impl Command {
         let cmd = parts[0].to_lowercase();
 
         match cmd.as_str() {
-            "subs" | "subscriptions" => Self {
+            "sub" | "subscription" => Self {
                 kind: CommandKind::Subscriptions,
             },
-            "rgs" | "resourcegroups" | "resource-groups" => {
+            "rg" | "resourcegroup" | "resource-group" => {
                 let scope = if parts.len() > 1 {
                     if parts[1].to_lowercase() == "all" {
                         Scope::All
@@ -68,7 +69,7 @@ impl Command {
                     kind: CommandKind::ResourceGroups { scope },
                 }
             }
-            "res" | "resources" => {
+            "res" | "resource" => {
                 let scope = if parts.len() > 1 {
                     if parts[1].to_lowercase() == "all" {
                         Scope::All
@@ -98,7 +99,7 @@ impl Command {
         match &self.kind {
             CommandKind::Unknown(cmd) if !cmd.is_empty() => {
                 Some(format!(
-                    "Unknown command: '{}'\n\nAvailable commands:\n  :subs - Subscriptions\n  :rgs [all|<sub>] - Resource groups\n  :res [all|<sub>] - Resources",
+                    "Unknown command: '{}'\n\nAvailable commands:\n  :sub - Subscriptions\n  :rg [all|<sub>] - Resource groups\n  :res [all|<sub>] - Resources",
                     cmd
                 ))
             }
@@ -114,21 +115,21 @@ mod tests {
 
     #[test]
     fn test_parse_subscriptions() {
-        let cmd = Command::parse(":subs");
+        let cmd = Command::parse(":sub");
         assert_eq!(cmd.kind, CommandKind::Subscriptions);
         assert!(cmd.is_valid());
 
-        let cmd = Command::parse("subscriptions");
+        let cmd = Command::parse("subscription");
         assert_eq!(cmd.kind, CommandKind::Subscriptions);
     }
 
     #[test]
     fn test_parse_resource_groups() {
-        let cmd = Command::parse(":rgs all");
+        let cmd = Command::parse(":rg all");
         assert_eq!(cmd.kind, CommandKind::ResourceGroups { scope: Scope::All });
         assert!(cmd.is_valid());
 
-        let cmd = Command::parse(":rgs my-subscription");
+        let cmd = Command::parse(":resourcegroup my-subscription");
         assert_eq!(
             cmd.kind,
             CommandKind::ResourceGroups {
@@ -143,13 +144,31 @@ mod tests {
         assert_eq!(cmd.kind, CommandKind::Resources { scope: Scope::All });
         assert!(cmd.is_valid());
 
-        let cmd = Command::parse(":resources my-subscription");
+        let cmd = Command::parse(":resource my-subscription");
         assert_eq!(
             cmd.kind,
             CommandKind::Resources {
                 scope: Scope::Subscription("my-subscription".to_string())
             }
         );
+    }
+
+    #[test]
+    fn test_plural_commands_are_rejected() {
+        for input in [
+            ":subs",
+            ":subscriptions",
+            ":rgs all",
+            ":resourcegroups",
+            ":resource-groups",
+            ":resources all",
+        ] {
+            let cmd = Command::parse(input);
+            assert!(
+                matches!(cmd.kind, CommandKind::Unknown(_)),
+                "{input} should be rejected"
+            );
+        }
     }
 
     #[test]

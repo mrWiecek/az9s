@@ -59,8 +59,8 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   `Key`, `Mouse`, `Resize` and `Tick` events over a channel.
 - `app.rs`: `TuiApp` wraps `App`. It handles keys per mode (normal, filter, command,
   help), moves between views, and calls `App` loaders directly.
-- `command.rs`: parses `:` commands (`:subs`, `:rgs [all|<sub>]`,
-  `:res [all|<sub>]`).
+- `command.rs`: parses `:` commands (`:sub`, `:rg [all|<sub>]`,
+  `:res [all|<sub>]`). Command names are always singular.
 - `ui/`: rendering (lists and detail in `mod.rs`, `breadcrumb.rs`, `status_bar.rs`,
   `help.rs`, `resource_type.rs` icons and short names, `widgets.rs`).
 

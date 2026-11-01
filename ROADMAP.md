@@ -21,7 +21,9 @@ see policy compliance without leaving the terminal.
    stores no credentials.
 5. **Open source, cross-platform.** It must work on Linux, macOS and Windows, and CI
    proves that. Licensed under Apache-2.0.
-6. **Management groups are first-class.** Platform engineers work at management-group
+6. **Commands are singular.** `:sub`, `:rg`, `:res`, `:mg`, `:policy`,
+   `:assignment`, `:exemption`. Plural forms are not accepted.
+7. **Management groups are first-class.** Platform engineers work at management-group
    scope. The scope tree (tenant root → management groups → subscriptions) is the
    top of navigation, and Policy is viewed per scope.
 
@@ -72,8 +74,9 @@ raise `rust-version` (currently `1.75`; not checked against the dependency tree)
 ## M1 — Speed (2–3 weeks) → v0.1.0
 
 Goal: fix the main complaint that az9s is slow, **at the scale of the target user:
-400+ subscriptions** (and potentially 100k+ resources) under a management-group
-hierarchy.
+400+ subscriptions and thousands of resources** under a management-group hierarchy,
+with read access at the tenant root management group. Targets below use 100k rows as
+a safety margin.
 
 Root causes found in the current code:
 
@@ -103,8 +106,10 @@ Work items, in order:
       groups and resources across all subscriptions, with server-side filtering
       (by RG, type, location or tag) and paging. The same backend serves Policy
       later (`policyresources` table).
-  - **Scope by management group**, not by passing 400+ subscription IDs. Fall back
-    to batched subscription lists only when no management group is readable.
+  - **Scope by management group**, not by passing 400+ subscription IDs. The default
+    scope is the **tenant root management group**, so one query covers the whole
+    estate. Fall back to batched subscription lists only when no management group
+    is readable.
   - **Never pull the whole tenant into memory by default.** Fetch counts first
     (`summarize count()`), then page rows in (`$top` / `$skipToken`) as the user
     scrolls.
@@ -136,7 +141,7 @@ Work items, in order:
 |---|---|
 | Launch with a warm cache → first usable frame | < 200 ms |
 | Keypress → rendered frame (scroll or filter), 100k rows loaded | < 16 ms |
-| `:rgs all` across 400+ subscriptions, cold | < 3 s |
+| `:rg all` across 400+ subscriptions, cold | < 3 s |
 | `:res all`, first page visible, cold | < 3 s |
 | Open a resource group (≤ 1k resources), cold | < 1 s |
 | Any network call | never blocks input; a spinner is always visible |
@@ -153,11 +158,13 @@ Work items, in order:
 - [ ] Config file `~/.config/az9s/config.toml` for default subscription, refresh
       interval, theme, and read-only mode.
 - [ ] **Scope tree:** tenant root → management groups → subscriptions → resource
-      groups, with `:mg` to jump. This becomes the top-level navigation (needed by M3).
+      groups, with `:mg` to jump. This becomes the top-level navigation (needed by M3),
+      and az9s opens at the tenant root management group by default.
 - [ ] `:ctx` to switch tenant.
 
 ## M3 — Policy (3 weeks) → v0.3.0
 
+- [ ] `:policy`, `:assignment` and `:exemption` commands.
 - [ ] Browse policy assignments **per scope, starting at management groups**, with
       inherited assignments shown at child scopes. Browse definitions and
       initiatives (set definitions).
@@ -211,5 +218,7 @@ Work items, in order:
 | Auth | Azure CLI credential (`az login`) | **Decided** |
 | Actions default | Enabled with confirmation; `--readonly` available | **Decided** |
 | License | Apache-2.0 | **Decided** |
+| Command naming | Always singular (`:sub`, `:rg`, `:res`, `:mg`, …); no plural aliases | **Decided** (done) |
+| Default scope | Tenant root management group | **Decided** |
 | Read backend | Azure Resource Graph for lists, ARM for single-resource reads and writes | Proposed (validate in M1) |
 | Multi-tenant | Switch tenants with `:ctx`; no parallel multi-tenant view | Proposed |

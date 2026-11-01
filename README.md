@@ -16,7 +16,7 @@ works for Kubernetes.
 | Today | Planned |
 |---|---|
 | Subscriptions → resource groups → resources → detail | Instant, non-blocking UI backed by Azure Resource Graph (M1) |
-| Cross-subscription views (`:rgs all`, `:res all`) | Management-group tree, rich detail views, JSON, open in Portal, command palette (M2) |
+| Cross-subscription views (`:rg all`, `:res all`) | Management-group tree, rich detail views, JSON, open in Portal, command palette (M2) |
 | `/` filtering, vim keys, `:` commands, `?` help | Azure Policy at management-group scope: assignments, compliance, exemptions (M3) |
 | Offline fallback through a local SQLite cache | Safe actions: VM start/stop, restarts, tags, delete, policy scans (M4) |
 
@@ -61,8 +61,8 @@ az9s                                       # launch
 
 | Command | Shows |
 |---|---|
-| `:subs` | Subscriptions |
-| `:rgs [all\|<sub>]` | Resource groups (all subscriptions or one) |
+| `:sub` | Subscriptions |
+| `:rg [all\|<sub>]` | Resource groups (all subscriptions or one) |
 | `:res [all\|<sub>]` | Resources (all subscriptions or one) |
 
 ## Development

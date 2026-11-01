@@ -33,6 +33,8 @@ No version has been released yet. The first public release is planned as **v0.1.
   corrupts the TUI.
 - README rewritten for platform engineers.
 - Ran `cargo fmt` across the codebase.
+- **Commands are now singular:** `:sub` (was `:subs`), `:rg` (was `:rgs`),
+  `:res` / `:resource` (was `:resources`). Plural forms are no longer accepted.
 
 ### Removed
 - `src/apps/aztui/docs/`: about 80 archived iteration reports and fix scripts, plus
@@ -47,7 +49,7 @@ No version has been released yet. The first public release is planned as **v0.1.
 Already in the codebase before this changelog was started:
 - Azure CLI authentication, falling back to the default credential chain.
 - Browsing subscriptions → resource groups → resources → a basic resource detail view.
-- Cross-subscription views: `:rgs all` and `:res all`.
+- Cross-subscription views (now `:rg all` and `:res all`).
 - Vim-style navigation (`j/k`, `g/G`, `Ctrl+D/U`), `/` filtering, `:` commands, and
   `?` help.
 - A SQLite cache, used as a fallback when Azure is unreachable at startup.
