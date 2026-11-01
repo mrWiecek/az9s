@@ -71,44 +71,75 @@ raise `rust-version` (currently `1.75`; not checked against the dependency tree)
 
 ## M1 — Speed (2–3 weeks) → v0.1.0
 
-Goal: fix the main complaint that az9s is slow. Root causes found in the current code:
+Goal: fix the main complaint that az9s is slow, **at the scale of the target user:
+400+ subscriptions** (and potentially 100k+ resources) under a management-group
+hierarchy.
+
+Root causes found in the current code:
 
 | Cause | Where | Effect |
 |---|---|---|
 | Input loop reads **one** key per 250 ms tick | `crates/az9s-tui/src/event.rs` | Navigation lags; holding `j` crawls |
 | Azure calls are `await`ed inside the key handler | `crates/az9s-tui/src/app.rs` | UI freezes, spinner never draws |
 | Opening a resource group refetches **every resource in the subscription** | `handle_resource_group_select` | Seconds per click on large subs |
-| "All subscriptions" views loop over subscriptions **sequentially** | `load_all_*` | Time grows with subscription count |
+| "All subscriptions" views loop over subscriptions **sequentially** | `load_all_*` | `:res all` = 400+ sequential ARM list calls, which takes minutes |
+| Every frame re-filters (lowercasing every field) and builds a `ListItem` for **every** row, not just the visible ones | `crates/az9s-tui/src/ui/mod.rs`, `state.rs` | Each frame costs O(total rows); at 100k rows every keypress stalls |
 | Startup blocks on `az account list` before the first frame | `App::new` | Slow launch |
 | Cache is written but only read as a fallback | `crates/az9s-core` | Data is fetched again on every navigation |
+| **Bug:** opening a resource group shows every resource in the subscription; the view is never filtered to the RG | `handle_resource_group_select` | Wrong results, and slow too |
 
-Work items:
+Work items, in order:
 
+- [ ] **Measure first.** Add `tracing` spans with durations around every Azure call,
+      cache read and frame render, plus a `--timings` summary on exit. Record
+      before and after numbers against a 400+ subscription tenant in the PR
+      description.
 - [ ] **Event loop rewrite.** Block on input with a timeout, drain all pending
       events, and redraw on change (not on a fixed tick).
 - [ ] **Async architecture.** Move all I/O into background tasks that report
       results to the UI over a channel (an action/message pattern). The UI thread
       only renders and updates state. Cancel stale requests when the user moves on.
 - [ ] **Azure Resource Graph as the read backend.** One KQL query lists resource
-      groups and resources across *all* subscriptions, with server-side filtering
+      groups and resources across all subscriptions, with server-side filtering
       (by RG, type, location or tag) and paging. The same backend serves Policy
       later (`policyresources` table).
-      - Trade-off: Resource Graph indexes changes with a small delay. After an
-        action, refresh the single resource through ARM `GET`.
+  - **Scope by management group**, not by passing 400+ subscription IDs. Fall back
+    to batched subscription lists only when no management group is readable.
+  - **Never pull the whole tenant into memory by default.** Fetch counts first
+    (`summarize count()`), then page rows in (`$top` / `$skipToken`) as the user
+    scrolls.
+  - **Filtering:** filter locally while the full result set is in memory. Above a
+    threshold, push `/` filters into the KQL `where` clause (debounced).
+  - **Respect Resource Graph throttling.** Read the per-user quota headers, back
+    off, and never fire one query per subscription.
+  - Trade-off: Resource Graph indexes changes with a small delay. After an action,
+    refresh the single resource through ARM `GET`.
+- [ ] **Virtualized rendering.** Build widgets only for the visible rows. Precompute
+      lowercase search keys once when data arrives, not on every frame.
+- [ ] **Fix the RG view bug.** Resources shown under a resource group are filtered to
+      that group (server-side through Resource Graph).
 - [ ] **Cache-first (stale-while-revalidate).** Render cached data immediately,
       refresh in the background, and show data age in the status bar.
 - [ ] **Scope-aware queries.** Resource Graph queries can target a management group
       as well as a list of subscriptions.
 - [ ] **Shared clients.** Create one HTTP client and one credential at startup and
       cache the token.
-- [ ] **Performance budget in CI.** Add a benchmark for list rendering and filtering
-      with 10k resources, plus a startup-time check.
+- [ ] **Performance budget in CI.** Add benchmarks for rendering and filtering
+      100k-row lists with synthetic data (no Azure needed), plus a startup-time
+      check.
 - [ ] **Release pipeline.** Publish binaries to GitHub Releases (e.g. `cargo-dist`)
       and support `cargo install az9s`.
 
-**Done when:** a cold start shows cached data in under 200 ms, `:res all` across 20+
-subscriptions returns in roughly one Resource Graph round-trip, and scrolling 10k rows
-is smooth.
+**Done when** (measured against a 400+ subscription tenant):
+
+| Scenario | Target |
+|---|---|
+| Launch with a warm cache → first usable frame | < 200 ms |
+| Keypress → rendered frame (scroll or filter), 100k rows loaded | < 16 ms |
+| `:rgs all` across 400+ subscriptions, cold | < 3 s |
+| `:res all`, first page visible, cold | < 3 s |
+| Open a resource group (≤ 1k resources), cold | < 1 s |
+| Any network call | never blocks input; a spinner is always visible |
 
 ## M2 — Inspect (2 weeks) → v0.2.0
 

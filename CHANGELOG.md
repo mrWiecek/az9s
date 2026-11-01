@@ -54,4 +54,8 @@ Already in the codebase before this changelog was started:
 - A Rust workspace with 4 crates and 65 passing tests.
 
 ### Known issues
-- The UI is slow and freezes during Azure calls (fix planned in milestone M1).
+- The UI is slow and freezes during Azure calls. "All subscriptions" views make one
+  sequential call per subscription, which takes minutes at 400+ subscriptions (fix
+  planned in milestone M1).
+- Opening a resource group lists every resource in its subscription instead of only
+  that group's resources (fix planned in milestone M1).
