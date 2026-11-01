@@ -2,6 +2,7 @@ pub mod app;
 pub mod cache;
 pub mod models;
 pub mod state;
+pub mod timing;
 
 pub use app::App;
 pub use state::AppState;

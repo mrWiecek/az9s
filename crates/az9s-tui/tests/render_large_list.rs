@@ -1,0 +1,124 @@
+//! Rendering behaviour with large lists, at the scale of the target user
+//! (400+ subscriptions, thousands of resources; we test 100k rows for margin).
+
+use az9s_core::cache::Cache;
+use az9s_core::models::Resource;
+use az9s_core::state::ViewMode;
+use az9s_core::App;
+use az9s_tui::{ui, TuiApp};
+use ratatui::{backend::TestBackend, Terminal};
+use std::collections::HashMap;
+use std::path::Path;
+use std::time::{Duration, Instant};
+
+fn app_with_resources(n: usize) -> TuiApp {
+    let cache = Cache::new(Path::new(":memory:")).expect("in-memory cache");
+    let mut app = TuiApp::new(App::offline(cache));
+    let state = app.state_mut();
+    state.resources = (0..n)
+        .map(|i| Resource {
+            id: format!("/subscriptions/s{}/resourceGroups/rg-{}/providers/Microsoft.Compute/virtualMachines/vm-{i:06}", i % 400, i % 1000),
+            name: format!("vm-{i:06}"),
+            resource_type: "Microsoft.Compute/virtualMachines".into(),
+            location: if i % 2 == 0 { "westeurope" } else { "northeurope" }.into(),
+            resource_group: format!("rg-{}", i % 1000),
+            subscription_id: format!("s{}", i % 400),
+            tags: HashMap::new(),
+        })
+        .collect();
+    state.view = ViewMode::ResourceList;
+    app
+}
+
+fn draw(terminal: &mut Terminal<TestBackend>, app: &mut TuiApp) -> Duration {
+    let start = Instant::now();
+    terminal
+        .draw(|f| ui::draw(f, app).expect("draw"))
+        .expect("terminal draw");
+    start.elapsed()
+}
+
+fn screen_text(terminal: &Terminal<TestBackend>) -> String {
+    let buf = terminal.backend().buffer();
+    buf.content.iter().map(|c| c.symbol()).collect()
+}
+
+#[test]
+fn scrolling_to_the_end_of_100k_rows_shows_the_last_row() {
+    let mut app = app_with_resources(100_000);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+
+    draw(&mut terminal, &mut app);
+    assert!(screen_text(&terminal).contains("vm-000000"));
+
+    app.state_mut().list_state.selected = 99_999;
+    draw(&mut terminal, &mut app);
+    let text = screen_text(&terminal);
+    assert!(text.contains("vm-099999"));
+    assert!(!text.contains("vm-000000"));
+}
+
+#[test]
+fn scroll_offset_persists_when_moving_up() {
+    let mut app = app_with_resources(1_000);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+
+    app.state_mut().list_state.selected = 999;
+    draw(&mut terminal, &mut app);
+    let offset_at_bottom = app.state().list_state.offset;
+    assert!(offset_at_bottom > 0);
+
+    // One step up stays inside the viewport: the view must not scroll.
+    app.state_mut().list_state.selected = 998;
+    draw(&mut terminal, &mut app);
+    assert_eq!(app.state().list_state.offset, offset_at_bottom);
+}
+
+#[test]
+fn filtering_shrinks_the_list_and_keeps_selection_valid() {
+    let mut app = app_with_resources(10_000);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+
+    app.state_mut().list_state.selected = 9_000;
+    app.state_mut().filter = "VM-00012".into(); // case-insensitive; matches 10 rows
+    draw(&mut terminal, &mut app);
+
+    assert_eq!(app.state().filtered_resources().len(), 10);
+    assert_eq!(app.state().list_state.selected, 9);
+    assert!(screen_text(&terminal).contains("vm-000129"));
+}
+
+/// Performance check. Ignored by default because wall-clock limits are flaky
+/// on shared CI runners; run with `just perf`.
+#[test]
+#[ignore]
+fn perf_frame_time_with_100k_rows() {
+    let mut app = app_with_resources(100_000);
+    let mut terminal = Terminal::new(TestBackend::new(200, 60)).unwrap();
+    draw(&mut terminal, &mut app); // warm up
+
+    let frames = 50;
+    let mut total = Duration::ZERO;
+    for i in 0..frames {
+        app.state_mut().list_state.selected = i * 1_000;
+        total += draw(&mut terminal, &mut app);
+    }
+    let unfiltered = total / frames as u32;
+
+    app.state_mut().filter = "europe".into();
+    let mut total = Duration::ZERO;
+    for _ in 0..frames {
+        total += draw(&mut terminal, &mut app);
+    }
+    let filtered = total / frames as u32;
+
+    println!("100k rows: avg frame {unfiltered:?} unfiltered, {filtered:?} with filter");
+    assert!(
+        unfiltered < Duration::from_millis(16),
+        "unfiltered frame {unfiltered:?}"
+    );
+    assert!(
+        filtered < Duration::from_millis(16),
+        "filtered frame {filtered:?}"
+    );
+}

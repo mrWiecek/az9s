@@ -19,6 +19,14 @@ run:
 run-debug:
     RUST_LOG=debug cargo run 2> az9s.log
 
+# Run and print a timing summary on exit (Azure calls, cache, frame times)
+run-timings:
+    RUST_LOG=off cargo run --release --quiet -- --timings
+
+# Rendering performance checks with 100k rows (release build)
+perf:
+    cargo test --release -p az9s-tui --test render_large_list -- --ignored --nocapture
+
 # Run all tests
 test:
     cargo test --workspace

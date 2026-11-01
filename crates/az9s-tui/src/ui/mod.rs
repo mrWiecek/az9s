@@ -17,14 +17,14 @@ use ratatui::{
     Frame,
 };
 use status_bar::StatusBar;
-use widgets::{list_item_spans, SelectableList, SelectableListState};
+use widgets::{list_item_spans, truncate_with_ellipsis, SelectableList, SelectableListState};
 
 /// Draw the main UI
 ///
 /// This is the main entry point for rendering the TUI. It divides the screen
 /// into header, content, and footer sections, and delegates to view-specific
 /// rendering functions.
-pub fn draw(f: &mut Frame, app: &TuiApp) -> Result<()> {
+pub fn draw(f: &mut Frame, app: &mut TuiApp) -> Result<()> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -72,7 +72,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &TuiApp) {
 }
 
 /// Draw the main content area based on current view
-fn draw_content(f: &mut Frame, area: Rect, app: &TuiApp) -> Result<()> {
+fn draw_content(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     match app.state().view {
         ViewMode::SubscriptionList => draw_subscription_list(f, area, app),
         ViewMode::ResourceGroupList => draw_resource_group_list(f, area, app),
@@ -83,7 +83,7 @@ fn draw_content(f: &mut Frame, area: Rect, app: &TuiApp) -> Result<()> {
 }
 
 /// Draw subscription list view
-fn draw_subscription_list(f: &mut Frame, area: Rect, app: &TuiApp) -> Result<()> {
+fn draw_subscription_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     let filtered_subscriptions = app.state().filtered_subscriptions();
 
     if filtered_subscriptions.is_empty() {
@@ -108,7 +108,11 @@ fn draw_subscription_list(f: &mut Frame, area: Rect, app: &TuiApp) -> Result<()>
     }
 
     // Create list items with color-coded state
-    let items: Vec<_> = filtered_subscriptions
+    // Only build widgets for the rows that fit on screen (minus the borders).
+    let viewport = area.height.saturating_sub(2) as usize;
+    let mut list_state = app.state().list_state.clone();
+    let visible = list_state.visible_range(filtered_subscriptions.len(), viewport);
+    let items: Vec<_> = filtered_subscriptions[visible.clone()]
         .iter()
         .map(|sub| {
             let state_color = match sub.state.as_str() {
@@ -164,20 +168,21 @@ fn draw_subscription_list(f: &mut Frame, area: Rect, app: &TuiApp) -> Result<()>
                 .add_modifier(Modifier::BOLD),
         );
 
-    // Create state from app state
-    let mut list_state = SelectableListState {
-        selected: app.state().list_state.selected,
-        offset: app.state().list_state.offset,
+    // Items are already windowed: render from the top with a relative selection.
+    let mut widget_state = SelectableListState {
+        selected: list_state.selected - visible.start,
+        offset: 0,
     };
+    list.render(area, f.buffer_mut(), &mut widget_state);
 
-    // Render the list
-    list.render(area, f.buffer_mut(), &mut list_state);
+    // Persist the scroll offset so scrolling up doesn't snap the selection.
+    app.state_mut().list_state = list_state;
 
     Ok(())
 }
 
 /// Draw resource group list view
-fn draw_resource_group_list(f: &mut Frame, area: Rect, app: &TuiApp) -> Result<()> {
+fn draw_resource_group_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     let filtered_resource_groups = app.state().filtered_resource_groups();
 
     if filtered_resource_groups.is_empty() {
@@ -202,7 +207,11 @@ fn draw_resource_group_list(f: &mut Frame, area: Rect, app: &TuiApp) -> Result<(
     }
 
     // Create list items for resource groups
-    let items: Vec<_> = filtered_resource_groups
+    // Only build widgets for the rows that fit on screen (minus the borders).
+    let viewport = area.height.saturating_sub(2) as usize;
+    let mut list_state = app.state().list_state.clone();
+    let visible = list_state.visible_range(filtered_resource_groups.len(), viewport);
+    let items: Vec<_> = filtered_resource_groups[visible.clone()]
         .iter()
         .map(|rg| {
             // Display name, location, and tag count
@@ -268,20 +277,21 @@ fn draw_resource_group_list(f: &mut Frame, area: Rect, app: &TuiApp) -> Result<(
                 .add_modifier(Modifier::BOLD),
         );
 
-    // Create state from app state
-    let mut list_state = SelectableListState {
-        selected: app.state().list_state.selected,
-        offset: app.state().list_state.offset,
+    // Items are already windowed: render from the top with a relative selection.
+    let mut widget_state = SelectableListState {
+        selected: list_state.selected - visible.start,
+        offset: 0,
     };
+    list.render(area, f.buffer_mut(), &mut widget_state);
 
-    // Render the list
-    list.render(area, f.buffer_mut(), &mut list_state);
+    // Persist the scroll offset so scrolling up doesn't snap the selection.
+    app.state_mut().list_state = list_state;
 
     Ok(())
 }
 
 /// Draw resource list view
-fn draw_resource_list(f: &mut Frame, area: Rect, app: &TuiApp) -> Result<()> {
+fn draw_resource_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     let filtered_resources = app.state().filtered_resources();
 
     if filtered_resources.is_empty() {
@@ -302,15 +312,15 @@ fn draw_resource_list(f: &mut Frame, area: Rect, app: &TuiApp) -> Result<()> {
     }
 
     // Create list items with improved resource type display
-    let items: Vec<_> = filtered_resources
+    // Only build widgets for the rows that fit on screen (minus the borders).
+    let viewport = area.height.saturating_sub(2) as usize;
+    let mut list_state = app.state().list_state.clone();
+    let visible = list_state.visible_range(filtered_resources.len(), viewport);
+    let items: Vec<_> = filtered_resources[visible.clone()]
         .iter()
         .map(|res| {
             // Truncate long names to fit better
-            let display_name = if res.name.len() > 35 {
-                format!("{:<35}", format!("{}...", &res.name[..32]))
-            } else {
-                format!("{:<35}", res.name)
-            };
+            let display_name = format!("{:<35}", truncate_with_ellipsis(&res.name, 35));
 
             // Use improved resource type display
             let short_type = resource_type::short_label(&res.resource_type);
@@ -383,14 +393,15 @@ fn draw_resource_list(f: &mut Frame, area: Rect, app: &TuiApp) -> Result<()> {
                 .add_modifier(Modifier::BOLD),
         );
 
-    // Create state from app state
-    let mut list_state = SelectableListState {
-        selected: app.state().list_state.selected,
-        offset: app.state().list_state.offset,
+    // Items are already windowed: render from the top with a relative selection.
+    let mut widget_state = SelectableListState {
+        selected: list_state.selected - visible.start,
+        offset: 0,
     };
+    list.render(area, f.buffer_mut(), &mut widget_state);
 
-    // Render the list
-    list.render(area, f.buffer_mut(), &mut list_state);
+    // Persist the scroll offset so scrolling up doesn't snap the selection.
+    app.state_mut().list_state = list_state;
 
     Ok(())
 }

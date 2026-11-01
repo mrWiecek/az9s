@@ -4,7 +4,7 @@ pub mod event;
 pub mod ui;
 
 use anyhow::{Context, Result};
-use az9s_core::App;
+use az9s_core::{timing, App};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -79,58 +79,84 @@ fn restore_terminal() -> Result<()> {
     Ok(())
 }
 
-/// Main event loop
+/// Main event loop: draw, wait for input, then drain everything queued before
+/// drawing again. Draining means a burst of key repeats costs one redraw.
 async fn run_loop<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut TuiApp,
     event_handler: &mut EventHandler,
 ) -> Result<()> {
+    let mut first_frame = true;
     loop {
-        // Draw UI with error handling
-        if let Err(e) = terminal.draw(|f| {
-            if let Err(draw_err) = ui::draw(f, app) {
-                warn!("Draw error: {}", draw_err);
-                // Set error in app state so it can be displayed
-                app.state_mut()
-                    .set_error(Some(format!("Render error: {}", draw_err)));
-            }
-        }) {
-            error!("Terminal draw error: {}", e);
-            // Try to continue, but if we can't draw, we should probably exit
-            if e.to_string().contains("Broken pipe") {
-                info!("Terminal closed, exiting");
-                break;
-            }
+        draw_frame(terminal, app)?;
+        if first_frame {
+            first_frame = false;
+            timing::record("startup.first_frame", timing::since_process_start());
         }
 
-        // Handle events
-        match event_handler.next().await {
-            Some(Event::Error(err)) => {
-                warn!("Event handler error: {}", err);
-                app.state_mut()
-                    .set_error(Some(format!("Event error: {}", err)));
+        let Some(event) = event_handler.next().await else {
+            debug!("Event channel closed, exiting");
+            return Ok(());
+        };
+        if !process_event(app, event).await {
+            return Ok(());
+        }
+        while let Some(event) = event_handler.try_next() {
+            if matches!(event, Event::Tick) {
+                continue;
             }
-            Some(event) => match app.handle_event(event).await {
-                Ok(should_continue) => {
-                    if !should_continue {
-                        info!("Exiting TUI");
-                        break;
-                    }
-                }
-                Err(e) => {
-                    error!("Error handling event: {}", e);
-                    app.state_mut()
-                        .set_error(Some(format!("Event handling error: {}", e)));
-                }
-            },
-            None => {
-                debug!("Event channel closed, exiting");
-                break;
+            if !process_event(app, event).await {
+                return Ok(());
             }
         }
     }
+}
 
+/// Render one frame. Returns an error only if the terminal is gone.
+fn draw_frame<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut TuiApp,
+) -> Result<()> {
+    let _t = timing::timer("ui.frame");
+    if let Err(e) = terminal.draw(|f| {
+        if let Err(draw_err) = ui::draw(f, app) {
+            warn!("Draw error: {}", draw_err);
+            app.state_mut()
+                .set_error(Some(format!("Render error: {}", draw_err)));
+        }
+    }) {
+        error!("Terminal draw error: {}", e);
+        if e.kind() == io::ErrorKind::BrokenPipe {
+            info!("Terminal closed, exiting");
+            return Err(e.into());
+        }
+    }
     Ok(())
+}
+
+/// Handle one event. Returns `false` when the app should exit.
+async fn process_event(app: &mut TuiApp, event: Event) -> bool {
+    if let Event::Error(err) = event {
+        warn!("Event handler error: {}", err);
+        app.state_mut()
+            .set_error(Some(format!("Event error: {}", err)));
+        return true;
+    }
+    let _t = matches!(event, Event::Key(_)).then(|| timing::timer("ui.handle_key"));
+    match app.handle_event(event).await {
+        Ok(should_continue) => {
+            if !should_continue {
+                info!("Exiting TUI");
+            }
+            should_continue
+        }
+        Err(e) => {
+            error!("Error handling event: {}", e);
+            app.state_mut()
+                .set_error(Some(format!("Event handling error: {}", e)));
+            true
+        }
+    }
 }
 
 #[cfg(test)]

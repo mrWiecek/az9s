@@ -93,12 +93,12 @@ Root causes found in the current code:
 
 Work items, in order:
 
-- [ ] **Measure first.** Add `tracing` spans with durations around every Azure call,
-      cache read and frame render, plus a `--timings` summary on exit. Record
+- [x] **Measure first.** Add durations around every Azure call, cache write,
+      frame render and key event, plus a `--timings` summary on exit. Record
       before and after numbers against a 400+ subscription tenant in the PR
       description.
-- [ ] **Event loop rewrite.** Block on input with a timeout, drain all pending
-      events, and redraw on change (not on a fixed tick).
+- [x] **Event loop rewrite.** A dedicated input thread forwards every event
+      immediately. The main loop drains all pending events before redrawing.
 - [ ] **Async architecture.** Move all I/O into background tasks that report
       results to the UI over a channel (an action/message pattern). The UI thread
       only renders and updates state. Cancel stale requests when the user moves on.
@@ -119,8 +119,10 @@ Work items, in order:
     off, and never fire one query per subscription.
   - Trade-off: Resource Graph indexes changes with a small delay. After an action,
     refresh the single resource through ARM `GET`.
-- [ ] **Virtualized rendering.** Build widgets only for the visible rows. Precompute
-      lowercase search keys once when data arrives, not on every frame.
+- [x] **Virtualized rendering.** Build widgets only for the visible rows, persist
+      the scroll offset, filter without allocating, and memoize the filter result.
+      With 100k rows, a frame went from 78 ms to 0.4 ms (101 ms to 0.6 ms with a
+      filter active), measured with `just perf`.
 - [ ] **Fix the RG view bug.** Resources shown under a resource group are filtered to
       that group (server-side through Resource Graph).
 - [ ] **Cache-first (stale-while-revalidate).** Render cached data immediately,
@@ -131,7 +133,7 @@ Work items, in order:
       cache the token.
 - [ ] **Performance budget in CI.** Add benchmarks for rendering and filtering
       100k-row lists with synthetic data (no Azure needed), plus a startup-time
-      check.
+      check. *(The 100k-row test exists as `just perf`; it is not yet a CI job.)*
 - [ ] **Release pipeline.** Publish binaries to GitHub Releases (e.g. `cargo-dist`)
       and support `cargo install az9s`.
 

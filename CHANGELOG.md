@@ -20,6 +20,7 @@ No version has been released yet. The first public release is planned as **v0.1.
   issue templates, `CODEOWNERS`, `rustfmt.toml`.
 
 ### Changed
+- `az9s --help` and `--version` are now available; unknown arguments are rejected.
 - **Renamed to az9s.** The binary is now `az9s` (was `aztui`). Crates are `az9s`,
   `az9s-core`, `az9s-azure` and `az9s-tui`. The local data dir is now `az9s`. The old
   `aztui` cache is not migrated; it is only a cache and is rebuilt on first run.
@@ -35,6 +36,24 @@ No version has been released yet. The first public release is planned as **v0.1.
 - Ran `cargo fmt` across the codebase.
 - **Commands are now singular:** `:sub` (was `:subs`), `:rg` (was `:rgs`),
   `:res` / `:resource` (was `:resources`). Plural forms are no longer accepted.
+
+### Performance (M1, step 1)
+- **Input is no longer rate-limited.** Previously at most one key was handled per
+  250 ms tick. Now every key is handled as it arrives, and queued keys are processed
+  together before one redraw.
+- **List rendering is virtualized.** Only the visible rows are built each frame,
+  filtering no longer allocates, and filter results are memoized. With 100k
+  resources, a frame dropped from 78 ms to 0.4 ms (101 ms to 0.6 ms with an active
+  filter).
+- New `--timings` flag prints Azure, cache, frame and keypress timings on exit.
+  New `just run-timings` and `just perf` recipes.
+
+### Fixed
+- Scrolling up in a long list no longer pins the selection to the bottom row. The
+  scroll offset is now kept between frames.
+- A resource name longer than 35 characters containing non-ASCII characters could
+  crash the app (byte-index string slicing).
+- On Windows, key release events are ignored so each key press acts once.
 
 ### Removed
 - `src/apps/aztui/docs/`: about 80 archived iteration reports and fix scripts, plus

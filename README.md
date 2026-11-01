@@ -40,6 +40,7 @@ cargo install --path crates/az9s --locked   # or: just install
 ```bash
 az login                                   # authenticate once (az9s uses your Azure CLI login)
 az9s                                       # launch
+az9s --timings                             # launch, print a timing summary on exit
 ```
 
 ## Keys
@@ -72,6 +73,8 @@ Requires [just](https://github.com/casey/just).
 ```bash
 just run         # run (release mode, logs off)
 just run-debug   # run with debug logs written to az9s.log
+just run-timings # run, then print Azure/cache/frame timings on exit
+just perf        # rendering benchmark with 100k rows
 just ci          # everything CI runs: fmt check, clippy, tests
 just --list      # all recipes
 ```

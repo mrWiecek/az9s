@@ -1,7 +1,7 @@
 use crate::{
     cache::Cache,
     state::{AppState, DataSource},
-    CoreError, Result,
+    timing, CoreError, Result,
 };
 use anyhow::Context;
 use az9s_azure::{AzureAuth, AzureClient};
@@ -19,6 +19,7 @@ pub struct App {
 impl App {
     /// Create a new application instance
     pub async fn new() -> anyhow::Result<Self> {
+        let _t = timing::timer("startup.app_init");
         info!("Initializing az9s application");
 
         // Determine cache directory
@@ -49,6 +50,18 @@ impl App {
         })
     }
 
+    /// Create an application with no Azure connection, backed by `cache`.
+    ///
+    /// Used by tests and benchmarks today; also the basis for rendering cached
+    /// data before Azure answers (M1 "cache-first").
+    pub fn offline(cache: Cache) -> Self {
+        Self {
+            state: AppState::new(),
+            cache,
+            azure_client: None,
+        }
+    }
+
     /// Initialize Azure authentication and load subscriptions
     async fn initialize_azure(cache: &Cache, state: &mut AppState) -> Result<Arc<AzureClient>> {
         info!("Initializing Azure authentication");
@@ -61,7 +74,11 @@ impl App {
         info!("Loading subscriptions from Azure");
         state.set_loading(true);
 
-        match client.list_subscriptions().await {
+        let fetched = {
+            let _t = timing::timer("azure.list_subscriptions");
+            client.list_subscriptions().await
+        };
+        match fetched {
             Ok(azure_subscriptions) => {
                 info!(
                     "Successfully loaded {} subscriptions",
@@ -81,7 +98,11 @@ impl App {
 
                 // Cache subscriptions for offline access
                 let repo = cache.repository();
-                if let Err(e) = repo.cache_subscriptions(&subscriptions) {
+                let cached = {
+                    let _t = timing::timer("cache.cache_subscriptions");
+                    repo.cache_subscriptions(&subscriptions)
+                };
+                if let Err(e) = cached {
                     warn!("Failed to cache subscriptions: {}", e);
                 }
 
@@ -149,7 +170,11 @@ impl App {
         self.state.set_loading(true);
         self.state.clear_error();
 
-        match client.list_subscriptions().await {
+        let fetched = {
+            let _t = timing::timer("azure.list_subscriptions");
+            client.list_subscriptions().await
+        };
+        match fetched {
             Ok(azure_subscriptions) => {
                 let subscriptions: Vec<crate::models::Subscription> = azure_subscriptions
                     .iter()
@@ -163,7 +188,10 @@ impl App {
 
                 // Cache the refreshed subscriptions
                 let repo = self.cache.repository();
-                repo.cache_subscriptions(&subscriptions)?;
+                {
+                    let _t = timing::timer("cache.cache_subscriptions");
+                    repo.cache_subscriptions(&subscriptions)
+                }?;
 
                 // Update state
                 self.state.subscriptions = subscriptions;
@@ -196,7 +224,11 @@ impl App {
         self.state.set_loading(true);
         self.state.clear_error();
 
-        match client.list_resource_groups(subscription_id).await {
+        let fetched = {
+            let _t = timing::timer("azure.list_resource_groups");
+            client.list_resource_groups(subscription_id).await
+        };
+        match fetched {
             Ok(azure_rgs) => {
                 let resource_groups: Vec<crate::models::ResourceGroup> = azure_rgs
                     .iter()
@@ -211,7 +243,10 @@ impl App {
 
                 // Cache resource groups
                 let repo = self.cache.repository();
-                repo.cache_resource_groups(&resource_groups)?;
+                {
+                    let _t = timing::timer("cache.cache_resource_groups");
+                    repo.cache_resource_groups(&resource_groups)
+                }?;
 
                 // Update state with loaded resource groups
                 self.state.resource_groups = resource_groups;
@@ -244,7 +279,11 @@ impl App {
         self.state.set_loading(true);
         self.state.clear_error();
 
-        match client.list_resources(subscription_id).await {
+        let fetched = {
+            let _t = timing::timer("azure.list_resources");
+            client.list_resources(subscription_id).await
+        };
+        match fetched {
             Ok(azure_resources) => {
                 let resources: Vec<crate::models::Resource> = azure_resources
                     .iter()
@@ -261,7 +300,10 @@ impl App {
 
                 // Cache resources
                 let repo = self.cache.repository();
-                repo.cache_resources(&resources)?;
+                {
+                    let _t = timing::timer("cache.cache_resources");
+                    repo.cache_resources(&resources)
+                }?;
 
                 // Update state
                 self.state.resources = resources;

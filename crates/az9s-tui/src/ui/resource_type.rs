@@ -132,17 +132,17 @@ pub fn short_label(resource_type: &str) -> String {
             // Try to keep the first meaningful word
             if let Some(first_word) = kebab.split('-').next() {
                 if first_word.len() >= 4 {
-                    return format!("{}...", &first_word[..first_word.len().min(15)]);
+                    return format!("{}...", first_word.chars().take(15).collect::<String>());
                 }
             }
-            format!("{}...", &kebab[..17])
+            super::widgets::truncate_with_ellipsis(&kebab, 20)
         } else {
             kebab
         }
     } else {
         // Last resort: truncate the full type
         if resource_type.len() > 20 {
-            format!("{}...", &resource_type[..17])
+            super::widgets::truncate_with_ellipsis(resource_type, 20)
         } else {
             resource_type.to_string()
         }
