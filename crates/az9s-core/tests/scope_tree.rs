@@ -57,7 +57,7 @@ async fn tree_loads_from_the_tenant_root_and_is_cached() {
             ok(json!({"value": [
                 {"name": "platform", "type": "Microsoft.Management/managementGroups",
                  "properties": {"displayName": "Platform",
-                    "parent": {"id": format!("{root}")}}},
+                    "parent": {"id": root.as_str()}}},
                 {"name": "SUB-1", "type": "Microsoft.Management/managementGroups/subscriptions",
                  "properties": {"displayName": "Connectivity",
                     "parent": {"id": "/providers/Microsoft.Management/managementGroups/platform"}}}
