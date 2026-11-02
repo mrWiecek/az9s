@@ -3,7 +3,8 @@ pub mod cache;
 pub mod loader;
 pub mod models;
 pub mod state;
-pub mod timing;
+/// Timing stats (defined in az9s-azure so its HTTP clients can record too).
+pub use az9s_azure::timing;
 
 pub use app::App;
 pub use state::AppState;

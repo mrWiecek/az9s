@@ -8,7 +8,7 @@ use crate::{
     timing,
 };
 use anyhow::Context;
-use az9s_azure::resource_graph::CredentialTokenSource;
+use az9s_azure::resource_graph::{CachingTokenSource, CredentialTokenSource};
 use az9s_azure::{AuthProvider, AzureAuth, AzureClient, ResourceGraphClient};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -59,6 +59,9 @@ impl App {
             }
         };
 
+        if let Some(fetcher) = &fetcher {
+            fetcher.warm_up();
+        }
         let mut app = Self::with_fetcher(cache, fetcher);
         app.load_cached_subscriptions();
         app.request(LoadRequest::Subscriptions);
@@ -73,7 +76,9 @@ impl App {
             info!("Using ARM backend (AZ9S_BACKEND=arm)");
             return arm;
         }
-        let tokens = Arc::new(CredentialTokenSource(auth.credential()));
+        let tokens = Arc::new(CachingTokenSource::new(CredentialTokenSource(
+            auth.credential(),
+        )));
         Arc::new(GraphFetcher::new(
             Arc::new(ResourceGraphClient::new(tokens)),
             arm,

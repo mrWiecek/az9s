@@ -12,6 +12,26 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-02
+
+### Changed
+- **Faster complete loads for large scopes** (#9). Resource Graph results come
+  in 1000-row pages, previously fetched one after another (about 0.6 s each).
+  After the first page reports the total, the remaining pages are now fetched
+  4 at a time by offset and still delivered in order. If offset paging fails,
+  az9s continues page by page without repeating rows.
+- **The Azure token is fetched once and reused** until shortly before it
+  expires, instead of once per page. Concurrent requests share one fetch.
+- **The token and tenant are fetched in the background at startup**, so the
+  first "all subscriptions" view doesn't wait about 0.8 s for the Azure CLI.
+- New `azure.token`, `azure.graph_page` and `azure.warm_up` entries in
+  `--timings`.
+
+### Fixed
+- The tenant used for "all subscriptions" queries was looked up again on every
+  request. Its cache was cloned per request (a cloned `OnceCell` is a copy), so
+  each `:rg all` / `:res all` paid an extra Azure CLI token call.
+
 ## [0.2.0] - 2026-11-02
 
 ### Added
@@ -163,6 +183,7 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/mrWiecek/az9s/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/mrWiecek/az9s/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mrWiecek/az9s/releases/tag/v0.1.0
