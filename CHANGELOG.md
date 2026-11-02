@@ -12,6 +12,27 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-02
+
+### Added
+- **Resource filters:** `:res [all|<sub>] type=… loc=… tag=…`.
+  - `type=` matches the full type (`Microsoft.Compute/virtualMachines`), its
+    last part (`virtualMachines`) or a provider (`Microsoft.Compute`).
+  - `loc=` matches a location; `tag=env:prod` a tag value, `tag=env` any
+    resource with that tag.
+  - Different filters must all match; comma-separated values are
+    alternatives (`type=virtualMachines,disks`). Case doesn't matter.
+  - Filters apply to the loaded list on your machine, so they are instant
+    (cached rows included), combine with `/`, show in the list title, and
+    survive `r` and going back. A new `:res` without filters clears them.
+  - An unknown filter (e.g. `size=big`) is an error that names the valid
+    ones.
+- **Resource type summary:** `:type [all|<sub>] [filters]` lists how many
+  resources of each type there are, most common first. `Enter` on a type
+  opens the resource list filtered to it, without reloading; `Esc` returns.
+- The `perf` CI job also checks filtered lists and the type summary at 100k
+  resources (each frame under 1 ms on CI hardware today; the budget is 16 ms).
+
 ## [0.4.0] - 2026-11-02
 
 ### Added
@@ -262,7 +283,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/mrWiecek/az9s/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mrWiecek/az9s/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/mrWiecek/az9s/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/mrWiecek/az9s/compare/v0.2.2...v0.3.0

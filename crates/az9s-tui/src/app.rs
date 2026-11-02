@@ -4,6 +4,7 @@ use crate::{Command, CommandKind, Scope};
 use anyhow::Result;
 use az9s_core::detail;
 use az9s_core::loader::{LoadReceiver, LoadRequest, LoadResult};
+use az9s_core::query::ResourceQuery;
 use az9s_core::scope_tree::TreeRowKind;
 use az9s_core::state::{DetailTab, NavigationContext, ViewMode};
 use az9s_core::{App, AppState};
@@ -12,6 +13,8 @@ use az9s_core::{App, AppState};
 const CROSS_SUBSCRIPTION: &str = "cross_subscription";
 /// Navigation metadata key: the management group a view was scoped to.
 const SCOPE_GROUP: &str = "scope_group";
+/// Navigation metadata key: the structured resource filter, as typed.
+const QUERY: &str = "query";
 /// Navigation metadata key: the row that was selected, restored on going back.
 const SELECTED: &str = "selected";
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
@@ -303,12 +306,29 @@ impl TuiApp {
                     self.show_resource_groups(subscription_ids, scope == Scope::All);
                 }
             }
-            CommandKind::Resources { scope } => {
-                debug!("Command: resources, scope {:?}", scope);
+            CommandKind::Resources { scope, query } => {
+                debug!("Command: resources, scope {:?}, filter {}", scope, query);
                 if let Some(subscription_ids) = self.resolve_scope(&scope) {
                     self.state_mut().clear_navigation();
                     self.show_resources(subscription_ids, None, scope == Scope::All);
+                    self.state_mut().resource_query = query;
                 }
+            }
+            CommandKind::ResourceTypes { scope, query } => {
+                debug!(
+                    "Command: resource types, scope {:?}, filter {}",
+                    scope, query
+                );
+                if let Some(subscription_ids) = self.resolve_scope(&scope) {
+                    self.state_mut().clear_navigation();
+                    self.show_resources(subscription_ids, None, scope == Scope::All);
+                    let state = self.state_mut();
+                    state.resource_query = query;
+                    state.view = ViewMode::ResourceTypeSummary;
+                }
+            }
+            CommandKind::Invalid(_) => {
+                // Already handled above
             }
             CommandKind::Unknown(_) => {
                 // Already handled above
@@ -395,6 +415,7 @@ impl TuiApp {
         state.view = ViewMode::ResourceList;
         state.cross_subscription_mode = all;
         state.current_resource_group = resource_group.clone();
+        state.resource_query = Default::default();
         state.resources.clear();
         state.list_state.reset();
         self.core.request(LoadRequest::Resources {
@@ -475,7 +496,7 @@ impl TuiApp {
                 self.core
                     .request(LoadRequest::ResourceGroups { subscription_ids });
             }
-            (ViewMode::ResourceList, Some(subscription_ids)) => {
+            (ViewMode::ResourceList | ViewMode::ResourceTypeSummary, Some(subscription_ids)) => {
                 let resource_group = self.state().current_resource_group.clone();
                 self.core.request(LoadRequest::Resources {
                     subscription_ids,
@@ -496,6 +517,11 @@ impl TuiApp {
             state.list_state.reset();
             state.cross_subscription_mode = ctx.metadata.contains_key(CROSS_SUBSCRIPTION);
             state.scope_group = ctx.metadata.get(SCOPE_GROUP).cloned();
+            state.resource_query = ctx
+                .metadata
+                .get(QUERY)
+                .and_then(|q| ResourceQuery::parse(q.split_whitespace()).ok())
+                .unwrap_or_default();
             if let Some(id) = ctx.metadata.get(SELECTED) {
                 state.select_id(id);
             }
@@ -618,6 +644,10 @@ impl TuiApp {
         match self.state().view {
             ViewMode::ManagementGroupTree => self.handle_tree_select(),
             ViewMode::SubscriptionList => self.handle_subscription_select().await,
+            ViewMode::ResourceTypeSummary => {
+                self.handle_type_select();
+                Ok(true)
+            }
             ViewMode::ResourceGroupList => self.handle_resource_group_select().await,
             ViewMode::ResourceList => self.handle_resource_select().await,
             ViewMode::ResourceDetail => Ok(true),
@@ -684,6 +714,20 @@ impl TuiApp {
         }
     }
 
+    /// Enter on the type summary: the resource list, narrowed to that type
+    /// (on top of any other filters). The rows are already loaded.
+    fn handle_type_select(&mut self) {
+        let Some(resource_type) = self.state().selected_type() else {
+            return;
+        };
+        self.push_current_context(None);
+        let state = self.state_mut();
+        state.resource_query.types = vec![resource_type];
+        state.filter.clear();
+        state.view = ViewMode::ResourceList;
+        state.list_state.reset();
+    }
+
     /// Handle subscription selection
     async fn handle_subscription_select(&mut self) -> Result<bool> {
         if let Some(subscription) = self.state().selected_subscription().cloned() {
@@ -730,6 +774,9 @@ impl TuiApp {
         }
         if let Some(group) = &state.scope_group {
             metadata.insert(SCOPE_GROUP.to_string(), group.clone());
+        }
+        if !state.resource_query.is_empty() {
+            metadata.insert(QUERY.to_string(), state.resource_query.to_string());
         }
         if let Some(id) = state.selected_id() {
             metadata.insert(SELECTED.to_string(), id);

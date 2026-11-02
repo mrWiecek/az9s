@@ -112,15 +112,37 @@ fn perf_frame_time_with_100k_rows() {
     }
     let filtered = total / frames as u32;
 
-    println!("100k rows: avg frame {unfiltered:?} unfiltered, {filtered:?} with filter");
-    assert!(
-        unfiltered < Duration::from_millis(16),
-        "unfiltered frame {unfiltered:?}"
+    // Structured filter (`:res loc=westeurope`) on top of the text filter.
+    app.state_mut().resource_query =
+        az9s_core::query::ResourceQuery::parse(["loc=westeurope"]).unwrap();
+    let mut total = Duration::ZERO;
+    for _ in 0..frames {
+        total += draw(&mut terminal, &mut app);
+    }
+    let structured = total / frames as u32;
+
+    // Type summary (`:type`): counted once per list/filter change, then memoized.
+    app.state_mut().filter.clear();
+    app.state_mut().view = ViewMode::ResourceTypeSummary;
+    let first_summary = draw(&mut terminal, &mut app);
+    let mut total = Duration::ZERO;
+    for _ in 0..frames {
+        total += draw(&mut terminal, &mut app);
+    }
+    let summary = total / frames as u32;
+
+    println!(
+        "100k rows: avg frame {unfiltered:?} unfiltered, {filtered:?} with filter, \
+         {structured:?} with loc= filter, type summary {summary:?} (first {first_summary:?})"
     );
-    assert!(
-        filtered < Duration::from_millis(16),
-        "filtered frame {filtered:?}"
-    );
+    for (name, frame) in [
+        ("unfiltered", unfiltered),
+        ("filtered", filtered),
+        ("structured filter", structured),
+        ("type summary", summary),
+    ] {
+        assert!(frame < Duration::from_millis(16), "{name} frame {frame:?}");
+    }
 }
 
 /// A tenant at the target scale: 100 management groups (10 under the root,

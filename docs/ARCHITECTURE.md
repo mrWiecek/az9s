@@ -97,6 +97,12 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   resource's full document (`LoadRequest::ResourceDetail`, one Resource
   Graph query by ID; cached in `resource_details`): Overview sections, sorted
   tags, pretty JSON, and Portal URLs.
+- `query.rs`: `ResourceQuery`, the structured filters typed after `:res`
+  (`type=`, `loc=`, `tag=`): parsing, matching, and `Display` back to the
+  typed form (stored in navigation contexts so `Esc` restores it). Applied
+  on the client in `AppState::filtered_resources`, with the `/` text filter,
+  in one memoized pass; `AppState::type_summary` counts types (memoized per
+  list and query).
 - `scope_tree.rs`: `ScopeTree` (root, groups, subscriptions, each with its
   parent; serializable, cached as one JSON document). `rows(expanded, known
   subscriptions, filter)` flattens it into the visible `TreeRow`s: groups
@@ -154,6 +160,7 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
 - `desktop.rs`: the `Desktop` trait for copying (OSC 52 escape sequence)
   and opening URLs (`open` / `xdg-open` / `start`). Tests record instead.
 - `command.rs`: parses `:` commands (`:mg`, `:sub`, `:rg [all|<sub>]`,
+  `:type`, filters after `:res`/`:type`,
   `:res [all|<sub>]`). Command names are always singular.
 - `ui/`: rendering. List views are **virtualized**: `ListState::visible_range`
   picks the rows that fit the viewport, only those become widgets, and the scroll
