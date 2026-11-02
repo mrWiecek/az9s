@@ -25,8 +25,8 @@ pub enum CommandKind {
     ManagementGroups,
     /// Navigate to subscriptions view
     Subscriptions,
-    /// Navigate to resource groups view
-    ResourceGroups { scope: Scope },
+    /// Navigate to resource groups view (`loc=`/`tag=` filters)
+    ResourceGroups { scope: Scope, query: ResourceQuery },
     /// Navigate to resources view
     Resources { scope: Scope, query: ResourceQuery },
     /// Resource counts per type
@@ -82,21 +82,7 @@ impl Command {
             "sub" | "subscription" => Self {
                 kind: CommandKind::Subscriptions,
             },
-            "rg" | "resourcegroup" | "resource-group" => {
-                let scope = if parts.len() > 1 {
-                    if parts[1].to_lowercase() == "all" {
-                        Scope::All
-                    } else {
-                        Scope::Subscription(parts[1..].join(" "))
-                    }
-                } else {
-                    Scope::Current
-                };
-                Self {
-                    kind: CommandKind::ResourceGroups { scope },
-                }
-            }
-            "res" | "resource" | "type" => {
+            "rg" | "resourcegroup" | "resource-group" | "res" | "resource" | "type" => {
                 let (filters, scope_terms): (Vec<&str>, Vec<&str>) =
                     parts[1..].iter().partition(|t| ResourceQuery::is_filter(t));
                 let query = match ResourceQuery::parse(filters) {
@@ -112,10 +98,14 @@ impl Command {
                     Some(t) if t.eq_ignore_ascii_case("all") => Scope::All,
                     Some(_) => Scope::Subscription(scope_terms.join(" ")),
                 };
-                let kind = if cmd == "type" {
-                    CommandKind::ResourceTypes { scope, query }
-                } else {
-                    CommandKind::Resources { scope, query }
+                let kind = match cmd.as_str() {
+                    "type" => CommandKind::ResourceTypes { scope, query },
+                    "res" | "resource" => CommandKind::Resources { scope, query },
+                    _ if !query.types.is_empty() => CommandKind::Invalid(format!(
+                        ":{cmd}: type= filters resources, not resource groups \
+                         (use :res or :type; :rg takes loc= and tag=)"
+                    )),
+                    _ => CommandKind::ResourceGroups { scope, query },
                 };
                 Self { kind }
             }
@@ -135,7 +125,7 @@ impl Command {
         match &self.kind {
             CommandKind::Unknown(cmd) if !cmd.is_empty() => {
                 Some(format!(
-                    "Unknown command: '{}'\n\nAvailable commands:\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type",
+                    "Unknown command: '{}'\n\nAvailable commands:\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type",
                     cmd
                 ))
             }
@@ -174,14 +164,21 @@ mod tests {
     #[test]
     fn test_parse_resource_groups() {
         let cmd = Command::parse(":rg all");
-        assert_eq!(cmd.kind, CommandKind::ResourceGroups { scope: Scope::All });
+        assert_eq!(
+            cmd.kind,
+            CommandKind::ResourceGroups {
+                scope: Scope::All,
+                query: ResourceQuery::default()
+            }
+        );
         assert!(cmd.is_valid());
 
         let cmd = Command::parse(":resourcegroup my-subscription");
         assert_eq!(
             cmd.kind,
             CommandKind::ResourceGroups {
-                scope: Scope::Subscription("my-subscription".to_string())
+                scope: Scope::Subscription("my-subscription".to_string()),
+                query: ResourceQuery::default()
             }
         );
     }
@@ -209,16 +206,33 @@ mod tests {
     }
 
     #[test]
+    fn test_rg_takes_location_and_tag_filters_but_not_type() {
+        let CommandKind::ResourceGroups { scope, query } =
+            Command::parse(":rg all loc=westeurope tag=env:prod").kind
+        else {
+            panic!()
+        };
+        assert_eq!(scope, Scope::All);
+        assert_eq!(query.to_string(), "loc=westeurope tag=env:prod");
+        let bad = Command::parse(":rg type=vm");
+        assert!(bad.error_message().unwrap().contains("not resource groups"));
+    }
+
+    #[test]
     fn test_no_scope_means_current_context_and_all_means_all() {
         assert_eq!(
             Command::parse(":rg").kind,
             CommandKind::ResourceGroups {
-                scope: Scope::Current
+                scope: Scope::Current,
+                query: ResourceQuery::default()
             }
         );
         assert_eq!(
             Command::parse(":rg ALL").kind,
-            CommandKind::ResourceGroups { scope: Scope::All }
+            CommandKind::ResourceGroups {
+                scope: Scope::All,
+                query: ResourceQuery::default()
+            }
         );
         assert!(matches!(
             Command::parse(":res").kind,

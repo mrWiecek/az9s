@@ -19,7 +19,9 @@ use ratatui::{
     Frame,
 };
 use status_bar::StatusBar;
-use widgets::{list_item_spans, truncate_with_ellipsis, SelectableList, SelectableListState};
+use widgets::{
+    cell, list_item_spans, name_width, truncate_with_ellipsis, SelectableList, SelectableListState,
+};
 
 /// Draw the main UI
 ///
@@ -49,7 +51,9 @@ pub fn draw(f: &mut Frame, app: &mut TuiApp) -> Result<()> {
 
     // Draw help screen if open
     if app.state().help_open {
-        render_help(f, f.size());
+        let mut scroll = app.state().help_scroll;
+        render_help(f, f.size(), &mut scroll);
+        app.state_mut().help_scroll = scroll;
     }
 
     Ok(())
@@ -86,19 +90,24 @@ fn draw_content(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     }
 }
 
-/// " [ALL SUBSCRIPTIONS]" or " [MG: name]" for cross-subscription lists.
+/// Title suffix for resource group and resource lists: " [ALL SUBSCRIPTIONS]"
+/// or " [MG: name]" for cross-subscription lists, then the active filters.
 fn scope_info(state: &AppState) -> String {
-    if !state.cross_subscription_mode {
-        return String::new();
+    let mut info = String::new();
+    if state.cross_subscription_mode {
+        let group = state
+            .scope_group
+            .as_deref()
+            .and_then(|g| state.scope_tree.as_ref()?.label_of(g));
+        info = match group {
+            Some(name) => format!(" [MG: {}]", truncate_with_ellipsis(name, 40)),
+            None => " [ALL SUBSCRIPTIONS]".to_string(),
+        };
     }
-    let group = state
-        .scope_group
-        .as_deref()
-        .and_then(|g| state.scope_tree.as_ref()?.label_of(g));
-    match group {
-        Some(name) => format!(" [MG: {}]", truncate_with_ellipsis(name, 40)),
-        None => " [ALL SUBSCRIPTIONS]".to_string(),
+    if !state.resource_query.is_empty() {
+        info.push_str(&format!(" [{}]", state.resource_query));
     }
+    info
 }
 
 /// Draw the management group tree
@@ -242,6 +251,8 @@ fn draw_subscription_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result
     let viewport = area.height.saturating_sub(2) as usize;
     let mut list_state = app.state().list_state.clone();
     let visible = list_state.visible_range(filtered_subscriptions.len(), viewport);
+    // Fixed columns: state (12) and the subscription ID (36).
+    let name_col = name_width(area.width, 12 + 36, 60);
     let items: Vec<_> = filtered_subscriptions[visible.clone()]
         .iter()
         .map(|sub| {
@@ -254,15 +265,12 @@ fn draw_subscription_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result
 
             list_item_spans(vec![
                 Span::styled(
-                    format!("{:<40}", sub.name),
+                    cell(&sub.name, name_col),
                     Style::default()
                         .fg(Color::White)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(
-                    format!("{:<12}", sub.state),
-                    Style::default().fg(state_color),
-                ),
+                Span::styled(cell(&sub.state, 12), Style::default().fg(state_color)),
                 Span::styled(sub.id.clone(), Style::default().fg(Color::DarkGray)),
             ])
         })
@@ -341,6 +349,8 @@ fn draw_resource_group_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Resu
     let viewport = area.height.saturating_sub(2) as usize;
     let mut list_state = app.state().list_state.clone();
     let visible = list_state.visible_range(filtered_resource_groups.len(), viewport);
+    // Fixed columns: location (20) and the tag count (~10).
+    let name_col = name_width(area.width, 20 + 10, 80);
     let items: Vec<_> = filtered_resource_groups[visible.clone()]
         .iter()
         .map(|rg| {
@@ -354,15 +364,12 @@ fn draw_resource_group_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Resu
 
             list_item_spans(vec![
                 Span::styled(
-                    format!("{:<40}", rg.name),
+                    cell(&rg.name, name_col),
                     Style::default()
                         .fg(Color::White)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(
-                    format!("{:<20}", rg.location),
-                    Style::default().fg(Color::Yellow),
-                ),
+                Span::styled(cell(&rg.location, 20), Style::default().fg(Color::Yellow)),
                 Span::styled(tag_info, Style::default().fg(Color::DarkGray)),
             ])
         })
@@ -420,13 +427,7 @@ fn draw_resource_group_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Resu
 fn draw_type_summary(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     let rows = app.state().type_summary();
     let state = app.state();
-    let query = &state.resource_query;
     let scope = scope_info(state);
-    let scope = if query.is_empty() {
-        scope
-    } else {
-        format!("{scope} [{query}]")
-    };
 
     if rows.is_empty() {
         let message = if state.loading {
@@ -465,7 +466,7 @@ fn draw_type_summary(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> 
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("{:<20}", resource_type::short_label(resource_type)),
+                    cell(&resource_type::short_label(resource_type), 20),
                     Style::default()
                         .fg(Color::White)
                         .add_modifier(Modifier::BOLD),
@@ -532,15 +533,17 @@ fn draw_resource_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()>
     let viewport = area.height.saturating_sub(2) as usize;
     let mut list_state = app.state().list_state.clone();
     let visible = list_state.visible_range(filtered_resources.len(), viewport);
+    // Fixed columns: type (20) and location (20).
+    let name_col = name_width(area.width, 20 + 20, 80);
     let items: Vec<_> = filtered_resources[visible.clone()]
         .iter()
         .map(|res| {
             // Truncate long names to fit better
-            let display_name = format!("{:<35}", truncate_with_ellipsis(&res.name, 35));
+            let display_name = cell(&res.name, name_col);
 
             // Use improved resource type display
             let short_type = resource_type::short_label(&res.resource_type);
-            let display_type = format!("{:<20}", short_type);
+            let display_type = cell(&short_type, 20);
 
             // Lowercase first: Resource Graph returns types in lowercase.
             let type_color = match res.resource_type.to_ascii_lowercase().as_str() {
@@ -563,23 +566,13 @@ fn draw_resource_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()>
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(display_type, Style::default().fg(type_color)),
-                Span::styled(
-                    format!("{:<12}", res.location),
-                    Style::default().fg(Color::Yellow),
-                ),
+                Span::styled(cell(&res.location, 20), Style::default().fg(Color::Yellow)),
             ])
         })
         .collect();
 
     // Create title with filter indicator and scope
     let scope_info = scope_info(app.state());
-
-    let query = &app.state().resource_query;
-    let scope_info = if query.is_empty() {
-        scope_info
-    } else {
-        format!("{scope_info} [{query}]")
-    };
     let title = if app.state().filter_mode {
         format!(
             "Resources ({}){}  - Filter: {}_",

@@ -291,7 +291,7 @@ impl TuiApp {
         self.state_mut().scope_group = None;
         let mut command = command;
         match &mut command.kind {
-            CommandKind::ResourceGroups { scope }
+            CommandKind::ResourceGroups { scope, .. }
             | CommandKind::Resources { scope, .. }
             | CommandKind::ResourceTypes { scope, .. }
                 if *scope == Scope::Current =>
@@ -313,11 +313,12 @@ impl TuiApp {
                 state.list_state.reset();
                 state.clear_navigation();
             }
-            CommandKind::ResourceGroups { scope } => {
+            CommandKind::ResourceGroups { scope, query } => {
                 debug!("Command: resource groups, scope {:?}", scope);
                 if let Some(subscription_ids) = self.resolve_scope(&scope) {
                     self.state_mut().clear_navigation();
                     self.show_resource_groups(subscription_ids, scope.is_cross_subscription());
+                    self.state_mut().resource_query = query;
                 }
             }
             CommandKind::Resources { scope, query } => {
@@ -459,6 +460,7 @@ impl TuiApp {
         let state = self.state_mut();
         state.view = ViewMode::ResourceGroupList;
         state.cross_subscription_mode = all;
+        state.resource_query = Default::default();
         state.resource_groups.clear();
         state.list_state.reset();
         self.core
@@ -521,14 +523,28 @@ impl TuiApp {
 
     /// Handle keyboard input in help screen
     async fn handle_help_key(&mut self, key: KeyEvent) -> Result<bool> {
+        let state = self.state_mut();
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
                 debug!("Close help");
-                self.state_mut().toggle_help();
-                Ok(true)
+                state.toggle_help();
+                state.help_scroll = 0;
             }
-            _ => Ok(true),
+            // Scrolling; the drawing clamps the end.
+            KeyCode::Down | KeyCode::Char('j') => state.help_scroll += 1,
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.help_scroll = state.help_scroll.saturating_sub(1)
+            }
+            KeyCode::PageDown => state.help_scroll += 10,
+            KeyCode::Char('d') if ctrl => state.help_scroll += 10,
+            KeyCode::PageUp => state.help_scroll = state.help_scroll.saturating_sub(10),
+            KeyCode::Char('u') if ctrl => state.help_scroll = state.help_scroll.saturating_sub(10),
+            KeyCode::Char('g') => state.help_scroll = 0,
+            KeyCode::Char('G') => state.help_scroll = usize::MAX / 2,
+            _ => {}
         }
+        Ok(true)
     }
 
     /// Reload the current view in the background
@@ -682,6 +698,25 @@ impl TuiApp {
         let notice = match self.desktop.copy(&id) {
             Ok(()) => format!("Copied {id}"),
             Err(e) => format!("Could not copy ({e}): {id}"),
+        };
+        self.state_mut().notice = Some(notice);
+    }
+
+    /// Copy what the current view shows (`c`): every row passing the
+    /// filters, as tab-separated text, or the detail view's current tab.
+    fn copy_view(&mut self) {
+        let Some((what, text)) = az9s_core::export::view_text(self.state()) else {
+            self.state_mut().notice = Some("Nothing to copy here".into());
+            return;
+        };
+        let size = if text.len() >= 1024 {
+            format!("{} KB", text.len() / 1024)
+        } else {
+            format!("{} bytes", text.len())
+        };
+        let notice = match self.desktop.copy(&text) {
+            Ok(()) => format!("Copied {what} ({size})"),
+            Err(e) => format!("Could not copy ({e})"),
         };
         self.state_mut().notice = Some(notice);
     }
@@ -876,6 +911,10 @@ impl TuiApp {
             }
             KeyCode::Char('o') => {
                 self.open_in_portal();
+                return Ok(true);
+            }
+            KeyCode::Char('c') => {
+                self.copy_view();
                 return Ok(true);
             }
             _ => {}

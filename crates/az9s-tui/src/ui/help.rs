@@ -6,146 +6,101 @@ use ratatui::{
     Frame,
 };
 
-/// Render the help screen as a modal overlay
-pub fn render_help(f: &mut Frame, area: Rect) {
-    // Create a centered modal
-    let modal_area = centered_rect(80, 90, area);
-
-    // Clear the background
-    f.render_widget(Clear, modal_area);
-
-    // Create the help content
-    let help_text = vec![
-        Line::from(vec![Span::styled(
-            "az9s Help",
+/// The help text. Kept in one place so it can be tested for coverage.
+pub fn help_lines() -> Vec<Line<'static>> {
+    let heading = |text: &'static str| {
+        Line::from(Span::styled(
+            text,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ))
+    };
+    let dim =
+        |text: &'static str| Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)));
+    let l = Line::from;
+    vec![
+        Line::from(Span::styled(
+            "az9s help  ·  j/k or ↑/↓ scroll  ·  Esc, q or ? close",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Navigation",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from("  j/↓         Move down"),
-        Line::from("  k/↑         Move up"),
-        Line::from("  g           Jump to first item"),
-        Line::from("  G           Jump to last item"),
-        Line::from("  Ctrl+d      Page down (10 items)"),
-        Line::from("  Ctrl+u      Page up (10 items)"),
-        Line::from("  PageDown    Page down (10 items)"),
-        Line::from("  PageUp      Page up (10 items)"),
-        Line::from("  Enter       Select item / drill down"),
-        Line::from("  Esc         Go back / close modal"),
-        Line::from("  Backspace   Go back"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Resource Detail",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from("  Tab/l, Shift+Tab/h  Next / previous tab"),
-        Line::from("  1 2 3       Overview, Tags, JSON"),
-        Line::from("  j/k, g/G, Ctrl+d/u  Scroll"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Management Group Tree",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from("  Space       Open / close a group"),
-        Line::from("  l/→  h/←    Open / close (h on a closed row: go to parent)"),
-        Line::from("  Enter       Resource groups of the group or subscription"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Actions",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from("  r           Refresh current view"),
-        Line::from("  y           Copy the selected item's Azure ID"),
-        Line::from("  o           Open the selected item in the Azure Portal"),
-        Line::from("  Ctrl+r      Force refresh from Azure"),
-        Line::from("  /           Enter filter mode"),
-        Line::from("  :           Enter command mode (k9s-like)"),
-        Line::from("  ?           Toggle this help screen"),
-        Line::from("  q           Quit application"),
-        Line::from("  Ctrl+c      Quit application"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Command Mode",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from("  :mg                      Go to the management group tree"),
-        Line::from("  :sub                     Go to subscriptions"),
-        Line::from("  :rg [all|<sub>]          Go to resource groups (no scope: where you are)"),
-        Line::from("  :res [all|<sub>] [filters]  Go to resources"),
-        Line::from("  :type [all|<sub>] [filters] Resource counts per type"),
-        Line::from("    filters: type=vm,disks  loc=westeurope  tag=env:prod (or tag=env)"),
-        Line::from(""),
-        Line::from("  Examples:"),
-        Line::from("    :rg all                All resource groups across subscriptions"),
-        Line::from("    :res my-subscription   Resources in specific subscription"),
-        Line::from("    :res all               All resources across subscriptions"),
-        Line::from("    :res all type=virtualMachines loc=westeurope"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Filter Mode",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from("  Type to filter the current list by name, type, or location"),
-        Line::from("  Enter       Apply filter and exit filter mode"),
-        Line::from("  Esc         Clear filter and exit filter mode"),
-        Line::from("  Backspace   Delete last character"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Views",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from("  Subscriptions → Resource Groups → Resources → Resource Details"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Data Sources",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from("  Azure       Fresh data from Azure API"),
-        Line::from("  Cache       Cached data (offline mode)"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Tips",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from("  • Use filters (/) to quickly find resources"),
-        Line::from("  • Use commands (:) for quick navigation"),
-        Line::from("  • Check the status bar for data source and connection status"),
-        Line::from("  • Press 'r' to refresh if data seems stale"),
-        Line::from("  • The app works offline using cached data"),
-        Line::from("  • Resource types show concise labels (e.g., 'vm', 'nic', 'storage')"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Press Esc or ? to close",
-            Style::default()
-                .fg(Color::Gray)
-                .add_modifier(Modifier::ITALIC),
-        )]),
-    ];
+        )),
+        l(""),
+        heading("Commands (type : then the command, Enter runs it)"),
+        l("  :mg                                Management group tree (the start view)"),
+        l("  :sub                               Subscriptions"),
+        l("  :rg   [scope] [loc=…] [tag=…]      Resource groups"),
+        l("  :res  [scope] [type=…] [loc=…] [tag=…]   Resources"),
+        l("  :type [scope] [type=…] [loc=…] [tag=…]   How many resources of each type"),
+        l(""),
+        l("  scope   (nothing)   where you are: the highlighted or current subscription"),
+        l("                      or management group; all subscriptions if neither"),
+        l("          all         every subscription"),
+        l("          <name|ID>   one subscription, e.g. :rg prod-connectivity"),
+        l(""),
+        heading("Filters (after :rg, :res or :type; space-separated)"),
+        l("  type=vm          a short alias (vm, vnet, nsg, aks, key-vault…), the last part"),
+        l("                   (virtualMachines), the full type, or a provider (Microsoft.Network)"),
+        l("  loc=westeurope   location"),
+        l("  tag=env:prod     tag with that value     tag=env   tag with any value"),
+        l("  a,b              either value: type=vm,disk   loc=westeurope,northeurope"),
+        l("  Several filters must all match. Case doesn't matter. :rg has no type=."),
+        l("  Active filters show in the list title; a new command without them clears them."),
+        l(""),
+        heading("Examples"),
+        l("  :res all type=vm loc=westeurope     VMs in West Europe, every subscription"),
+        l("  :res type=vnet                      VNets where you are"),
+        l("  :res all tag=env:prod,env:production"),
+        l("  :rg all loc=northeurope             Resource groups in North Europe"),
+        l("  :rg tag=owner                       Resource groups with an owner tag"),
+        l("  :type all                           What exists, most common type first"),
+        l("  :type all loc=westeurope            ...only in West Europe; Enter lists a type"),
+        l(""),
+        heading("Text filter"),
+        l("  /text     narrow the current list by name, type (or alias) or location"),
+        l("            Enter keeps it, Esc clears it; combines with the filters above"),
+        l(""),
+        heading("Keys"),
+        l("  j/k ↑/↓   move          g/G   first/last        Ctrl+d/u, PgDn/PgUp   page"),
+        l("  Enter     open          Esc   back / clear filter / close popup"),
+        l("  r         refresh       ?     this help         q, Ctrl+c   quit"),
+        l("  y         copy the selected item's Azure ID"),
+        l("  c         copy the current view (see below)"),
+        l("  o         open the selected item in the Azure Portal"),
+        l("            (no browser, e.g. WSL without wslview: the link is copied instead)"),
+        l(""),
+        heading("Copy the view (c)"),
+        l("  Lists      every row that passes the filters, tab-separated with a header"),
+        l("             (pastes into a spreadsheet), not only the rows on screen"),
+        l("  Detail     the current tab: Overview, Tags or JSON"),
+        l("  Tree, :type  their rows"),
+        dim("  Copying goes through the terminal (OSC 52); in tmux enable set-clipboard."),
+        l(""),
+        heading("Management group tree"),
+        l("  Space     open/close a group     l/→ open     h/← close (on a closed row: parent)"),
+        l("  Enter     resource groups of the group (all its subscriptions) or subscription"),
+        l(""),
+        heading("Resource detail"),
+        l("  Tab/l, Shift+Tab/h, or 1 2 3    Overview, Tags, JSON      j/k, g/G   scroll"),
+        l("  VNets list their subnets: prefixes, delegations, NSG, route table, NAT gateway"),
+        l(""),
+        heading("Status bar"),
+        l("  ● Azure · 2m ago    fresh from Azure"),
+        l("  ◐ Cached · 3h ago   from the local cache while Azure is asked"),
+    ]
+}
 
-    let help_paragraph = Paragraph::new(help_text)
+/// Render the help screen as a modal overlay, scrolled by `scroll` lines
+/// (clamped and written back).
+pub fn render_help(f: &mut Frame, area: Rect, scroll: &mut usize) {
+    let modal_area = centered_rect(90, 90, area);
+    f.render_widget(Clear, modal_area);
+
+    let lines = help_lines();
+    let viewport = modal_area.height.saturating_sub(2) as usize;
+    *scroll = (*scroll).min(lines.len().saturating_sub(viewport));
+    let help_paragraph = Paragraph::new(lines)
         .block(
             Block::default()
                 .title(" Help ")
@@ -153,7 +108,8 @@ pub fn render_help(f: &mut Frame, area: Rect) {
                 .border_style(Style::default().fg(Color::Cyan)),
         )
         .wrap(Wrap { trim: false })
-        .alignment(Alignment::Left);
+        .alignment(Alignment::Left)
+        .scroll((*scroll as u16, 0));
 
     f.render_widget(help_paragraph, modal_area);
 }
@@ -182,6 +138,17 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn help_documents_every_command_filter_and_key() {
+        let text: String = help_lines().iter().map(|l| l.to_string() + "\n").collect();
+        for needle in [
+            ":mg", ":sub", ":rg", ":res", ":type", "type=", "loc=", "tag=", "Examples", "  y ",
+            "  c ", "  o ", "/text",
+        ] {
+            assert!(text.contains(needle), "help lacks {needle:?}");
+        }
+    }
 
     #[test]
     fn test_centered_rect() {

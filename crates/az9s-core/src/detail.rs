@@ -74,6 +74,10 @@ pub fn overview(doc: Option<&Value>, resource: &Resource) -> Vec<Section> {
         }
     }
 
+    if let Some(doc) = doc {
+        sections.extend(type_sections(doc, &resource.resource_type));
+    }
+
     let mut properties = Vec::new();
     if let Some(value) = doc.and_then(|d| d.get("properties")) {
         flatten("", value, 0, &mut properties);
@@ -91,6 +95,78 @@ pub fn overview(doc: Option<&Value>, resource: &Resource) -> Vec<Section> {
         });
     }
     sections
+}
+
+/// Extra sections for resource types where the generic property list hides
+/// what matters (it shows arrays only as "[n items]").
+fn type_sections(doc: &Value, resource_type: &str) -> Vec<Section> {
+    if resource_type.eq_ignore_ascii_case("microsoft.network/virtualnetworks") {
+        let subnets = doc
+            .pointer("/properties/subnets")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        if subnets.is_empty() {
+            return vec![];
+        }
+        return vec![Section {
+            title: "Subnets",
+            rows: subnets.iter().map(subnet_row).collect(),
+        }];
+    }
+    vec![]
+}
+
+/// One subnet: name → "prefix · delegated to … · NSG … · route table …".
+fn subnet_row(subnet: &Value) -> (String, String) {
+    let name = subnet
+        .get("name")
+        .and_then(scalar)
+        .unwrap_or_else(|| "(unnamed)".into());
+    let props = subnet.get("properties");
+    let get = |path: &str| props.and_then(|p| p.pointer(path));
+    // The last segment of a referenced resource's ID is its name.
+    let ref_name = |path: &str| {
+        get(path)
+            .and_then(Value::as_str)
+            .and_then(|id| id.rsplit('/').next())
+            .map(str::to_string)
+    };
+
+    let mut parts = Vec::new();
+    let prefixes: Vec<String> = match get("/addressPrefix").and_then(scalar) {
+        Some(prefix) => vec![prefix],
+        None => get("/addressPrefixes")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(scalar).collect())
+            .unwrap_or_default(),
+    };
+    if !prefixes.is_empty() {
+        parts.push(prefixes.join(", "));
+    }
+    let delegations: Vec<String> = get("/delegations")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|d| d.pointer("/properties/serviceName").and_then(scalar))
+                .collect()
+        })
+        .unwrap_or_default();
+    parts.push(if delegations.is_empty() {
+        "no delegation".into()
+    } else {
+        format!("delegated to {}", delegations.join(", "))
+    });
+    for (label, path) in [
+        ("NSG", "/networkSecurityGroup/id"),
+        ("route table", "/routeTable/id"),
+        ("NAT gateway", "/natGateway/id"),
+    ] {
+        if let Some(name) = ref_name(path) {
+            parts.push(format!("{label} {name}"));
+        }
+    }
+    (name, parts.join(" · "))
 }
 
 /// Tags, sorted by key: from the document when loaded, else the list row.
@@ -270,6 +346,53 @@ mod tests {
         );
         assert!(get(props, "provisioningState").is_none(), "shown above");
         assert!(get(props, "licenseType").is_none(), "nulls are skipped");
+    }
+
+    #[test]
+    fn vnets_list_subnets_with_delegations_and_references() {
+        let doc = json!({
+            "type": "microsoft.network/virtualnetworks",
+            "properties": {
+                "addressSpace": {"addressPrefixes": ["10.0.0.0/16"]},
+                "subnets": [
+                    {"name": "app", "properties": {
+                        "addressPrefix": "10.0.1.0/24",
+                        "delegations": [{"name": "d", "properties": {"serviceName": "Microsoft.Web/serverFarms"}}],
+                        "networkSecurityGroup": {"id": "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/nsg-app"}
+                    }},
+                    {"name": "db", "properties": {
+                        "addressPrefixes": ["10.0.2.0/24", "fd00::/64"],
+                        "delegations": [],
+                        "routeTable": {"id": "/x/routeTables/rt-db"},
+                        "natGateway": {"id": "/x/natGateways/nat-1"}
+                    }}
+                ]
+            }
+        });
+        let vnet = Resource {
+            resource_type: "Microsoft.Network/virtualNetworks".into(),
+            ..resource()
+        };
+        let sections = overview(Some(&doc), &vnet);
+        assert_eq!(
+            rows(&sections, "Subnets"),
+            [
+                (
+                    "app".to_string(),
+                    "10.0.1.0/24 · delegated to Microsoft.Web/serverFarms · NSG nsg-app"
+                        .to_string()
+                ),
+                (
+                    "db".to_string(),
+                    "10.0.2.0/24, fd00::/64 · no delegation · route table rt-db · NAT gateway nat-1"
+                        .to_string()
+                ),
+            ]
+        );
+        // Other types get no Subnets section.
+        assert!(overview(Some(&doc), &resource())
+            .iter()
+            .all(|s| s.title != "Subnets"));
     }
 
     #[test]

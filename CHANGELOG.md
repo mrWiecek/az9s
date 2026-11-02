@@ -12,7 +12,33 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-## [0.5.1] - 2026-11-02
+## [0.6.0] - 2026-11-02
+
+### Added
+- **`c` copies the current view**, in every view:
+  - lists (subscriptions, resource groups, resources): every row that passes
+    the filters, not only the rows on screen, tab-separated with a header,
+    so it pastes into a spreadsheet;
+  - the resource detail view: the current tab (Overview, Tags or JSON);
+  - the management group tree and the `:type` summary: their rows.
+  The status bar says what was copied and how much.
+- **VNet subnets in the detail view.** A virtual network's Overview lists
+  each subnet with its prefixes, delegations (e.g. `delegated to
+  Microsoft.Web/serverFarms`, or `no delegation`), NSG, route table and NAT
+  gateway.
+- **`:rg` takes filters too:** `loc=` and `tag=`, e.g. `:rg all
+  loc=northeurope` or `:rg tag=owner`. `type=` there is an error that
+  points to `:res` and `:type`. Active filters show in every list's title.
+- **Type aliases in filters.** `type=vnet`, `type=vm`, `type=key-vault`
+  work, and the `/` filter in resource lists and in `:type` matches aliases
+  too (typing `vnet` in `:type` finds `microsoft.network/virtualnetworks`).
+- **A rewritten, scrollable help (`?`)**: commands, the scope rules,
+  every filter with its matching rules, worked examples, and all keys.
+  `j`/`k`, `g`/`G` and `Ctrl+D`/`Ctrl+U` scroll it.
+
+### Changed
+- List columns no longer overlap: long names are cut with "…" leaving a
+  gap before the next column, and the name column widens with the terminal.
 
 ### Fixed
 - **`o` failed on WSL** with an OS error and a cut-off link: az9s ran
@@ -299,8 +325,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.5.1...HEAD
-[0.5.1]: https://github.com/mrWiecek/az9s/compare/v0.5.0...v0.5.1
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/mrWiecek/az9s/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/mrWiecek/az9s/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mrWiecek/az9s/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/mrWiecek/az9s/compare/v0.3.0...v0.3.1

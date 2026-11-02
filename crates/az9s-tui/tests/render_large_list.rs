@@ -230,3 +230,35 @@ fn tree_view_shows_indentation_markers_and_counts() {
     assert!(screen.contains("2000 subscriptions"));
     assert!(screen.contains("    ▾ ◆ Zone 0 / team 0"));
 }
+
+#[test]
+fn help_scrolls_to_its_end_on_a_short_terminal() {
+    let mut app = app_with_resources(1);
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    app.state_mut().help_open = true;
+    draw(&mut terminal, &mut app);
+    assert!(screen_text(&terminal).contains("Commands"));
+    app.state_mut().help_scroll = usize::MAX / 2;
+    draw(&mut terminal, &mut app);
+    assert!(
+        screen_text(&terminal).contains("Cached"),
+        "last lines reachable"
+    );
+    assert!(app.state().help_scroll < 200, "clamped");
+}
+
+#[test]
+fn long_names_are_cut_before_the_next_column() {
+    let mut app = app_with_resources(1);
+    app.state_mut().resources[0].name =
+        "an-extremely-long-resource-name-that-would-overlap-the-type-column-0001".into();
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+    draw(&mut terminal, &mut app);
+    let text = screen_text(&terminal);
+    // Cut with "…", then at least one space before the type column.
+    assert!(
+        text.contains("an-extremely-long-resource-name-th… vm"),
+        "{text}"
+    );
+    assert!(!text.contains("0001"));
+}
