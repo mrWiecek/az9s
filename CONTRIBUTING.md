@@ -28,6 +28,9 @@ just ci   # fmt --check, clippy -D warnings, tests
 - **Actions must be safe.** Anything that changes Azure must go through a confirmation
   step and respect `--readonly` (from M3 onward).
 - Record user-visible changes under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
+- **Bump the version** in any PR that changes the app: `just bump patch` for a fix,
+  `minor` for a feature, `major` for a breaking change. Merging it publishes a
+  release. CI checks this. See [RELEASING.md](RELEASING.md).
 - If you change how components interact, update [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Commit messages

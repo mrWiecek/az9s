@@ -29,14 +29,19 @@ see policy compliance without leaving the terminal.
 
 ## Milestones at a glance
 
-| # | Milestone | Size | Version | Outcome |
-|---|---|---|---|---|
-| M0 | Foundation & cleanup | 1–2 wk | — | One name, flat repo, honest docs, CI green |
-| M1 | Speed | 2–3 wk | **v0.1.0** (first public release) | Instant UI, Resource Graph backend |
-| M2 | Inspect | 2 wk | v0.2.0 | Real detail views, palette, config |
-| M3 | Policy | 3 wk | v0.3.0 | Azure Policy at management-group scope: assignments, compliance, exemptions |
-| M4 | Operate | 3 wk | v0.4.0 | Safe action framework + first actions |
-| M5 | Rich views & polish | ongoing | v0.5+ | AKS, Key Vault, logs, themes, packaging |
+Versions are not tied to milestones. Every merged change ships as its own
+SemVer release: patch for fixes, minor for features, major for breaking
+changes (see [RELEASING.md](RELEASING.md)). The first tagged release is
+**v0.1.0**.
+
+| # | Milestone | Size | Outcome |
+|---|---|---|---|
+| M0 | Foundation & cleanup | 1–2 wk | One name, flat repo, honest docs, CI green |
+| M1 | Speed | 2–3 wk | Instant UI, Resource Graph backend |
+| M2 | Inspect | 2 wk | Real detail views, palette, config |
+| M3 | Policy | 3 wk | Azure Policy at management-group scope: assignments, compliance, exemptions |
+| M4 | Operate | 3 wk | Safe action framework + first actions |
+| M5 | Rich views & polish | ongoing | AKS, Key Vault, logs, themes, packaging |
 
 ---
 
@@ -71,7 +76,7 @@ and no file or crate says "aztui".
 Remaining in M0: confirm the first CI run is green on all three OSes, and verify or
 raise `rust-version` (currently `1.75`; not checked against the dependency tree).
 
-## M1 — Speed (2–3 weeks) → v0.1.0
+## M1 — Speed (2–3 weeks)
 
 Goal: fix the main complaint that az9s is slow, **at the scale of the target user:
 400+ subscriptions and thousands of resources** under a management-group hierarchy,
@@ -139,8 +144,10 @@ Work items, in order:
 - [ ] **Performance budget in CI.** Add benchmarks for rendering and filtering
       100k-row lists with synthetic data (no Azure needed), plus a startup-time
       check. *(The 100k-row test exists as `just perf`; it is not yet a CI job.)*
-- [ ] **Release pipeline.** Publish binaries to GitHub Releases (e.g. `cargo-dist`)
-      and support `cargo install az9s`.
+- [x] **Release pipeline.** Merging a version bump to `main` tags it and publishes a
+      GitHub Release with Linux, macOS and Windows binaries and checksums
+      (`.github/workflows/release.yml`). `cargo install --git … --tag vX.Y.Z az9s`
+      works too. Publishing to crates.io is not planned yet.
 
 **Done when** (measured against a 400+ subscription tenant):
 
@@ -153,7 +160,7 @@ Work items, in order:
 | Open a resource group (≤ 1k resources), cold | < 1 s |
 | Any network call | never blocks input; a spinner is always visible |
 
-## M2 — Inspect (2 weeks) → v0.2.0
+## M2 — Inspect (2 weeks)
 
 - [ ] Generic resource detail view with three tabs: Overview, Tags, JSON (from
       Resource Graph or ARM).
@@ -169,7 +176,7 @@ Work items, in order:
       and az9s opens at the tenant root management group by default.
 - [ ] `:ctx` to switch tenant.
 
-## M3 — Policy (3 weeks) → v0.3.0
+## M3 — Policy (3 weeks)
 
 - [ ] `:policy`, `:assignment` and `:exemption` commands.
 - [ ] Browse policy assignments **per scope, starting at management groups**, with
@@ -185,7 +192,7 @@ Work items, in order:
 - Policy *actions* (trigger a compliance scan, create or extend exemptions, start
   remediation) come in M4 on top of the action framework.
 
-## M4 — Operate (3 weeks) → v0.4.0
+## M4 — Operate (3 weeks)
 
 - [ ] **Action framework.**
   - Confirmation dialog for every action. Typed-name confirmation for destructive
@@ -203,7 +210,7 @@ Work items, in order:
       start remediation.
 - [ ] **AKS basics:** clusters, node pools, `get-credentials`, and handing off to k9s.
 
-## M5 — Rich views & polish (ongoing) → v0.5+
+## M5 — Rich views & polish (ongoing)
 
 - Rich views for AKS, Key Vault (metadata only; secret values only on explicit
   request), Storage, VMs, and App Service log stream.
@@ -225,6 +232,7 @@ Work items, in order:
 | Auth | Azure CLI credential (`az login`) | **Decided** |
 | Actions default | Enabled with confirmation; `--readonly` available | **Decided** |
 | License | Apache-2.0 | **Decided** |
+| Versioning | Plain SemVer per change: patch = fix, minor = feature, major = breaking; no pre-release tags; tags are never moved | **Decided** (done) |
 | Command naming | Always singular (`:sub`, `:rg`, `:res`, `:mg`, …); no plural aliases | **Decided** (done) |
 | Default scope | Tenant root management group | **Decided** |
 | Read backend | Azure Resource Graph for lists, ARM for single-resource reads and writes | Proposed (validate in M1) |

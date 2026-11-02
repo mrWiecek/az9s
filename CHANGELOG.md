@@ -6,12 +6,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Planned work is tracked in [ROADMAP.md](ROADMAP.md), not here.
 
+Every version below has a git tag (`vX.Y.Z`) and a
+[GitHub Release](https://github.com/mrWiecek/az9s/releases) with binaries.
+Release process, audit and rollback: [RELEASING.md](RELEASING.md).
+
 ## [Unreleased]
 
-No version has been released yet. The first public release is planned as **v0.1.0**
-(see milestone M1 in the roadmap).
+## [0.1.0] - 2026-11-02
+
+First tagged release.
 
 ### Added
+- **Versioning and releases.** Plain SemVer: patch for fixes, minor for features,
+  major for breaking changes. Merging a version bump to `main` tags it and
+  publishes a GitHub Release with binaries for Linux, macOS (Apple Silicon and
+  Intel) and Windows, SHA-256 checksums, and that version's notes from this file.
+  `just bump patch|minor|major` prepares a release, and CI fails a PR that
+  changes code without bumping an already-released version. See `RELEASING.md`
+  for auditing and rolling back.
+- `az9s --version` shows the git commit the binary was built from.
 - `ROADMAP.md` with milestones M0–M5 and recorded product decisions.
 - GitHub Actions CI: `fmt`, `clippy -D warnings`, and tests on Linux, macOS and
   Windows.
@@ -118,3 +131,6 @@ Already in the codebase before this changelog was started:
   live 400+ subscription tenant.
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
+
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/mrWiecek/az9s/releases/tag/v0.1.0

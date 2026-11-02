@@ -45,6 +45,10 @@ ci:
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
 
+# Bump the version: patch (fix), minor (feature) or major (breaking change)
+bump part:
+    bash scripts/bump-version.sh {{part}}
+
 # Install the az9s binary from source
 install:
     cargo install --path crates/az9s --locked
