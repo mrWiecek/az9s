@@ -11,5 +11,6 @@
 
 ## Checklist
 
-- [ ] `CHANGELOG.md` updated under `[Unreleased]` (if user-visible)
+- [ ] `CHANGELOG.md` updated (if user-visible)
+- [ ] Version bumped with `just bump patch|minor|major` (if the app changed; see RELEASING.md)
 - [ ] Docs updated (if behavior or architecture changed)

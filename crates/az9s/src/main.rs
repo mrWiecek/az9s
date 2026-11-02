@@ -28,7 +28,11 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             "-V" | "--version" => {
-                println!("az9s {}", env!("CARGO_PKG_VERSION"));
+                println!(
+                    "az9s {} ({})",
+                    env!("CARGO_PKG_VERSION"),
+                    env!("AZ9S_COMMIT")
+                );
                 return Ok(());
             }
             other => {

@@ -8,7 +8,7 @@ Browse every subscription, resource group and resource from the terminal, filter
 instantly, and (soon) act on resources and check Azure Policy compliance, the way k9s
 works for Kubernetes.
 
-> ⚠️ **Status: early development.** No release yet. The app browses resources across
+> ⚠️ **Status: early development.** The app browses resources across
 > all your subscriptions with Azure Resource Graph and never freezes while loading.
 > It is read-only for now. See the [Roadmap](ROADMAP.md).
 
@@ -32,11 +32,17 @@ works for Kubernetes.
 
 ## Install
 
+Download a prebuilt binary for Linux, macOS or Windows from
+[Releases](https://github.com/mrWiecek/az9s/releases), or build from source:
+
 ```bash
-git clone https://github.com/mrWiecek/az9s.git
-cd az9s
-cargo install --path crates/az9s --locked   # or: just install
+cargo install --git https://github.com/mrWiecek/az9s --locked az9s              # latest
+cargo install --git https://github.com/mrWiecek/az9s --tag v0.1.0 --locked az9s # a specific version
 ```
+
+`az9s --version` shows the installed version and commit. Versions follow
+SemVer; see [CHANGELOG.md](CHANGELOG.md) for what changed and
+[RELEASING.md](RELEASING.md) for how to roll back.
 
 ## Quick start
 
@@ -105,7 +111,8 @@ How it fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Issues and PRs are welcome. Start with [ROADMAP.md](ROADMAP.md) and
 [CONTRIBUTING.md](CONTRIBUTING.md). Record user-visible changes under
-`[Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
+`[Unreleased]` in [CHANGELOG.md](CHANGELOG.md), and bump the version for code
+changes (`just bump patch|minor|major`; see [RELEASING.md](RELEASING.md)).
 
 ## License
 
