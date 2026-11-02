@@ -44,7 +44,16 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   - `App::new()` opens the cache, shows cached subscriptions immediately, and
     starts a background fetch of fresh ones. It never waits for Azure.
   - `App::request(LoadRequest)` starts a background load and returns at once.
-    `App::apply(LoadResult)` stores a finished load in state and the cache.
+    If the target list is empty, it is first filled from the cache for exactly
+    that scope.
+  - `App::apply(LoadResult)` handles streamed chunks and the final result.
+    - If cached rows were on screen when the request started, chunks are
+      staged off-screen and swapped in once, keeping the selection by ID.
+      Otherwise chunks append to the visible list.
+    - A successful final result queues a cache write that replaces the scope.
+      Subscriptions that failed to load are excluded.
+    - `AppState::freshness` records each view's source and age, which the
+      status bar shows.
 - `loader.rs`: background loading.
   - `Loader` runs each `LoadRequest` on a tokio task and sends a `LoadResult` over
     a channel.
@@ -79,6 +88,18 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   - `migrations.rs`: versioned schema with tables `subscriptions`,
     `resource_groups`, `resources` and `resource_details`.
   - `repository.rs`: reads and writes, plus a `ResourceFilter` query builder.
+  - `scoped.rs`: scope-based reads (`cached_resource_groups(subscription_ids)`,
+    `cached_resources(subscription_ids, resource_group)`) that return the rows
+    plus the oldest `cached_at`, and `replace_*` writes that replace a whole
+    scope in one transaction.
+    - Parent tables (`subscriptions`, `resources`) are written with upserts,
+      never `INSERT OR REPLACE`: SQLite runs REPLACE as delete + insert, which
+      fires `ON DELETE CASCADE` and wipes the children.
+    - Child rows whose subscription isn't cached are skipped.
+  - `writer.rs`: file-backed caches send `WriteJob`s to a background thread
+    with its own connection (WAL mode), so large writes never block the UI.
+    `Cache::flush` waits for queued writes. In-memory caches (tests) write
+    synchronously.
   - `warming.rs`: cache-warming strategies. **Not yet used by the app.**
 - `timing.rs`: always-on duration stats (`timing::timer("azure.list_resources")`).
   `az9s --timings` prints a summary on exit. Recorded operations include
@@ -126,8 +147,8 @@ load task (tokio) ────────┘
    (ARM `list_by_resource_group`).
 4. ~~"All subscriptions" views made one ARM call per subscription.~~ Fixed: one
    Resource Graph query at the tenant root, streamed page by page.
-5. The cache is read at startup for subscriptions only. It is not used to render first and
-   refresh afterwards.
+5. ~~The cache was only read at startup for subscriptions.~~ Fixed: every
+   list renders cached data first and refreshes in the background.
 
 The M1 target design:
 - Background workers send results to the UI over a channel.

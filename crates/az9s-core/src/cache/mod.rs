@@ -9,7 +9,9 @@
 
 mod migrations;
 mod repository;
+mod scoped;
 mod warming;
+mod writer;
 
 use crate::Result;
 use rusqlite::Connection;
@@ -17,25 +19,61 @@ use std::path::Path;
 use tracing::info;
 
 pub use repository::{CacheRepository, ResourceFilter};
+pub use scoped::Cached;
 pub use warming::{CacheWarmer, WarmingStats, WarmingStrategy};
+pub use writer::WriteJob;
 
 // ==================== Cache ====================
 
 /// SQLite-backed cache for Azure resources with migration support
 pub struct Cache {
     conn: Connection,
+    /// Background writer for file-backed caches (None for `:memory:`)
+    writer: Option<writer::Writer>,
 }
 
 impl Cache {
-    /// Create a new cache instance with automatic migrations
+    /// Create a new cache instance with automatic migrations.
+    ///
+    /// A file-backed cache runs in WAL mode and gets a background writer
+    /// thread, so large writes never block the caller (see [`Cache::write`]).
     pub fn new(path: &Path) -> Result<Self> {
         info!("Opening cache at {:?}", path);
         let conn = Connection::open(path)?;
+        let in_memory = path == Path::new(":memory:");
+        if !in_memory {
+            // WAL lets this connection read while the writer thread writes.
+            let _: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
+            conn.busy_timeout(std::time::Duration::from_secs(10))?;
+        }
 
-        let cache = Self { conn };
+        let mut cache = Self { conn, writer: None };
         cache.run_migrations()?;
+        if !in_memory {
+            cache.writer = Some(writer::Writer::spawn(path)?);
+        }
 
         Ok(cache)
+    }
+
+    /// Replace a cached scope. File-backed caches do this on the background
+    /// writer thread and return immediately; in-memory caches write now.
+    pub fn write(&self, job: WriteJob) {
+        match &self.writer {
+            Some(writer) => writer.send(job),
+            None => {
+                if let Err(e) = job.apply(&self.repository()) {
+                    tracing::warn!("Cache write failed: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Wait until all queued background writes are done.
+    pub fn flush(&self) {
+        if let Some(writer) = &self.writer {
+            writer.flush();
+        }
     }
 
     /// Run database migrations
@@ -332,5 +370,83 @@ mod tests {
 
         let stats = warmer.warm(WarmingStrategy::Minimal).unwrap();
         assert_eq!(stats.subscriptions_loaded, 1);
+    }
+}
+
+#[cfg(test)]
+mod writer_tests {
+    use super::*;
+    use crate::models::*;
+    use std::time::{Duration, Instant};
+
+    fn temp_db(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("az9s-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("cache.db")
+    }
+
+    fn rows(n: usize) -> Vec<Resource> {
+        (0..n)
+            .map(|i| Resource {
+                id: format!("/subscriptions/s/resourceGroups/rg/providers/x/r{i}"),
+                name: format!("r{i}"),
+                resource_type: "x".into(),
+                location: "westeurope".into(),
+                resource_group: "rg".into(),
+                subscription_id: "s".into(),
+                tags: Default::default(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn file_cache_writes_in_background_and_flush_waits_for_them() {
+        let path = temp_db("writer");
+        let cache = Cache::new(&path).unwrap();
+        cache.write(WriteJob::Subscriptions(vec![Subscription {
+            id: "s".into(),
+            name: "s".into(),
+            state: "Enabled".into(),
+            tenant_id: "t".into(),
+        }]));
+
+        let started = Instant::now();
+        cache.write(WriteJob::Resources {
+            subscription_ids: vec!["s".into()],
+            resource_group: None,
+            items: rows(20_000),
+        });
+        assert!(
+            started.elapsed() < Duration::from_millis(50),
+            "write must not block the caller ({:?})",
+            started.elapsed()
+        );
+
+        cache.flush();
+        let got = cache
+            .repository()
+            .cached_resources(&["s".into()], None)
+            .unwrap();
+        assert_eq!(got.items.len(), 20_000);
+        drop(cache);
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn dropping_the_cache_finishes_queued_writes() {
+        let path = temp_db("drop");
+        {
+            let cache = Cache::new(&path).unwrap();
+            cache.write(WriteJob::Subscriptions(vec![Subscription {
+                id: "s".into(),
+                name: "s".into(),
+                state: "Enabled".into(),
+                tenant_id: "t".into(),
+            }]));
+        }
+        let cache = Cache::new(&path).unwrap();
+        assert_eq!(cache.repository().get_subscriptions().unwrap().len(), 1);
+        drop(cache);
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 }

@@ -19,7 +19,7 @@ works for Kubernetes.
 | Subscriptions → resource groups → resources → detail | Instant, non-blocking UI backed by Azure Resource Graph (M1) |
 | Cross-subscription views (`:rg all`, `:res all`) | Management-group tree, rich detail views, JSON, open in Portal, command palette (M2) |
 | `/` filtering, vim keys, `:` commands, `?` help | Azure Policy at management-group scope: assignments, compliance, exemptions (M3) |
-| Offline fallback through a local SQLite cache | Safe actions: VM start/stop, restarts, tags, delete, policy scans (M4) |
+| Instant views from a local cache, refreshed in the background, with data age in the status bar | Safe actions: VM start/stop, restarts, tags, delete, policy scans (M4) |
 
 ## Requirements
 

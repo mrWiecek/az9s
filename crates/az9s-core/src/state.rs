@@ -59,6 +59,9 @@ pub struct AppState {
     /// Spinner animation frame, advanced on ticks while loading
     pub spinner_frame: usize,
 
+    /// Where each list's data came from and when it was produced
+    pub freshness: HashMap<ViewMode, Freshness>,
+
     /// Data source indicator (for UX transparency)
     pub data_source: DataSource,
 
@@ -91,8 +94,16 @@ struct FilterMemo {
     indices: Vec<usize>,
 }
 
+/// Where a list's data came from and when (unix seconds): fetched from
+/// Azure at that time, or read from the cache, written at that time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Freshness {
+    pub source: DataSource,
+    pub as_of: i64,
+}
+
 /// Indicates where the current data came from
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DataSource {
     #[default]
     None,
@@ -102,7 +113,7 @@ pub enum DataSource {
     Cache,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum ViewMode {
     #[default]
     SubscriptionList,
@@ -297,6 +308,45 @@ impl AppState {
         memo.key = None;
     }
 
+    /// Freshness of the list behind the current view (a resource's detail
+    /// view uses the resource list's).
+    pub fn current_freshness(&self) -> Option<Freshness> {
+        let view = match self.view {
+            ViewMode::ResourceDetail => ViewMode::ResourceList,
+            ref v => v.clone(),
+        };
+        self.freshness.get(&view).copied()
+    }
+
+    /// ID of the selected row in the current list view.
+    pub fn selected_id(&self) -> Option<String> {
+        match self.view {
+            ViewMode::SubscriptionList => self.selected_subscription().map(|s| s.id.clone()),
+            ViewMode::ResourceGroupList => self.selected_resource_group().map(|r| r.id.clone()),
+            ViewMode::ResourceList => self.selected_resource().map(|r| r.id.clone()),
+            _ => None,
+        }
+    }
+
+    /// Select the row with this ID in the current (filtered) list, if present.
+    pub fn select_id(&mut self, id: &str) {
+        let position = match self.view {
+            ViewMode::SubscriptionList => self
+                .filtered_subscriptions()
+                .iter()
+                .position(|s| s.id == id),
+            ViewMode::ResourceGroupList => self
+                .filtered_resource_groups()
+                .iter()
+                .position(|r| r.id == id),
+            ViewMode::ResourceList => self.filtered_resources().iter().position(|r| r.id == id),
+            _ => None,
+        };
+        if let Some(i) = position {
+            self.list_state.selected = i;
+        }
+    }
+
     /// Get the selected subscription in the current view
     pub fn selected_subscription(&self) -> Option<&Subscription> {
         if self.view == ViewMode::SubscriptionList {
@@ -410,6 +460,23 @@ impl AppState {
     }
 }
 
+/// How long ago a unix timestamp was, for the status bar: "just now",
+/// "42s ago", "5m ago", "3h ago", "2d ago".
+pub fn format_age(as_of: i64) -> String {
+    format_age_at(as_of, chrono::Utc::now().timestamp())
+}
+
+pub fn format_age_at(as_of: i64, now: i64) -> String {
+    let secs = (now - as_of).max(0);
+    match secs {
+        0..=9 => "just now".to_string(),
+        10..=59 => format!("{secs}s ago"),
+        60..=3599 => format!("{}m ago", secs / 60),
+        3600..=86_399 => format!("{}h ago", secs / 3600),
+        _ => format!("{}d ago", secs / 86_400),
+    }
+}
+
 /// Case-insensitive (ASCII) substring check that does not allocate.
 ///
 /// `needle_lower` must already be ASCII-lowercased. Azure names, types and
@@ -481,6 +548,20 @@ mod tests {
 
         state.select_last(0);
         assert_eq!(state.selected(), 0);
+    }
+
+    #[test]
+    fn test_format_age() {
+        assert_eq!(format_age_at(100, 105), "just now");
+        assert_eq!(format_age_at(100, 142), "42s ago");
+        assert_eq!(format_age_at(0, 5 * 60 + 30), "5m ago");
+        assert_eq!(format_age_at(0, 3 * 3600 + 5), "3h ago");
+        assert_eq!(format_age_at(0, 2 * 86_400), "2d ago");
+        assert_eq!(
+            format_age_at(200, 100),
+            "just now",
+            "clock skew never goes negative"
+        );
     }
 
     #[test]

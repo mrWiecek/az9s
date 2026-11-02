@@ -22,5 +22,6 @@ crossterm = { workspace = true }
 once_cell = "1.19"
 
 [dev-dependencies]
+chrono = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

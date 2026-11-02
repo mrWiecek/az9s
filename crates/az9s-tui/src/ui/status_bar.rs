@@ -1,4 +1,4 @@
-use az9s_core::state::{AppState, DataSource};
+use az9s_core::state::{format_age, AppState, DataSource};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -77,6 +77,19 @@ impl StatusBar {
     /// - Yellow: Cached (data from local cache)
     /// - Red: Disconnected (no data)
     fn connection_indicator(state: &AppState) -> Span<'static> {
+        // Prefer the current view's own freshness ("◐ Cached · 3h ago").
+        if let Some(fresh) = state.current_freshness() {
+            let age = format_age(fresh.as_of);
+            let (text, color) = match fresh.source {
+                DataSource::Azure => (format!("● Azure · {age}"), Color::Green),
+                DataSource::Cache => (format!("◐ Cached · {age}"), Color::Yellow),
+                DataSource::None => ("○ Disconnected".to_string(), Color::Red),
+            };
+            return Span::styled(
+                text,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            );
+        }
         match state.data_source {
             DataSource::Azure => Span::styled(
                 "● Azure",
@@ -97,13 +110,9 @@ impl StatusBar {
         }
     }
 
-    /// Truncate long strings with ellipsis
+    /// Truncate long strings with ellipsis (character-based, UTF-8 safe)
     fn truncate(s: &str, max_len: usize) -> String {
-        if s.len() <= max_len {
-            s.to_string()
-        } else {
-            format!("{}...", &s[..max_len.saturating_sub(3)])
-        }
+        super::widgets::truncate_with_ellipsis(s, max_len)
     }
 }
 
@@ -111,6 +120,7 @@ impl StatusBar {
 mod tests {
     use super::*;
     use az9s_core::models::Subscription;
+    use az9s_core::state::{Freshness, ViewMode};
 
     #[test]
     fn test_status_bar_basic() {
@@ -219,5 +229,45 @@ mod tests {
         let text = format!("{:?}", line);
 
         assert!(text.contains("Cached"));
+    }
+
+    #[test]
+    fn test_status_bar_shows_source_and_age_of_current_view() {
+        let mut state = AppState::default();
+        state.view = ViewMode::ResourceGroupList;
+        let now = chrono::Utc::now().timestamp();
+        state.freshness.insert(
+            ViewMode::ResourceGroupList,
+            Freshness {
+                source: DataSource::Cache,
+                as_of: now - 3 * 3600,
+            },
+        );
+        state.freshness.insert(
+            ViewMode::SubscriptionList,
+            Freshness {
+                source: DataSource::Azure,
+                as_of: now,
+            },
+        );
+        let text = format!("{:?}", StatusBar::render(&state));
+        assert!(text.contains("Cached · 3h ago"), "{text}");
+
+        state.view = ViewMode::SubscriptionList;
+        let text = format!("{:?}", StatusBar::render(&state));
+        assert!(text.contains("Azure · just now"), "{text}");
+    }
+
+    #[test]
+    fn test_long_non_ascii_subscription_name_does_not_panic() {
+        let mut state = AppState::default();
+        state.selected_subscription = Some(az9s_core::models::Subscription {
+            id: "id".into(),
+            name: "żółćżółćżółćżółćżółć".into(), // 2-byte chars: byte 17 is mid-character,
+            state: "Enabled".into(),
+            tenant_id: "t".into(),
+        });
+        let text = format!("{:?}", StatusBar::render(&state));
+        assert!(text.contains("Sub:"));
     }
 }
