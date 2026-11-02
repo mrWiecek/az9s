@@ -73,8 +73,8 @@ Goal: a repository a stranger can clone, understand and contribute to in 10 minu
 **Done when:** `just ci` passes locally and in GitHub Actions, the README is accurate,
 and no file or crate says "aztui".
 
-CI is green on Linux, macOS and Windows. Still open: verify or raise
-`rust-version` (currently `1.75`; not checked against the dependency tree).
+CI is green on Linux, macOS and Windows. The minimum Rust version is 1.88
+(`time 0.3.47` requires it), and a CI job builds with exactly that version.
 
 ## M1 — Speed (2–3 weeks)
 
@@ -144,9 +144,10 @@ Work items, in order:
       cache the token. *(The Resource Graph client, credential and cached token
       are shared and warmed up at startup. The ARM fallback still builds its
       client per call.)*
-- [ ] **Performance budget in CI.** Add benchmarks for rendering and filtering
+- [x] **Performance budget in CI.** Add benchmarks for rendering and filtering
       100k-row lists with synthetic data (no Azure needed), plus a startup-time
-      check. *(The 100k-row test exists as `just perf`; it is not yet a CI job.)*
+      check. *(The `perf` CI job runs the 100k-row rendering budget, under 16 ms
+      per frame. Startup time is covered by the live test in #9 rather than CI.)*
 - [x] **Release pipeline.** Merging a version bump to `main` tags it and publishes a
       GitHub Release with Linux, macOS and Windows binaries and checksums
       (`.github/workflows/release.yml`). `cargo install --git … --tag vX.Y.Z az9s`

@@ -515,9 +515,8 @@ pub fn resource_from_row(row: &Value) -> Option<AzureResource> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{error, ok, serve, serve_sequence, Reply, StaticToken};
+    use crate::testing::{error, ok, serve, serve_counting, serve_sequence, Reply, StaticToken};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Instant;
 
     fn client(endpoint: &str) -> ResourceGraphClient {
         ResourceGraphClient::with_endpoint(endpoint, Arc::new(StaticToken("t".into())))
@@ -680,9 +679,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parallel_paging_is_faster_than_sequential() {
-        let page_delay = Duration::from_millis(200);
-        let (endpoint, _) = serve(move |body: &Value| {
+    async fn later_pages_are_requested_concurrently() {
+        // Each reply is held for 200 ms, so requests sent together are
+        // certainly in flight together. This checks the overlap the server
+        // observed, not wall-clock time: a timing threshold flaked on a
+        // loaded macOS CI runner (1.04 s against a 1 s limit).
+        let (endpoint, _, concurrency) = serve_counting(move |body: &Value| {
             let skip = body["options"]
                 .get("$skip")
                 .and_then(Value::as_u64)
@@ -694,11 +696,10 @@ mod tests {
             if skip == 0 {
                 reply["$skipToken"] = json!("t2");
             }
-            ok(reply).after(page_delay)
+            ok(reply).after(Duration::from_millis(200))
         })
         .await;
 
-        let started = Instant::now();
         let total = client(&endpoint)
             .with_page_size(2)
             .query_pages(
@@ -708,11 +709,16 @@ mod tests {
             )
             .await
             .unwrap();
-        let elapsed = started.elapsed();
         assert_eq!(total, 12);
-        // 6 pages one after another: 6 x 200 ms. First page, then 5 more
-        // with 4 in flight: about 3 x 200 ms.
-        assert!(elapsed < Duration::from_millis(1000), "took {elapsed:?}");
+        // First page alone, then 5 more pages with up to PARALLEL_PAGES in
+        // flight. Normally exactly PARALLEL_PAGES overlap; require only real
+        // overlap (>= 2) so a heavily loaded runner can't make this flaky,
+        // and never more than the limit.
+        let max = concurrency.max();
+        assert!(
+            (2..=PARALLEL_PAGES).contains(&max),
+            "max in flight was {max}"
+        );
     }
 
     #[tokio::test]

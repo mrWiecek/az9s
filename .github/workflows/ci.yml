@@ -54,6 +54,28 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --locked
 
+  msrv:
+    # The oldest Rust that builds az9s; must match `rust-version` in Cargo.toml.
+    # Raise both together when a dependency needs a newer compiler.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - name: rust-version in Cargo.toml matches this job
+        run: grep -q '^rust-version = "1.88"' Cargo.toml
+      - run: cargo check --workspace --all-targets --locked
+
+  perf:
+    # Rendering budget: a frame with 100k rows (filtered and unfiltered) must
+    # stay under 16 ms in a release build. Today it is about 0.5 ms.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release --locked -p az9s-tui --test render_large_list -- --ignored --nocapture
+
   version:
     # Code changes must bump the version (patch/minor/major); see RELEASING.md.
     if: github.event_name == 'pull_request'

@@ -84,11 +84,50 @@ pub async fn serve_sequence(replies: Vec<Reply>) -> (String, Requests) {
     .await
 }
 
+/// How many requests the mock server was handling at once.
+#[derive(Default)]
+pub struct Concurrency {
+    current: std::sync::atomic::AtomicUsize,
+    max: std::sync::atomic::AtomicUsize,
+}
+
+impl Concurrency {
+    /// The most requests that were in flight (received, not yet answered)
+    /// at the same time.
+    pub fn max(&self) -> usize {
+        self.max.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn enter(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        let now = self.current.fetch_add(1, SeqCst) + 1;
+        self.max.fetch_max(now, SeqCst);
+    }
+
+    fn leave(&self) {
+        self.current
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Serve every request with `respond(request_body)`. Returns the base URL.
 pub async fn serve<F>(respond: F) -> (String, Requests)
 where
     F: Fn(&Value) -> Reply + Send + Sync + 'static,
 {
+    let (url, requests, _) = serve_counting(respond).await;
+    (url, requests)
+}
+
+/// Like [`serve`], and also reports how many requests overlapped in time.
+/// Use this, not wall-clock time, to test that a client works concurrently:
+/// timings are unreliable on shared CI machines.
+pub async fn serve_counting<F>(respond: F) -> (String, Requests, Arc<Concurrency>)
+where
+    F: Fn(&Value) -> Reply + Send + Sync + 'static,
+{
+    let concurrency = Arc::new(Concurrency::default());
+    let in_flight = concurrency.clone();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let requests: Requests = Arc::new(Mutex::new(Vec::new()));
@@ -101,10 +140,12 @@ where
             };
             let seen = seen.clone();
             let respond = respond.clone();
+            let in_flight = in_flight.clone();
             tokio::spawn(async move {
                 let Some(body) = read_request_body(&mut sock).await else {
                     return;
                 };
+                in_flight.enter();
                 seen.lock().unwrap().push(body.clone());
                 let reply = respond(&body);
                 if !reply.delay.is_zero() {
@@ -121,10 +162,11 @@ where
                 response.push_str("\r\n");
                 response.push_str(&reply.body);
                 let _ = sock.write_all(response.as_bytes()).await;
+                in_flight.leave();
             });
         }
     });
-    (format!("http://{addr}"), requests)
+    (format!("http://{addr}"), requests, concurrency)
 }
 
 /// Read one HTTP request and return its JSON body (`Null` if empty).
