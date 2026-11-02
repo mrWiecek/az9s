@@ -38,6 +38,9 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   - It also holds the KQL builders and row → model mapping. The resource group
     name is taken from the resource ID to keep its casing, because Resource
     Graph lowercases the `resourceGroup` column.
+- `management_groups.rs`: `ManagementGroupClient`. `descendants(group)` reads
+  every management group and subscription below a group with its parent, in
+  one paged call (`nextLink`); `display_name(group)` names the root.
 - `timing.rs`: always-on duration stats (`timing::timer("azure.token")`),
   re-exported as `az9s_core::timing`. `az9s --timings` prints a summary on exit.
 - `testing.rs` (feature `test-util`): a static token source and a local mock HTTP
@@ -48,8 +51,11 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
 ## az9s-core
 
 - `app.rs`: `App` owns `AppState`, the `Cache` and the `Loader`.
-  - `App::new()` opens the cache, shows cached subscriptions immediately, and
-    starts a background fetch of fresh ones. It never waits for Azure.
+  - `App::new()` opens the cache, shows cached subscriptions immediately, starts
+    background fetches of fresh subscriptions and the management group tree,
+    and opens the tree view (`App::open_scope_tree`). It never waits for Azure.
+    If the tree fails with nothing cached, it falls back to the subscription
+    list with a status-bar notice instead of an error popup.
   - `App::request(LoadRequest)` starts a background load and returns at once.
     If the target list is empty, it is first filled from the cache for exactly
     that scope.
@@ -77,6 +83,9 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
       subscriptions; if that scope is forbidden, it retries with the
       subscription list. It streams each page. If it fails before any rows
       arrive, it falls back to ARM and sets a notice.
+    - With `with_management_groups`, `GraphFetcher` also serves
+      `LoadRequest::ScopeTree`: the descendants of the tenant root group
+      (name = tenant ID).
     - `AzureFetcher` uses ARM (one call per subscription, 16 at a time) and
       handles the subscription list (Azure CLI). Set `AZ9S_BACKEND=arm` to use it
       for everything.
@@ -84,9 +93,18 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
       `GraphFetcher` uses it to resolve the tenant (and so the token) before
       the first request.
     - Tests use fake fetchers.
+- `scope_tree.rs`: `ScopeTree` (root, groups, subscriptions, each with its
+  parent; serializable, cached as one JSON document). `rows(expanded, known
+  subscriptions, filter)` flattens it into the visible `TreeRow`s: groups
+  before subscriptions, sorted by name, with subscription counts. A filter
+  keeps matches plus their ancestors. Subscriptions missing from the tree go
+  under an "unplaced" pseudo-group. `subscriptions_under(group)` gives the
+  scope for "open this group".
 - `state.rs`: `AppState` holds:
-  - the current `ViewMode` (`SubscriptionList`, `ResourceGroupList`, `ResourceList`,
-    `ResourceDetail`)
+  - the current `ViewMode` (`ManagementGroupTree`, `SubscriptionList`,
+    `ResourceGroupList`, `ResourceList`, `ResourceDetail`)
+  - the scope tree, which groups are open (`tree_expanded`), and the group a
+    cross-subscription list was opened from (`scope_group`, used by refresh)
   - the loaded lists and the selection (`ListState`)
   - the navigation stack (`NavigationContext`)
   - filter and command-mode buffers, and loading/error flags
@@ -96,7 +114,8 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
 - `cache/`: a SQLite database at the platform data dir (`directories` crate, e.g.
   `~/.local/share/az9s/az9s.db` on Linux).
   - `migrations.rs`: versioned schema with tables `subscriptions`,
-    `resource_groups`, `resources` and `resource_details`.
+    `resource_groups`, `resources` and `resource_details` (v1), and `kv`
+    for whole documents such as the scope tree (v2).
   - `repository.rs`: reads and writes, plus a `ResourceFilter` query builder.
   - `scoped.rs`: scope-based reads (`cached_resource_groups(subscription_ids)`,
     `cached_resources(subscription_ids, resource_group)`) that return the rows
@@ -128,7 +147,7 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
 - `app.rs`: `TuiApp` wraps `App`. It handles keys per mode (normal, filter, command,
   help) and moves between views. Opening a view switches to it immediately and
   calls `App::request`; the list fills in when the result arrives.
-- `command.rs`: parses `:` commands (`:sub`, `:rg [all|<sub>]`,
+- `command.rs`: parses `:` commands (`:mg`, `:sub`, `:rg [all|<sub>]`,
   `:res [all|<sub>]`). Command names are always singular.
 - `ui/`: rendering. List views are **virtualized**: `ListState::visible_range`
   picks the rows that fit the viewport, only those become widgets, and the scroll

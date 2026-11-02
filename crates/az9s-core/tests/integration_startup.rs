@@ -16,14 +16,20 @@ async fn startup_does_not_block_and_subscriptions_arrive_in_background() {
         "App::new took {:?}",
         started.elapsed()
     );
-    assert!(app.state().loading, "subscriptions should be loading");
+    assert!(
+        app.state().loading,
+        "subscriptions and the tree should be loading"
+    );
 
+    // Two loads run: subscriptions and the management group tree.
     let mut rx = app.take_load_receiver().expect("receiver");
-    let result = tokio::time::timeout(Duration::from_secs(60), rx.recv())
-        .await
-        .expect("subscriptions within 60s")
-        .expect("channel open");
-    app.apply(result);
+    while app.state().loading {
+        let result = tokio::time::timeout(Duration::from_secs(60), rx.recv())
+            .await
+            .expect("results within 60s")
+            .expect("channel open");
+        app.apply(result);
+    }
 
     assert!(!app.state().loading);
     assert!(app.state().error.is_none(), "{:?}", app.state().error);

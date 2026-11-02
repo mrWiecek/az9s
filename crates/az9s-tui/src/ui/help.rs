@@ -42,6 +42,16 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         Line::from("  Backspace   Go back"),
         Line::from(""),
         Line::from(vec![Span::styled(
+            "Management Group Tree",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  Space       Open / close a group"),
+        Line::from("  l/→  h/←    Open / close (h on a closed row: go to parent)"),
+        Line::from("  Enter       Resource groups of the group or subscription"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
             "Actions",
             Style::default()
                 .fg(Color::Yellow)
@@ -61,6 +71,7 @@ pub fn render_help(f: &mut Frame, area: Rect) {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )]),
+        Line::from("  :mg                      Go to the management group tree"),
         Line::from("  :sub                     Go to subscriptions"),
         Line::from("  :rg [all|<sub>]          Go to resource groups"),
         Line::from("  :res [all|<sub>]         Go to resources"),

@@ -10,7 +10,9 @@
 //! for a view the user already left can never overwrite a newer one.
 
 use crate::models::{Resource, ResourceGroup, Subscription};
+use crate::scope_tree::ScopeTree;
 use crate::timing;
+use az9s_azure::management_groups::ManagementGroupClient;
 use az9s_azure::resource_graph::{self, GraphScope, ResourceGraphClient};
 use az9s_azure::{AzureClient, AzureError};
 use futures::future::BoxFuture;
@@ -36,6 +38,8 @@ pub enum LoadRequest {
         /// Only resources in this resource group (requires exactly one subscription).
         resource_group: Option<String>,
     },
+    /// The management group tree below the tenant root.
+    ScopeTree,
 }
 
 /// Which list a request fills. One request per kind is in flight at a time.
@@ -44,6 +48,7 @@ pub enum LoadKind {
     Subscriptions,
     ResourceGroups,
     Resources,
+    ScopeTree,
 }
 
 impl LoadKind {
@@ -52,6 +57,7 @@ impl LoadKind {
             LoadKind::Subscriptions => "subscriptions",
             LoadKind::ResourceGroups => "resource groups",
             LoadKind::Resources => "resources",
+            LoadKind::ScopeTree => "management group tree",
         }
     }
 }
@@ -62,6 +68,7 @@ impl LoadRequest {
             LoadRequest::Subscriptions => LoadKind::Subscriptions,
             LoadRequest::ResourceGroups { .. } => LoadKind::ResourceGroups,
             LoadRequest::Resources { .. } => LoadKind::Resources,
+            LoadRequest::ScopeTree => LoadKind::ScopeTree,
         }
     }
 }
@@ -71,6 +78,7 @@ pub enum LoadedData {
     Subscriptions(Vec<Subscription>),
     ResourceGroups(Vec<ResourceGroup>),
     Resources(Vec<Resource>),
+    ScopeTree(ScopeTree),
 }
 
 /// Outcome of a fetch: the data (or an error), plus the subscriptions that
@@ -325,6 +333,13 @@ impl Fetcher for AzureFetcher {
                         notice: None,
                     }
                 }
+                LoadRequest::ScopeTree => FetchOutcome {
+                    data: Err("the management group tree is not available with \
+                               AZ9S_BACKEND=arm"
+                        .into()),
+                    failed_subscriptions: Vec::new(),
+                    notice: None,
+                },
             }
         }
         .boxed()
@@ -348,6 +363,8 @@ pub struct GraphFetcher {
     /// `Arc`: cloning a `OnceCell` copies it, so a per-request clone would
     /// never keep the value (that bug made every `:rg all` re-fetch it).
     home_tenant: Arc<tokio::sync::OnceCell<Option<String>>>,
+    /// Loads the management group tree, if configured.
+    management_groups: Option<Arc<ManagementGroupClient>>,
 }
 
 impl GraphFetcher {
@@ -356,7 +373,32 @@ impl GraphFetcher {
             graph,
             arm,
             home_tenant: Arc::new(tokio::sync::OnceCell::new()),
+            management_groups: None,
         }
+    }
+
+    /// Also serve [`LoadRequest::ScopeTree`] through this client.
+    pub fn with_management_groups(mut self, client: Arc<ManagementGroupClient>) -> Self {
+        self.management_groups = Some(client);
+        self
+    }
+
+    /// The tree below the tenant root group (whose name is the tenant ID).
+    async fn scope_tree(
+        graph: Arc<ResourceGraphClient>,
+        cell: Arc<tokio::sync::OnceCell<Option<String>>>,
+        client: Option<Arc<ManagementGroupClient>>,
+    ) -> Result<ScopeTree, String> {
+        let client = client.ok_or("management groups are not configured")?;
+        let tenant = Self::resolve_tenant(&graph, &cell)
+            .await
+            .ok_or("could not determine the tenant from the Azure token")?;
+        let (nodes, name) =
+            futures::join!(client.descendants(&tenant), client.display_name(&tenant));
+        let nodes = nodes.map_err(|e| e.to_string())?;
+        // The descendants are what matters; a missing name is cosmetic.
+        let name = name.unwrap_or_else(|_| "Tenant Root Group".to_string());
+        Ok(ScopeTree::from_nodes(&tenant, &name, &nodes))
     }
 }
 
@@ -388,6 +430,21 @@ impl Fetcher for GraphFetcher {
         if request == LoadRequest::Subscriptions {
             return self.arm.fetch(request, sink);
         }
+        if request == LoadRequest::ScopeTree {
+            let tree = Self::scope_tree(
+                self.graph.clone(),
+                self.home_tenant.clone(),
+                self.management_groups.clone(),
+            );
+            return async move {
+                FetchOutcome {
+                    data: tree.await.map(LoadedData::ScopeTree),
+                    failed_subscriptions: vec![],
+                    notice: None,
+                }
+            }
+            .boxed();
+        }
         let graph = self.graph.clone();
         let arm = self.arm.clone();
         let home_tenant = self.home_tenant.clone();
@@ -406,7 +463,9 @@ impl Fetcher for GraphFetcher {
                     subscription_ids.clone(),
                     LoadKind::Resources,
                 ),
-                LoadRequest::Subscriptions => unreachable!("handled above"),
+                LoadRequest::Subscriptions | LoadRequest::ScopeTree => {
+                    unreachable!("handled above")
+                }
             };
             if subscription_ids.is_empty() {
                 return FetchOutcome {
@@ -482,6 +541,7 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::Subscriptions => LoadedData::Subscriptions(vec![]),
         LoadKind::ResourceGroups => LoadedData::ResourceGroups(vec![]),
         LoadKind::Resources => LoadedData::Resources(vec![]),
+        LoadKind::ScopeTree => LoadedData::ScopeTree(ScopeTree::default()),
     }
 }
 

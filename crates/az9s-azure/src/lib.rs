@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod client;
+pub mod management_groups;
 pub mod models;
 pub mod resource_graph;
 #[cfg(any(test, feature = "test-util"))]

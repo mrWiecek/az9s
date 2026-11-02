@@ -99,6 +99,7 @@ impl Cache {
             DELETE FROM resources;
             DELETE FROM resource_groups;
             DELETE FROM subscriptions;
+            DELETE FROM kv;
             "#,
         )?;
         info!("Cleared all cached data");

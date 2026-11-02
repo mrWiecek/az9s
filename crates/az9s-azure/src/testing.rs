@@ -119,12 +119,29 @@ where
     (url, requests)
 }
 
+/// Serve every request with `respond(path_and_query, request_body)`, for
+/// APIs that differ by URL (GET requests have a `Null` body).
+pub async fn serve_paths<F>(respond: F) -> (String, Requests)
+where
+    F: Fn(&str, &Value) -> Reply + Send + Sync + 'static,
+{
+    let (url, requests, _) = serve_inner(respond).await;
+    (url, requests)
+}
+
 /// Like [`serve`], and also reports how many requests overlapped in time.
 /// Use this, not wall-clock time, to test that a client works concurrently:
 /// timings are unreliable on shared CI machines.
 pub async fn serve_counting<F>(respond: F) -> (String, Requests, Arc<Concurrency>)
 where
     F: Fn(&Value) -> Reply + Send + Sync + 'static,
+{
+    serve_inner(move |_path: &str, body: &Value| respond(body)).await
+}
+
+async fn serve_inner<F>(respond: F) -> (String, Requests, Arc<Concurrency>)
+where
+    F: Fn(&str, &Value) -> Reply + Send + Sync + 'static,
 {
     let concurrency = Arc::new(Concurrency::default());
     let in_flight = concurrency.clone();
@@ -142,12 +159,12 @@ where
             let respond = respond.clone();
             let in_flight = in_flight.clone();
             tokio::spawn(async move {
-                let Some(body) = read_request_body(&mut sock).await else {
+                let Some((path, body)) = read_request(&mut sock).await else {
                     return;
                 };
                 in_flight.enter();
                 seen.lock().unwrap().push(body.clone());
-                let reply = respond(&body);
+                let reply = respond(&path, &body);
                 if !reply.delay.is_zero() {
                     tokio::time::sleep(reply.delay).await;
                 }
@@ -169,8 +186,8 @@ where
     (format!("http://{addr}"), requests, concurrency)
 }
 
-/// Read one HTTP request and return its JSON body (`Null` if empty).
-async fn read_request_body(sock: &mut tokio::net::TcpStream) -> Option<Value> {
+/// Read one HTTP request: its path (with query) and JSON body (`Null` if empty).
+async fn read_request(sock: &mut tokio::net::TcpStream) -> Option<(String, Value)> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     let (head_end, content_length) = loop {
@@ -196,5 +213,14 @@ async fn read_request_body(sock: &mut tokio::net::TcpStream) -> Option<Value> {
         }
         buf.extend_from_slice(&chunk[..n]);
     }
-    Some(serde_json::from_slice(&buf[head_end..head_end + content_length]).unwrap_or(Value::Null))
+    // Request line: "METHOD /path?query HTTP/1.1"
+    let path = String::from_utf8_lossy(&buf[..head_end])
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("/")
+        .to_string();
+    let body =
+        serde_json::from_slice(&buf[head_end..head_end + content_length]).unwrap_or(Value::Null);
+    Some((path, body))
 }

@@ -122,3 +122,89 @@ fn perf_frame_time_with_100k_rows() {
         "filtered frame {filtered:?}"
     );
 }
+
+/// A tenant at the target scale: 100 management groups (10 under the root,
+/// 9 below each) and 2,000 subscriptions, everything expanded.
+fn app_with_large_tree() -> TuiApp {
+    use az9s_core::scope_tree::{GroupNode, ScopeTree, SubscriptionNode};
+    let cache = Cache::new(Path::new(":memory:")).expect("in-memory cache");
+    let mut app = TuiApp::new(App::offline(cache));
+    let mut groups = Vec::new();
+    for top in 0..10 {
+        groups.push(GroupNode {
+            name: format!("mg-{top}"),
+            display_name: format!("Landing zone {top}"),
+            parent: "root".into(),
+        });
+        for child in 0..9 {
+            groups.push(GroupNode {
+                name: format!("mg-{top}-{child}"),
+                display_name: format!("Zone {top} / team {child}"),
+                parent: format!("mg-{top}"),
+            });
+        }
+    }
+    let subscriptions = (0..2000)
+        .map(|i| SubscriptionNode {
+            id: format!("00000000-0000-0000-0000-{i:012}"),
+            display_name: format!("sub-{i:04}"),
+            parent: format!("mg-{}-{}", i % 10, i % 9),
+        })
+        .collect();
+    let state = app.state_mut();
+    state.set_scope_tree(ScopeTree {
+        root: "root".into(),
+        root_display_name: "Tenant Root Group".into(),
+        groups: groups.clone(),
+        subscriptions,
+    });
+    for g in &groups {
+        state.set_tree_expanded(&g.name, true);
+    }
+    state.view = ViewMode::ManagementGroupTree;
+    app
+}
+
+#[test]
+fn large_management_group_tree_renders_within_a_frame_budget() {
+    let mut app = app_with_large_tree();
+    assert_eq!(app.state().current_list_len(), 1 + 100 + 2000);
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    draw(&mut terminal, &mut app); // warm up
+
+    let mut worst = Duration::ZERO;
+    for i in 0..20 {
+        app.state_mut().list_state.selected = i * 100;
+        worst = worst.max(draw(&mut terminal, &mut app));
+    }
+    let text = screen_text(&terminal);
+    assert!(text.contains("sub-"), "subscriptions on screen");
+    // Debug builds are much slower than release; the budget is for release.
+    let budget = if cfg!(debug_assertions) {
+        Duration::from_millis(250)
+    } else {
+        Duration::from_millis(16)
+    };
+    assert!(worst < budget, "worst frame {worst:?}");
+    println!("worst tree frame: {worst:?}");
+}
+
+#[test]
+fn tree_view_shows_indentation_markers_and_counts() {
+    let mut app = app_with_large_tree();
+    let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    draw(&mut terminal, &mut app);
+    let buf = terminal.backend().buffer().clone();
+    let lines: Vec<String> = (0..buf.area.height)
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf.get(x, y).symbol().to_string())
+                .collect::<String>()
+        })
+        .collect();
+    let screen = lines.join("\n");
+    println!("{screen}");
+    assert!(screen.contains("▾ ◆ Tenant Root Group"));
+    assert!(screen.contains("2000 subscriptions"));
+    assert!(screen.contains("    ▾ ◆ Zone 0 / team 0"));
+}

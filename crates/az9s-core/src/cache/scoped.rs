@@ -33,6 +33,29 @@ fn ids_json(subscription_ids: &[String]) -> Result<String> {
 const IN_SCOPE: &str = "lower(subscription_id) IN (SELECT value FROM json_each(?1))";
 
 impl CacheRepository<'_> {
+    /// A document stored with [`CacheRepository::put_document`], and when it
+    /// was written.
+    pub fn document(&self, key: &str) -> Result<Option<(String, i64)>> {
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT value, cached_at FROM kv WHERE key = ?1")?;
+        let mut rows = stmt.query([key])?;
+        Ok(match rows.next()? {
+            Some(row) => Some((row.get(0)?, row.get(1)?)),
+            None => None,
+        })
+    }
+
+    /// Store a whole document (e.g. the management group tree as JSON).
+    pub fn put_document(&self, key: &str, value: &str) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO kv (key, value, cached_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, cached_at = excluded.cached_at",
+            params![key, value, chrono::Utc::now().timestamp()],
+        )?;
+        Ok(())
+    }
+
     /// All cached subscriptions, ordered by name.
     pub fn cached_subscriptions(&self) -> Result<Cached<Subscription>> {
         let mut stmt = self.conn().prepare(
@@ -261,6 +284,18 @@ mod tests {
 
     fn ids(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn documents_are_stored_and_overwritten() {
+        let cache = Cache::new(Path::new(":memory:")).unwrap();
+        let repo = cache.repository();
+        assert!(repo.document("tree").unwrap().is_none());
+        repo.put_document("tree", "v1").unwrap();
+        repo.put_document("tree", "v2").unwrap();
+        let (value, cached_at) = repo.document("tree").unwrap().unwrap();
+        assert_eq!(value, "v2");
+        assert!(cached_at > 0);
     }
 
     fn sub(id: &str) -> Subscription {

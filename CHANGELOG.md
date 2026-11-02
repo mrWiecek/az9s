@@ -12,6 +12,34 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-02
+
+### Added
+- **Management group tree, the new start view** (`:mg`). az9s opens at the
+  tenant root management group and shows the hierarchy down to subscriptions,
+  with the number of subscriptions below each group.
+  - `Space` opens or closes a group; `l`/`→` opens, `h`/`←` closes (on a
+    closed row it jumps to the parent).
+  - `Enter` on a group lists the resource groups of every enabled
+    subscription below it, in one Resource Graph query. `r` refreshes that
+    same scope, and `Esc` returns to the tree with the group still selected.
+    `Enter` on a subscription opens its resource groups.
+  - `/` filters the tree; matches are shown with their parent groups opened.
+  - Subscriptions you can see but that are not in the tree (e.g. from another
+    tenant) are listed under "Not in the management group tree".
+  - The tree is cached and shown instantly on the next start, then refreshed
+    in the background (one call to the management group descendants API).
+  - If the tree can't be loaded (no read access on the tenant root, or
+    `AZ9S_BACKEND=arm`) and nothing is cached, az9s starts on the
+    subscription list and says why in the status bar.
+- Going back (`Esc`) now restores the selected row in every list, not just the
+  first row.
+- `azure.management_groups` in `--timings`.
+
+### Fixed
+- A long subscription name with non-ASCII characters could crash the header
+  breadcrumb (byte-index string slicing).
+
 ## [0.2.2] - 2026-11-02
 
 ### Fixed
@@ -194,7 +222,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/mrWiecek/az9s/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/mrWiecek/az9s/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/mrWiecek/az9s/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/mrWiecek/az9s/compare/v0.1.0...v0.2.0
