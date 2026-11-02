@@ -4,8 +4,24 @@ use tracing::info;
 /// Current schema version
 const CURRENT_VERSION: i32 = 2;
 
-/// Run all pending migrations
+/// Run all pending migrations.
+///
+/// Runs in one `BEGIN IMMEDIATE` transaction: it takes the write lock before
+/// reading the schema version, so when several processes open the database
+/// at once, the others wait (busy timeout) and then find nothing to do,
+/// instead of applying the same migration twice.
 pub fn run_migrations(conn: &Connection) -> Result<()> {
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    match migrate(conn) {
+        Ok(()) => conn.execute_batch("COMMIT"),
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
+}
+
+fn migrate(conn: &Connection) -> Result<()> {
     // Create migrations table if it doesn't exist
     conn.execute(
         r#"
@@ -170,6 +186,40 @@ mod tests {
 
         let version = get_current_version(&conn).unwrap();
         assert_eq!(version, CURRENT_VERSION);
+    }
+
+    /// Two az9s processes (or the two live tests in `integration_startup`)
+    /// opening the same database at once must not both apply a migration
+    /// (issue #9: "UNIQUE constraint failed: schema_migrations.version").
+    #[test]
+    fn concurrent_migrations_apply_each_version_once() {
+        for attempt in 0..20 {
+            let path = std::env::temp_dir().join(format!(
+                "az9s-migrations-{}-{attempt}.db",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_file(&path);
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+            let handles: Vec<_> = (0..4)
+                .map(|_| {
+                    let path = path.clone();
+                    let barrier = barrier.clone();
+                    std::thread::spawn(move || {
+                        let conn = Connection::open(&path).unwrap();
+                        conn.busy_timeout(std::time::Duration::from_secs(10))
+                            .unwrap();
+                        barrier.wait();
+                        run_migrations(&conn)
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().unwrap().expect("migration must not fail");
+            }
+            let conn = Connection::open(&path).unwrap();
+            assert_eq!(get_current_version(&conn).unwrap(), CURRENT_VERSION);
+            let _ = std::fs::remove_file(&path);
+        }
     }
 
     #[test]
