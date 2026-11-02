@@ -450,6 +450,15 @@ pub fn resources_query(resource_group: Option<&str>) -> String {
     )
 }
 
+/// KQL returning one resource's full document (properties, sku, identity,
+/// zones, tags...) by ID.
+pub fn resource_detail_query(resource_id: &str) -> String {
+    format!(
+        "resources | where id =~ {} | limit 1",
+        kql_string(resource_id)
+    )
+}
+
 fn str_field(row: &Value, key: &str) -> String {
     row.get(key)
         .and_then(Value::as_str)
@@ -517,6 +526,14 @@ mod tests {
     use super::*;
     use crate::testing::{error, ok, serve, serve_counting, serve_sequence, Reply, StaticToken};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn detail_query_escapes_the_id() {
+        assert_eq!(
+            resource_detail_query("/subscriptions/s/x/it's"),
+            r"resources | where id =~ '/subscriptions/s/x/it\'s' | limit 1"
+        );
+    }
 
     fn client(endpoint: &str) -> ResourceGraphClient {
         ResourceGraphClient::with_endpoint(endpoint, Arc::new(StaticToken("t".into())))

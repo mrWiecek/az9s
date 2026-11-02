@@ -117,6 +117,35 @@ impl App {
         self.request(LoadRequest::ScopeTree);
     }
 
+    /// Show `resource` in the detail view now and load its full document
+    /// (cached first, then from Azure).
+    pub fn open_resource_detail(&mut self, resource: crate::models::Resource) {
+        let request = LoadRequest::ResourceDetail {
+            resource_id: resource.id.clone(),
+            subscription_id: resource.subscription_id.clone(),
+        };
+        let state = &mut self.state;
+        state.selected_resource_detail = Some(resource);
+        state.resource_document = None;
+        state.freshness.remove(&ViewMode::ResourceDetail);
+        state.detail_tab = Default::default();
+        state.detail_scroll = 0;
+        state.view = ViewMode::ResourceDetail;
+        state.list_state.reset();
+        self.request(request);
+    }
+
+    /// Reload the open resource's document.
+    pub fn refresh_resource_detail(&mut self) {
+        if let Some(resource) = &self.state.selected_resource_detail {
+            let request = LoadRequest::ResourceDetail {
+                resource_id: resource.id.clone(),
+                subscription_id: resource.subscription_id.clone(),
+            };
+            self.request(request);
+        }
+    }
+
     /// The tree couldn't be shown: go to the subscription list and say why.
     fn fall_back_to_subscriptions(&mut self, reason: &str) {
         if self.state.view == ViewMode::ManagementGroupTree {
@@ -158,6 +187,12 @@ impl App {
                 },
                 None => (LoadedData::ScopeTree(Default::default()), None),
             }),
+            LoadRequest::ResourceDetail { resource_id, .. } => repo
+                .cached_resource_detail(resource_id)
+                .map(|cached| match cached {
+                    Some((doc, cached_at)) => (LoadedData::ResourceDetail(doc), Some(cached_at)),
+                    None => (LoadedData::ResourceDetail(serde_json::Value::Null), None),
+                }),
             LoadRequest::ResourceGroups { subscription_ids } => {
                 let _t = timing::timer("cache.read_resource_groups");
                 repo.cached_resource_groups(subscription_ids).map(|c| {
@@ -202,6 +237,7 @@ impl App {
             LoadKind::ResourceGroups => self.state.resource_groups.len(),
             LoadKind::Resources => self.state.resources.len(),
             LoadKind::ScopeTree => usize::from(self.state.scope_tree.is_some()),
+            LoadKind::ResourceDetail => usize::from(self.state.resource_document.is_some()),
         }
     }
 
@@ -309,6 +345,9 @@ impl App {
                 // enough. Otherwise the list is empty or incomplete: error.
                 if kind == LoadKind::ScopeTree && !pending.staged {
                     self.fall_back_to_subscriptions(&e);
+                } else if kind == LoadKind::ResourceDetail && !pending.staged {
+                    // The view still shows what the list knew: no popup.
+                    self.state.notice = Some(format!("Details unavailable: {e}"));
                 } else if pending.staged {
                     let age = self
                         .state
@@ -344,6 +383,9 @@ impl App {
             }
             LoadedData::Resources(items) => put(&mut self.state.resources, items, append),
             LoadedData::ScopeTree(tree) => self.state.set_scope_tree(tree),
+            LoadedData::ResourceDetail(doc) => {
+                self.state.resource_document = Some(doc).filter(|d| !d.is_null())
+            }
         }
     }
 
@@ -382,6 +424,15 @@ impl App {
                 resource_group: resource_group.clone(),
                 items: self.state.resources.clone(),
             },
+            LoadRequest::ResourceDetail { resource_id, .. } => {
+                match &self.state.resource_document {
+                    Some(doc) => WriteJob::ResourceDetail {
+                        resource_id: resource_id.clone(),
+                        document: doc.clone(),
+                    },
+                    None => return,
+                }
+            }
             LoadRequest::ScopeTree => match &self.state.scope_tree {
                 Some(tree) => match serde_json::to_string(tree) {
                     Ok(value) => WriteJob::Document {
@@ -429,6 +480,7 @@ fn view_of(kind: LoadKind) -> ViewMode {
         LoadKind::ResourceGroups => ViewMode::ResourceGroupList,
         LoadKind::Resources => ViewMode::ResourceList,
         LoadKind::ScopeTree => ViewMode::ManagementGroupTree,
+        LoadKind::ResourceDetail => ViewMode::ResourceDetail,
     }
 }
 

@@ -42,6 +42,16 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         Line::from("  Backspace   Go back"),
         Line::from(""),
         Line::from(vec![Span::styled(
+            "Resource Detail",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  Tab/l, Shift+Tab/h  Next / previous tab"),
+        Line::from("  1 2 3       Overview, Tags, JSON"),
+        Line::from("  j/k, g/G, Ctrl+d/u  Scroll"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
             "Management Group Tree",
             Style::default()
                 .fg(Color::Yellow)
@@ -58,6 +68,8 @@ pub fn render_help(f: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )]),
         Line::from("  r           Refresh current view"),
+        Line::from("  y           Copy the selected item's Azure ID"),
+        Line::from("  o           Open the selected item in the Azure Portal"),
         Line::from("  Ctrl+r      Force refresh from Azure"),
         Line::from("  /           Enter filter mode"),
         Line::from("  :           Enter command mode (k9s-like)"),

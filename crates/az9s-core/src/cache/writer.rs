@@ -32,6 +32,11 @@ pub enum WriteJob {
         resource_group: Option<String>,
         items: Vec<Resource>,
     },
+    /// Cache one resource's full document.
+    ResourceDetail {
+        resource_id: String,
+        document: serde_json::Value,
+    },
     /// Store a whole document under a key.
     Document {
         key: String,
@@ -61,6 +66,13 @@ impl WriteJob {
             } => {
                 let _t = timing::timer("cache.write_resources");
                 repo.replace_resources(&subscription_ids, resource_group.as_deref(), &items)
+            }
+            WriteJob::ResourceDetail {
+                resource_id,
+                document,
+            } => {
+                let _t = timing::timer("cache.write_resource_detail");
+                repo.put_resource_detail(&resource_id, &document)
             }
             WriteJob::Document { key, value } => {
                 let _t = timing::timer("cache.write_document");

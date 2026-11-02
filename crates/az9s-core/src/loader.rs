@@ -40,6 +40,11 @@ pub enum LoadRequest {
     },
     /// The management group tree below the tenant root.
     ScopeTree,
+    /// One resource's full document.
+    ResourceDetail {
+        resource_id: String,
+        subscription_id: String,
+    },
 }
 
 /// Which list a request fills. One request per kind is in flight at a time.
@@ -49,6 +54,7 @@ pub enum LoadKind {
     ResourceGroups,
     Resources,
     ScopeTree,
+    ResourceDetail,
 }
 
 impl LoadKind {
@@ -58,6 +64,7 @@ impl LoadKind {
             LoadKind::ResourceGroups => "resource groups",
             LoadKind::Resources => "resources",
             LoadKind::ScopeTree => "management group tree",
+            LoadKind::ResourceDetail => "resource details",
         }
     }
 }
@@ -69,6 +76,7 @@ impl LoadRequest {
             LoadRequest::ResourceGroups { .. } => LoadKind::ResourceGroups,
             LoadRequest::Resources { .. } => LoadKind::Resources,
             LoadRequest::ScopeTree => LoadKind::ScopeTree,
+            LoadRequest::ResourceDetail { .. } => LoadKind::ResourceDetail,
         }
     }
 }
@@ -79,6 +87,8 @@ pub enum LoadedData {
     ResourceGroups(Vec<ResourceGroup>),
     Resources(Vec<Resource>),
     ScopeTree(ScopeTree),
+    /// A resource's document (`Null` only as an empty placeholder).
+    ResourceDetail(serde_json::Value),
 }
 
 /// Outcome of a fetch: the data (or an error), plus the subscriptions that
@@ -340,6 +350,13 @@ impl Fetcher for AzureFetcher {
                     failed_subscriptions: Vec::new(),
                     notice: None,
                 },
+                LoadRequest::ResourceDetail { .. } => FetchOutcome {
+                    data: Err("resource details need Resource Graph \
+                               (not available with AZ9S_BACKEND=arm)"
+                        .into()),
+                    failed_subscriptions: Vec::new(),
+                    notice: None,
+                },
             }
         }
         .boxed()
@@ -430,6 +447,39 @@ impl Fetcher for GraphFetcher {
         if request == LoadRequest::Subscriptions {
             return self.arm.fetch(request, sink);
         }
+        if let LoadRequest::ResourceDetail {
+            resource_id,
+            subscription_id,
+        } = &request
+        {
+            let graph = self.graph.clone();
+            let query = resource_graph::resource_detail_query(resource_id);
+            let scope = GraphScope::Subscriptions(vec![subscription_id.clone()]);
+            return async move {
+                let _t = timing::timer("azure.resource_detail");
+                let mut first = None;
+                let result = graph
+                    .query_pages(&query, &scope, |rows| {
+                        if first.is_none() {
+                            first = rows.into_iter().next();
+                        }
+                    })
+                    .await;
+                let data = match (result, first) {
+                    (Ok(_), Some(doc)) => Ok(LoadedData::ResourceDetail(doc)),
+                    (Ok(_), None) => Err("not found in Resource Graph (it can lag \
+                                          behind ARM for a few minutes)"
+                        .to_string()),
+                    (Err(e), _) => Err(e.to_string()),
+                };
+                FetchOutcome {
+                    data,
+                    failed_subscriptions: vec![],
+                    notice: None,
+                }
+            }
+            .boxed();
+        }
         if request == LoadRequest::ScopeTree {
             let tree = Self::scope_tree(
                 self.graph.clone(),
@@ -463,7 +513,9 @@ impl Fetcher for GraphFetcher {
                     subscription_ids.clone(),
                     LoadKind::Resources,
                 ),
-                LoadRequest::Subscriptions | LoadRequest::ScopeTree => {
+                LoadRequest::Subscriptions
+                | LoadRequest::ScopeTree
+                | LoadRequest::ResourceDetail { .. } => {
                     unreachable!("handled above")
                 }
             };
@@ -542,6 +594,7 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::ResourceGroups => LoadedData::ResourceGroups(vec![]),
         LoadKind::Resources => LoadedData::Resources(vec![]),
         LoadKind::ScopeTree => LoadedData::ScopeTree(ScopeTree::default()),
+        LoadKind::ResourceDetail => LoadedData::ResourceDetail(serde_json::Value::Null),
     }
 }
 

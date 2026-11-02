@@ -6,15 +6,16 @@ pub mod widgets;
 
 use crate::TuiApp;
 use anyhow::Result;
+use az9s_core::detail;
 use az9s_core::scope_tree::TreeRowKind;
-use az9s_core::state::{AppState, ViewMode};
+use az9s_core::state::{AppState, DetailTab, ViewMode};
 use breadcrumb::Breadcrumb;
 use help::render_help;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, StatefulWidget, Wrap},
+    widgets::{Block, Borders, Paragraph, StatefulWidget, Tabs, Wrap},
     Frame,
 };
 use status_bar::StatusBar;
@@ -527,108 +528,8 @@ fn draw_resource_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()>
     Ok(())
 }
 
-/// Draw resource detail view
-fn draw_resource_detail(f: &mut Frame, area: Rect, app: &TuiApp) -> Result<()> {
-    if let Some(resource) = &app.state().selected_resource_detail {
-        // Create detailed view with resource properties
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled(
-                    "Name: ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(&resource.name, Style::default().fg(Color::White)),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    "Type: ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(&resource.resource_type, Style::default().fg(Color::White)),
-            ]),
-            Line::from(vec![
-                Span::styled("  Short: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    resource_type::short_label(&resource.resource_type),
-                    Style::default().fg(Color::Yellow),
-                ),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    "Location: ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(&resource.location, Style::default().fg(Color::Yellow)),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    "Resource Group: ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(&resource.resource_group, Style::default().fg(Color::White)),
-            ]),
-            Line::from(""),
-            Line::from(vec![Span::styled(
-                "ID: ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )]),
-            Line::from(Span::styled(
-                &resource.id,
-                Style::default().fg(Color::DarkGray),
-            )),
-        ];
-
-        // Add tags section if present
-        if !resource.tags.is_empty() {
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![Span::styled(
-                "Tags:",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )]));
-            for (key, value) in &resource.tags {
-                lines.push(Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(format!("{}: ", key), Style::default().fg(Color::Yellow)),
-                    Span::styled(value, Style::default().fg(Color::White)),
-                ]));
-            }
-        } else {
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "Tags: ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("none", Style::default().fg(Color::DarkGray)),
-            ]));
-        }
-
-        let content = Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Resource Detail"),
-            )
-            .wrap(Wrap { trim: true });
-        f.render_widget(content, area);
-    } else {
+fn draw_resource_detail(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
+    let Some(resource) = app.state().selected_resource_detail.clone() else {
         let content = Paragraph::new("No resource selected.\n\nPress Esc to go back.")
             .block(
                 Block::default()
@@ -638,8 +539,150 @@ fn draw_resource_detail(f: &mut Frame, area: Rect, app: &TuiApp) -> Result<()> {
             .style(Style::default().fg(Color::Gray))
             .wrap(Wrap { trim: true });
         f.render_widget(content, area);
-    }
+        return Ok(());
+    };
+    let state = app.state();
+    let doc = state.resource_document.as_ref();
+    let tab = state.detail_tab;
+
+    let lines: Vec<Line> = match tab {
+        DetailTab::Overview => overview_lines(&detail::overview(doc, &resource)),
+        DetailTab::Tags => {
+            let tags = detail::tags(doc, &resource);
+            if tags.is_empty() {
+                vec![Line::from(Span::styled(
+                    "No tags.",
+                    Style::default().fg(Color::DarkGray),
+                ))]
+            } else {
+                let width = tags
+                    .iter()
+                    .map(|(k, _)| k.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                tags.into_iter()
+                    .map(|(k, v)| {
+                        Line::from(vec![
+                            Span::styled(
+                                format!("{k:<width$}  "),
+                                Style::default().fg(Color::Yellow),
+                            ),
+                            Span::styled(v, Style::default().fg(Color::White)),
+                        ])
+                    })
+                    .collect()
+            }
+        }
+        DetailTab::Json => detail::json_text(doc).lines().map(json_line).collect(),
+    };
+    let loading_hint = if doc.is_none() && state.loading {
+        " · loading details…"
+    } else {
+        ""
+    };
+
+    let block = Block::default().borders(Borders::ALL).title(format!(
+        "{} · {}{}",
+        truncate_with_ellipsis(&resource.name, 60),
+        resource_type::short_label(&resource.resource_type),
+        loading_hint
+    ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let parts = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(0)])
+        .split(inner);
+
+    let titles: Vec<Line> = DetailTab::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, t)| Line::from(format!("{} {}", i + 1, t.title())))
+        .collect();
+    let tabs = Tabs::new(titles)
+        .select(tab.index())
+        .style(Style::default().fg(Color::Gray))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .divider("│");
+    f.render_widget(tabs, parts[0]);
+
+    // Clamp the scroll so the last line can reach the bottom but not beyond.
+    let viewport = parts[1].height as usize;
+    let max_scroll = lines.len().saturating_sub(viewport);
+    let scroll = state.detail_scroll.min(max_scroll);
+    let content = Paragraph::new(lines).scroll((scroll.min(u16::MAX as usize) as u16, 0));
+    f.render_widget(content, parts[1]);
+    app.state_mut().detail_scroll = scroll;
     Ok(())
+}
+
+/// The Overview tab: a heading per section, then aligned label/value rows.
+fn overview_lines(sections: &[detail::Section]) -> Vec<Line<'static>> {
+    let width = sections
+        .iter()
+        .flat_map(|s| s.rows.iter().map(|(l, _)| l.chars().count()))
+        .max()
+        .unwrap_or(0)
+        .min(40);
+    let mut lines = Vec::new();
+    for (i, section) in sections.iter().enumerate() {
+        if i > 0 {
+            lines.push(Line::from(""));
+        }
+        lines.push(Line::from(Span::styled(
+            section.title,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for (label, value) in &section.rows {
+            let label = truncate_with_ellipsis(label, width);
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {label:<width$}  "),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::styled(value.clone(), Style::default().fg(Color::White)),
+            ]));
+        }
+    }
+    lines
+}
+
+/// One line of pretty-printed JSON with keys and values coloured.
+fn json_line(line: &str) -> Line<'static> {
+    let indent_len = line.len() - line.trim_start().len();
+    let (indent, rest) = line.split_at(indent_len);
+    let mut spans = vec![Span::raw(indent.to_string())];
+    // `"key": value` — split after the key's closing quote and colon.
+    let value = match rest.find("\": ") {
+        Some(i) if rest.starts_with('"') => {
+            spans.push(Span::styled(
+                rest[..i + 1].to_string(),
+                Style::default().fg(Color::Cyan),
+            ));
+            spans.push(Span::raw(": "));
+            &rest[i + 3..]
+        }
+        _ => rest,
+    };
+    let bare = value.trim_end_matches(',');
+    let color = if bare.starts_with('"') {
+        Color::Green
+    } else if bare == "true" || bare == "false" || bare == "null" {
+        Color::Magenta
+    } else if bare.starts_with(|c: char| c == '-' || c.is_ascii_digit()) {
+        Color::Yellow
+    } else {
+        Color::Gray
+    };
+    spans.push(Span::styled(value.to_string(), Style::default().fg(color)));
+    Line::from(spans)
 }
 
 /// Draw logs view
@@ -722,7 +765,15 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("Esc", "Back"),
                 ("q", "Quit"),
             ],
-            ViewMode::ResourceDetail => vec![("Esc", "Back"), ("?", "Help"), ("q", "Quit")],
+            ViewMode::ResourceDetail => vec![
+                ("Tab/1-3", "Tabs"),
+                ("↑↓/jk", "Scroll"),
+                ("y", "Copy ID"),
+                ("o", "Portal"),
+                ("r", "Refresh"),
+                ("Esc", "Back"),
+                ("q", "Quit"),
+            ],
             _ => vec![
                 ("↑↓/jk", "Navigate"),
                 ("Enter", "Select"),

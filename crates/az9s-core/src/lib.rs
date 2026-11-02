@@ -1,5 +1,6 @@
 pub mod app;
 pub mod cache;
+pub mod detail;
 pub mod loader;
 pub mod models;
 pub mod scope_tree;

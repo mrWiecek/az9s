@@ -12,6 +12,35 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-02
+
+### Added
+- **Resource detail view with Overview, Tags and JSON tabs.** `Enter` on a
+  resource opens it at once with what the list knows, then loads the full
+  resource document (one Resource Graph query) in the background.
+  - Overview: name, type, kind, location, zones, resource group,
+    subscription, provisioning state, managed by, ID, plus SKU, managed
+    identity, plan, and the values in `properties` as dotted names (e.g.
+    `hardwareProfile.vmSize`, up to 60 rows).
+  - Tags: sorted by key. JSON: the whole document, colour-highlighted.
+  - `Tab`/`Shift+Tab` (or `l`/`h`, `1`-`3`) switch tabs; `j`/`k`, `g`/`G`,
+    `Ctrl+D`/`Ctrl+U` scroll; `r` reloads.
+  - Documents are cached: reopening a resource shows it instantly, then
+    refreshes. If loading fails, the basic view stays with a status-bar
+    notice instead of an error popup.
+- **`y` copies the selected item's Azure ID** (subscription, management
+  group, resource group or resource) in every view. It uses the terminal's
+  clipboard support (OSC 52), so it also works over SSH; in tmux, enable
+  `set-clipboard`.
+- **`o` opens the selected item in the Azure Portal**, in the right tenant.
+  If no browser can be started, the status bar shows the link.
+- `azure.resource_detail` in `--timings`.
+
+### Changed
+- Refreshing a resource list now deletes only the cached resources that are
+  gone from Azure, instead of rewriting the whole scope, so cached resource
+  details survive a refresh.
+
 ## [0.3.0] - 2026-11-02
 
 ### Added
@@ -222,7 +251,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/mrWiecek/az9s/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/mrWiecek/az9s/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/mrWiecek/az9s/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/mrWiecek/az9s/compare/v0.2.0...v0.2.1

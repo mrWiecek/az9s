@@ -24,6 +24,15 @@ pub struct AppState {
     /// Selected resource for detail view
     pub selected_resource_detail: Option<Resource>,
 
+    /// Full document of the resource in the detail view, once loaded
+    pub resource_document: Option<serde_json::Value>,
+
+    /// Active tab of the detail view
+    pub detail_tab: DetailTab,
+
+    /// First visible line of the detail view's content
+    pub detail_scroll: usize,
+
     /// Navigation history
     pub navigation_stack: Vec<NavigationContext>,
 
@@ -133,6 +142,37 @@ pub enum ViewMode {
     ResourceList,
     ResourceDetail,
     Logs,
+}
+
+/// Tabs of the resource detail view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DetailTab {
+    #[default]
+    Overview,
+    Tags,
+    Json,
+}
+
+impl DetailTab {
+    pub const ALL: [DetailTab; 3] = [DetailTab::Overview, DetailTab::Tags, DetailTab::Json];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            DetailTab::Overview => "Overview",
+            DetailTab::Tags => "Tags",
+            DetailTab::Json => "JSON",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|t| *t == self).unwrap_or(0)
+    }
+
+    /// The tab `step` places to the right (negative: left), wrapping.
+    pub fn cycle(self, step: isize) -> Self {
+        let n = Self::ALL.len() as isize;
+        Self::ALL[(self.index() as isize + step).rem_euclid(n) as usize]
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -357,11 +397,52 @@ impl AppState {
     /// Freshness of the list behind the current view (a resource's detail
     /// view uses the resource list's).
     pub fn current_freshness(&self) -> Option<Freshness> {
-        let view = match self.view {
-            ViewMode::ResourceDetail => ViewMode::ResourceList,
-            ref v => v.clone(),
-        };
-        self.freshness.get(&view).copied()
+        match self.view {
+            // Until its document loads, the detail view shows the list's row.
+            ViewMode::ResourceDetail if self.resource_document.is_none() => {
+                self.freshness.get(&ViewMode::ResourceList).copied()
+            }
+            ref v => self.freshness.get(v).copied(),
+        }
+    }
+
+    /// Full ARM ID of what is selected (or open, in the detail view): for
+    /// `y` (copy) and `o` (open in the Portal).
+    pub fn selected_arm_id(&self) -> Option<String> {
+        match self.view {
+            ViewMode::SubscriptionList => self
+                .selected_subscription()
+                .map(|s| format!("/subscriptions/{}", s.id)),
+            ViewMode::ResourceGroupList => self.selected_resource_group().map(|r| r.id.clone()),
+            ViewMode::ResourceList => self.selected_resource().map(|r| r.id.clone()),
+            ViewMode::ResourceDetail => {
+                self.selected_resource_detail.as_ref().map(|r| r.id.clone())
+            }
+            ViewMode::ManagementGroupTree => {
+                let row = self.selected_tree_row()?;
+                match row.kind {
+                    crate::scope_tree::TreeRowKind::ManagementGroup => Some(format!(
+                        "/providers/Microsoft.Management/managementGroups/{}",
+                        row.key
+                    )),
+                    crate::scope_tree::TreeRowKind::Subscription => {
+                        Some(format!("/subscriptions/{}", row.key))
+                    }
+                    crate::scope_tree::TreeRowKind::Unplaced => None,
+                }
+            }
+            ViewMode::Logs => None,
+        }
+    }
+
+    /// Tenant to open Portal links in: the selected subscription's, or the
+    /// tree's root (the tenant root group's name is the tenant ID).
+    pub fn portal_tenant(&self) -> Option<String> {
+        self.selected_subscription
+            .as_ref()
+            .map(|s| s.tenant_id.clone())
+            .filter(|t| !t.is_empty())
+            .or_else(|| self.scope_tree.as_ref().map(|t| t.root.clone()))
     }
 
     /// ID of the selected row in the current list view.
