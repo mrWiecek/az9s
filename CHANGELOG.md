@@ -41,6 +41,17 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
   gone from Azure, instead of rewriting the whole scope, so cached resource
   details survive a refresh.
 
+## [0.3.1] - 2026-11-02
+
+### Fixed
+- **Starting two az9s processes at once could crash with "UNIQUE constraint
+  failed: schema_migrations.version"** (#9), e.g. right after upgrading to
+  0.3.0, whose cache format change (migration v2) both tried to apply.
+  Migrations now run in one transaction that takes the database's write
+  lock first; the other process waits and finds nothing left to do.
+- Two processes creating a new cache file at the same moment could fail with
+  "database is locked" while switching it to WAL mode. az9s now retries.
+
 ## [0.3.0] - 2026-11-02
 
 ### Added
@@ -252,7 +263,8 @@ Already in the codebase before this changelog was started:
   answers (M1 step 4).
 
 [Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/mrWiecek/az9s/compare/v0.3.0...v0.4.0
+[0.4.0]: https://github.com/mrWiecek/az9s/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/mrWiecek/az9s/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/mrWiecek/az9s/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/mrWiecek/az9s/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/mrWiecek/az9s/compare/v0.2.0...v0.2.1
