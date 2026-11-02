@@ -32,6 +32,31 @@ pub struct Cache {
     writer: Option<writer::Writer>,
 }
 
+/// Switch the database to WAL mode (stored in the file, so this is a no-op
+/// after the first run). Changing the journal mode fails at once with "database
+/// is locked" while another connection uses the file — the busy timeout does
+/// not cover it — so when two processes start together on a new cache file,
+/// retry briefly.
+fn enable_wal(conn: &Connection) -> Result<()> {
+    let mut attempts = 0;
+    loop {
+        let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
+        if mode.eq_ignore_ascii_case("wal") {
+            return Ok(());
+        }
+        match conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0)) {
+            Ok(_) => return Ok(()),
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == rusqlite::ErrorCode::DatabaseBusy && attempts < 100 =>
+            {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
 impl Cache {
     /// Create a new cache instance with automatic migrations.
     ///
@@ -42,9 +67,11 @@ impl Cache {
         let conn = Connection::open(path)?;
         let in_memory = path == Path::new(":memory:");
         if !in_memory {
-            // WAL lets this connection read while the writer thread writes.
-            let _: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
+            // Another az9s process may hold the lock (e.g. while migrating):
+            // wait for it rather than fail. Set before anything that locks.
             conn.busy_timeout(std::time::Duration::from_secs(10))?;
+            // WAL lets this connection read while the writer thread writes.
+            enable_wal(&conn)?;
         }
 
         let mut cache = Self { conn, writer: None };
@@ -449,5 +476,29 @@ mod writer_tests {
         assert_eq!(cache.repository().get_subscriptions().unwrap().len(), 1);
         drop(cache);
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    /// Two processes starting at once on the same cache file (issue #9).
+    #[test]
+    fn caches_opened_concurrently_on_one_file_all_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("az9s.db");
+        for _ in 0..10 {
+            let _ = std::fs::remove_file(&path);
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+            let handles: Vec<_> = (0..4)
+                .map(|_| {
+                    let path = path.clone();
+                    let barrier = barrier.clone();
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        Cache::new(&path).map(|_| ())
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().unwrap().expect("cache must open");
+            }
+        }
     }
 }
