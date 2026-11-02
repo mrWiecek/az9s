@@ -198,3 +198,38 @@ async fn all_subscriptions_view_skips_disabled_and_survives_back_navigation() {
     assert_eq!(app.state().view, ViewMode::ResourceGroupList);
     assert!(app.state().cross_subscription_mode, "scope lost on back");
 }
+
+#[tokio::test]
+async fn reopening_a_subscription_shows_cached_groups_before_azure_answers() {
+    let (mut app, _azure) = setup();
+    // The cache knows the subscriptions (resource groups reference them).
+    let subs = app.state().subscriptions.clone();
+    app.core()
+        .cache()
+        .repository()
+        .replace_subscriptions(&subs)
+        .unwrap();
+    let mut loads = app.take_load_receiver().unwrap();
+
+    // First visit: nothing cached, wait for Azure.
+    press(&mut app, KeyCode::Enter).await;
+    assert!(app.state().resource_groups.is_empty());
+    app.apply_load(loads.recv().await.unwrap());
+    assert_eq!(app.state().resource_groups.len(), 1);
+
+    // Back, and open the same subscription again.
+    press(&mut app, KeyCode::Esc).await;
+    let started = Instant::now();
+    press(&mut app, KeyCode::Enter).await;
+    assert!(started.elapsed() < AZURE_LATENCY / 3);
+
+    // Rows are on screen immediately, from the cache, while Azure loads.
+    assert!(app.state().loading);
+    assert_eq!(app.state().resource_groups.len(), 1);
+    let fresh = app.state().current_freshness().unwrap();
+    assert_eq!(fresh.source, az9s_core::state::DataSource::Cache);
+
+    app.apply_load(loads.recv().await.unwrap());
+    let fresh = app.state().current_freshness().unwrap();
+    assert_eq!(fresh.source, az9s_core::state::DataSource::Azure);
+}

@@ -12,6 +12,37 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-02
+
+### Added
+- **Cache-first views.** Opening a resource group or resource list (one
+  subscription, one resource group, or `:rg all` / `:res all`) shows the cached
+  rows for exactly that scope immediately, then refreshes from Azure in the
+  background.
+  - When cached rows are on screen, fresh pages are collected off-screen and
+    swapped in once, so the list doesn't shrink to the first page. The
+    selection stays on the same item.
+  - With nothing cached, pages stream in as before.
+- **Data age in the status bar** for the current view, e.g. `● Azure · just now`
+  or `◐ Cached · 3h ago`.
+
+### Changed
+- When Azure can't be reached but cached rows are on screen, az9s shows a
+  status-bar warning instead of an error popup.
+- Cache writes run on a background thread, and the database uses WAL mode.
+  Writing 20k resources takes about 0.5 s, which used to block the UI.
+- A completed refresh replaces the cached scope as a whole, so resources and
+  resource groups deleted in Azure disappear from the cache. Subscriptions that
+  failed to load keep their cached rows.
+
+### Fixed
+- **Every start of az9s wiped the cached resource groups and resources.**
+  Refreshing subscriptions used `INSERT OR REPLACE`, which SQLite runs as
+  delete + insert, and the schema's `ON DELETE CASCADE` then deleted every
+  child row. All cache writes to parent tables now use upserts.
+- A long subscription name with non-ASCII characters could crash the status
+  bar (byte-index string slicing).
+
 ## [0.1.0] - 2026-11-02
 
 First tagged release.
@@ -132,5 +163,6 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/mrWiecek/az9s/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mrWiecek/az9s/releases/tag/v0.1.0

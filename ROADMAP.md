@@ -133,7 +133,7 @@ Work items, in order:
 - [x] **Fix the RG view bug.** Resources shown under a resource group are filtered to
       that group on the server (ARM `list_by_resource_group` for now; Resource
       Graph in step 3).
-- [ ] **Cache-first (stale-while-revalidate).** Render cached data immediately,
+- [x] **Cache-first (stale-while-revalidate).** Render cached data immediately,
       refresh in the background, and show data age in the status bar.
 - [x] **Scope-aware queries.** Resource Graph queries can target a management group
       as well as a list of subscriptions.

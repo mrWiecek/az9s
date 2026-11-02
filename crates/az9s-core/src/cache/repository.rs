@@ -8,9 +8,16 @@ pub struct CacheRepository<'a> {
     conn: &'a Connection,
 }
 
+// Never `INSERT OR REPLACE` into a parent table (subscriptions, resources):
+// SQLite runs REPLACE as delete + insert, which fires ON DELETE CASCADE and
+// wipes the children. Use `INSERT .. ON CONFLICT(id) DO UPDATE` instead.
 impl<'a> CacheRepository<'a> {
     pub fn new(conn: &'a Connection) -> Self {
         Self { conn }
+    }
+
+    pub(super) fn conn(&self) -> &'a Connection {
+        self.conn
     }
 
     // ==================== Subscriptions ====================
@@ -20,8 +27,8 @@ impl<'a> CacheRepository<'a> {
         let now = chrono::Utc::now().timestamp();
 
         self.conn.execute(
-            "INSERT OR REPLACE INTO subscriptions (id, name, state, tenant_id, cached_at) 
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO subscriptions (id, name, state, tenant_id, cached_at) 
+             VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(id) DO UPDATE SET name = excluded.name, state = excluded.state, tenant_id = excluded.tenant_id, cached_at = excluded.cached_at",
             params![
                 subscription.id,
                 subscription.name,
@@ -42,8 +49,8 @@ impl<'a> CacheRepository<'a> {
 
         for sub in subscriptions {
             tx.execute(
-                "INSERT OR REPLACE INTO subscriptions (id, name, state, tenant_id, cached_at) 
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO subscriptions (id, name, state, tenant_id, cached_at) 
+                 VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(id) DO UPDATE SET name = excluded.name, state = excluded.state, tenant_id = excluded.tenant_id, cached_at = excluded.cached_at",
                 params![sub.id, sub.name, sub.state, sub.tenant_id, now],
             )?;
         }
@@ -213,9 +220,9 @@ impl<'a> CacheRepository<'a> {
         let tags_json = serde_json::to_string(&resource.tags)?;
 
         self.conn.execute(
-            "INSERT OR REPLACE INTO resources 
+            "INSERT INTO resources 
              (id, name, resource_type, location, resource_group, subscription_id, tags, cached_at) 
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(id) DO UPDATE SET name = excluded.name, resource_type = excluded.resource_type, location = excluded.location, resource_group = excluded.resource_group, subscription_id = excluded.subscription_id, tags = excluded.tags, cached_at = excluded.cached_at",
             params![
                 resource.id,
                 resource.name,
@@ -241,9 +248,9 @@ impl<'a> CacheRepository<'a> {
             let tags_json = serde_json::to_string(&resource.tags)?;
 
             tx.execute(
-                "INSERT OR REPLACE INTO resources 
+                "INSERT INTO resources 
                  (id, name, resource_type, location, resource_group, subscription_id, tags, cached_at) 
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(id) DO UPDATE SET name = excluded.name, resource_type = excluded.resource_type, location = excluded.location, resource_group = excluded.resource_group, subscription_id = excluded.subscription_id, tags = excluded.tags, cached_at = excluded.cached_at",
                 params![
                     resource.id,
                     resource.name,
