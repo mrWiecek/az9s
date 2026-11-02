@@ -20,6 +20,7 @@ No version has been released yet. The first public release is planned as **v0.1.
   issue templates, `CODEOWNERS`, `rustfmt.toml`.
 
 ### Changed
+- `az9s --help` and `--version` are now available; unknown arguments are rejected.
 - **Renamed to az9s.** The binary is now `az9s` (was `aztui`). Crates are `az9s`,
   `az9s-core`, `az9s-azure` and `az9s-tui`. The local data dir is now `az9s`. The old
   `aztui` cache is not migrated; it is only a cache and is rebuilt on first run.
@@ -33,6 +34,60 @@ No version has been released yet. The first public release is planned as **v0.1.
   corrupts the TUI.
 - README rewritten for platform engineers.
 - Ran `cargo fmt` across the codebase.
+- **Commands are now singular:** `:sub` (was `:subs`), `:rg` (was `:rgs`),
+  `:res` / `:resource` (was `:resources`). Plural forms are no longer accepted.
+
+### Performance (M1, step 1)
+- **Input is no longer rate-limited.** Previously at most one key was handled per
+  250 ms tick. Now every key is handled as it arrives, and queued keys are processed
+  together before one redraw.
+- **List rendering is virtualized.** Only the visible rows are built each frame,
+  filtering no longer allocates, and filter results are memoized. With 100k
+  resources, a frame dropped from 78 ms to 0.4 ms (101 ms to 0.6 ms with an active
+  filter).
+- New `--timings` flag prints Azure, cache, frame and keypress timings on exit.
+  New `just run-timings` and `just perf` recipes.
+
+### Performance (M1, step 2)
+- **Azure calls run in the background; the UI never freezes.** Opening a view
+  switches to it immediately, with an animated spinner in the status bar, and the
+  list fills in when Azure answers. You can keep navigating, go back, or open
+  something else. A superseded request is cancelled and its result discarded.
+- **Startup no longer waits for Azure.** Cached subscriptions are shown at once and
+  refreshed in the background.
+- **"All subscriptions" views (`:rg all`, `:res all`) load 16 subscriptions at a
+  time** instead of one after another, and skip disabled subscriptions. If some
+  subscriptions fail, the rest still show, with a warning in the status bar.
+
+### Performance (M1, step 3)
+- **Resource Graph backend.** Resource group and resource lists now come from Azure
+  Resource Graph instead of one ARM call per subscription.
+  - `:rg all` and `:res all` run one query at the tenant root management group,
+    limited to your enabled subscriptions. If you can't read the root, az9s
+    retries scoped to your subscriptions.
+  - Results stream in page by page (1000 rows per page), so the first rows show
+    before the whole list has loaded.
+  - Opening a resource group runs a filtered query in that subscription.
+  - Resource Graph throttling is respected: az9s waits out the quota and retries
+    429s.
+  - If Resource Graph fails before returning any rows, az9s falls back to ARM and
+    says so in the status bar. `AZ9S_BACKEND=arm` forces the old ARM path.
+  - Trade-off: Resource Graph can lag behind ARM by a short time after changes.
+
+### Fixed
+- Resource types from Resource Graph come in lowercase. Short type labels and
+  colours are now matched case-insensitively.
+- Opening a resource group showed every resource in its subscription. It now
+  requests only that group's resources from Azure.
+- In `:rg all`, opening a resource group used the wrong subscription. It now uses
+  the group's own subscription.
+- Going back to an "all subscriptions" list lost its scope, so `r` refreshed
+  nothing.
+- Scrolling up in a long list no longer pins the selection to the bottom row. The
+  scroll offset is now kept between frames.
+- A resource name longer than 35 characters containing non-ASCII characters could
+  crash the app (byte-index string slicing).
+- On Windows, key release events are ignored so each key press acts once.
 
 ### Removed
 - `src/apps/aztui/docs/`: about 80 archived iteration reports and fix scripts, plus
@@ -47,11 +102,14 @@ No version has been released yet. The first public release is planned as **v0.1.
 Already in the codebase before this changelog was started:
 - Azure CLI authentication, falling back to the default credential chain.
 - Browsing subscriptions → resource groups → resources → a basic resource detail view.
-- Cross-subscription views: `:rgs all` and `:res all`.
+- Cross-subscription views (now `:rg all` and `:res all`).
 - Vim-style navigation (`j/k`, `g/G`, `Ctrl+D/U`), `/` filtering, `:` commands, and
   `?` help.
 - A SQLite cache, used as a fallback when Azure is unreachable at startup.
 - A Rust workspace with 4 crates and 65 passing tests.
 
 ### Known issues
-- The UI is slow and freezes during Azure calls (fix planned in milestone M1).
+- The Resource Graph backend is tested against a mock API but not yet against a
+  live 400+ subscription tenant.
+- Resource groups and resources are not yet shown from the cache before Azure
+  answers (M1 step 4).

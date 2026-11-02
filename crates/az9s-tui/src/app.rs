@@ -1,8 +1,12 @@
 use crate::event::Event;
 use crate::{Command, CommandKind, Scope};
 use anyhow::Result;
+use az9s_core::loader::{LoadReceiver, LoadRequest, LoadResult};
 use az9s_core::state::{NavigationContext, ViewMode};
 use az9s_core::{App, AppState};
+
+/// Navigation metadata key marking a view that showed all subscriptions.
+const CROSS_SUBSCRIPTION: &str = "cross_subscription";
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use tracing::{debug, info, warn};
 
@@ -43,6 +47,16 @@ impl TuiApp {
         self.core.state_mut()
     }
 
+    /// Take the channel on which background load results arrive
+    pub fn take_load_receiver(&mut self) -> Option<LoadReceiver> {
+        self.core.take_load_receiver()
+    }
+
+    /// Apply a finished background load
+    pub fn apply_load(&mut self, result: LoadResult) {
+        self.core.apply(result);
+    }
+
     /// Check if the application should quit
     pub fn should_quit(&self) -> bool {
         self.should_quit
@@ -57,7 +71,10 @@ impl TuiApp {
             Event::Key(key) => self.handle_key(key).await,
             Event::Mouse(mouse) => self.handle_mouse(mouse).await,
             Event::Tick => {
-                // Periodic update - could be used for auto-refresh
+                let state = self.state_mut();
+                if state.loading {
+                    state.spinner_frame = state.spinner_frame.wrapping_add(1);
+                }
                 Ok(true)
             }
             Event::Resize(_, _) => {
@@ -253,59 +270,23 @@ impl TuiApp {
         match command.kind {
             CommandKind::Subscriptions => {
                 debug!("Command: Navigate to subscriptions");
-                self.state_mut().view = ViewMode::SubscriptionList;
-                self.state_mut().list_state.reset();
-                self.state_mut().clear_navigation();
+                let state = self.state_mut();
+                state.view = ViewMode::SubscriptionList;
+                state.list_state.reset();
+                state.clear_navigation();
             }
             CommandKind::ResourceGroups { scope } => {
-                debug!(
-                    "Command: Navigate to resource groups with scope {:?}",
-                    scope
-                );
-                match scope {
-                    Scope::All => {
-                        // Load resource groups across all subscriptions
-                        self.load_all_resource_groups().await?;
-                    }
-                    Scope::Subscription(sub_name) => {
-                        // Find subscription by name or ID and clone it
-                        let sub_opt = self.find_subscription(&sub_name).cloned();
-
-                        if let Some(sub) = sub_opt {
-                            let sub_id = sub.id.clone();
-                            self.state_mut().selected_subscription = Some(sub);
-                            self.core.load_resource_groups(&sub_id).await?;
-                            self.state_mut().view = ViewMode::ResourceGroupList;
-                            self.state_mut().list_state.reset();
-                        } else {
-                            self.state_mut()
-                                .set_error(Some(format!("Subscription not found: {}", sub_name)));
-                        }
-                    }
+                debug!("Command: resource groups, scope {:?}", scope);
+                if let Some(subscription_ids) = self.resolve_scope(&scope) {
+                    self.state_mut().clear_navigation();
+                    self.show_resource_groups(subscription_ids, scope == Scope::All);
                 }
             }
             CommandKind::Resources { scope } => {
-                debug!("Command: Navigate to resources with scope {:?}", scope);
-                match scope {
-                    Scope::All => {
-                        // Load resources across all subscriptions
-                        self.load_all_resources().await?;
-                    }
-                    Scope::Subscription(sub_name) => {
-                        // Find subscription by name or ID and clone it
-                        let sub_opt = self.find_subscription(&sub_name).cloned();
-
-                        if let Some(sub) = sub_opt {
-                            let sub_id = sub.id.clone();
-                            self.state_mut().selected_subscription = Some(sub);
-                            self.core.load_resources(&sub_id).await?;
-                            self.state_mut().view = ViewMode::ResourceList;
-                            self.state_mut().list_state.reset();
-                        } else {
-                            self.state_mut()
-                                .set_error(Some(format!("Subscription not found: {}", sub_name)));
-                        }
-                    }
+                debug!("Command: resources, scope {:?}", scope);
+                if let Some(subscription_ids) = self.resolve_scope(&scope) {
+                    self.state_mut().clear_navigation();
+                    self.show_resources(subscription_ids, None, scope == Scope::All);
                 }
             }
             CommandKind::Unknown(_) => {
@@ -316,6 +297,67 @@ impl TuiApp {
         Ok(())
     }
 
+    /// Turn a command scope into subscription IDs. For a single subscription,
+    /// also makes it the selected one. Shows an error and returns `None` if the
+    /// subscription is unknown.
+    fn resolve_scope(&mut self, scope: &Scope) -> Option<Vec<String>> {
+        match scope {
+            Scope::All => Some(self.enabled_subscription_ids()),
+            Scope::Subscription(name) => match self.find_subscription(name).cloned() {
+                Some(sub) => {
+                    let id = sub.id.clone();
+                    self.state_mut().selected_subscription = Some(sub);
+                    Some(vec![id])
+                }
+                None => {
+                    self.state_mut()
+                        .set_error(Some(format!("Subscription not found: {}", name)));
+                    None
+                }
+            },
+        }
+    }
+
+    /// IDs of all subscriptions that can be queried (disabled ones always fail).
+    fn enabled_subscription_ids(&self) -> Vec<String> {
+        self.state()
+            .subscriptions
+            .iter()
+            .filter(|s| !s.state.eq_ignore_ascii_case("Disabled"))
+            .map(|s| s.id.clone())
+            .collect()
+    }
+
+    /// Switch to the resource group list now and load it in the background.
+    fn show_resource_groups(&mut self, subscription_ids: Vec<String>, all: bool) {
+        let state = self.state_mut();
+        state.view = ViewMode::ResourceGroupList;
+        state.cross_subscription_mode = all;
+        state.resource_groups.clear();
+        state.list_state.reset();
+        self.core
+            .request(LoadRequest::ResourceGroups { subscription_ids });
+    }
+
+    /// Switch to the resource list now and load it in the background.
+    fn show_resources(
+        &mut self,
+        subscription_ids: Vec<String>,
+        resource_group: Option<String>,
+        all: bool,
+    ) {
+        let state = self.state_mut();
+        state.view = ViewMode::ResourceList;
+        state.cross_subscription_mode = all;
+        state.current_resource_group = resource_group.clone();
+        state.resources.clear();
+        state.list_state.reset();
+        self.core.request(LoadRequest::Resources {
+            subscription_ids,
+            resource_group,
+        });
+    }
+
     /// Find a subscription by name or ID
     fn find_subscription(&self, name_or_id: &str) -> Option<&az9s_core::models::Subscription> {
         let search = name_or_id.to_lowercase();
@@ -323,74 +365,6 @@ impl TuiApp {
             .subscriptions
             .iter()
             .find(|s| s.name.to_lowercase() == search || s.id.to_lowercase().contains(&search))
-    }
-
-    /// Load resource groups across all subscriptions
-    async fn load_all_resource_groups(&mut self) -> Result<()> {
-        info!("Loading resource groups across all subscriptions");
-        self.state_mut().set_loading(true);
-        self.state_mut().clear_error();
-        self.state_mut().cross_subscription_mode = true;
-
-        let mut all_rgs = Vec::new();
-        let subscriptions = self.state().subscriptions.clone();
-
-        for sub in &subscriptions {
-            match self.core.load_resource_groups(&sub.id).await {
-                Ok(()) => {
-                    // Collect the loaded resource groups
-                    all_rgs.extend(self.state().resource_groups.clone());
-                }
-                Err(e) => {
-                    warn!("Failed to load resource groups for {}: {}", sub.name, e);
-                }
-            }
-        }
-
-        self.state_mut().resource_groups = all_rgs;
-        self.state_mut().view = ViewMode::ResourceGroupList;
-        self.state_mut().list_state.reset();
-        self.state_mut().set_loading(false);
-
-        info!(
-            "Loaded {} resource groups across all subscriptions",
-            self.state().resource_groups.len()
-        );
-        Ok(())
-    }
-
-    /// Load resources across all subscriptions
-    async fn load_all_resources(&mut self) -> Result<()> {
-        info!("Loading resources across all subscriptions");
-        self.state_mut().set_loading(true);
-        self.state_mut().clear_error();
-        self.state_mut().cross_subscription_mode = true;
-
-        let mut all_resources = Vec::new();
-        let subscriptions = self.state().subscriptions.clone();
-
-        for sub in &subscriptions {
-            match self.core.load_resources(&sub.id).await {
-                Ok(()) => {
-                    // Collect the loaded resources
-                    all_resources.extend(self.state().resources.clone());
-                }
-                Err(e) => {
-                    warn!("Failed to load resources for {}: {}", sub.name, e);
-                }
-            }
-        }
-
-        self.state_mut().resources = all_resources;
-        self.state_mut().view = ViewMode::ResourceList;
-        self.state_mut().list_state.reset();
-        self.state_mut().set_loading(false);
-
-        info!(
-            "Loaded {} resources across all subscriptions",
-            self.state().resources.len()
-        );
-        Ok(())
     }
 
     /// Handle keyboard input in filter mode
@@ -430,44 +404,35 @@ impl TuiApp {
         }
     }
 
-    /// Handle refresh action
+    /// Reload the current view in the background
     async fn handle_refresh(&mut self) -> Result<()> {
-        match self.state().view {
-            ViewMode::SubscriptionList => {
+        let state = self.state();
+        let scope_ids = if state.cross_subscription_mode {
+            Some(self.enabled_subscription_ids())
+        } else {
+            state
+                .selected_subscription
+                .as_ref()
+                .map(|s| vec![s.id.clone()])
+        };
+
+        match (state.view.clone(), scope_ids) {
+            (ViewMode::SubscriptionList, _) => {
                 info!("Refreshing subscriptions");
-                if let Err(e) = self.core.refresh_subscriptions().await {
-                    warn!("Failed to refresh subscriptions: {}", e);
-                    self.state_mut()
-                        .set_error(Some(format!("Refresh failed: {}", e)));
-                }
+                self.core.request(LoadRequest::Subscriptions);
             }
-            ViewMode::ResourceGroupList => {
-                if self.state().cross_subscription_mode {
-                    self.load_all_resource_groups().await?;
-                } else if let Some(sub) = self.state().selected_subscription.clone() {
-                    info!("Refreshing resource groups for subscription {}", sub.id);
-                    if let Err(e) = self.core.load_resource_groups(&sub.id).await {
-                        warn!("Failed to refresh resource groups: {}", e);
-                        self.state_mut()
-                            .set_error(Some(format!("Refresh failed: {}", e)));
-                    }
-                }
+            (ViewMode::ResourceGroupList, Some(subscription_ids)) => {
+                self.core
+                    .request(LoadRequest::ResourceGroups { subscription_ids });
             }
-            ViewMode::ResourceList => {
-                if self.state().cross_subscription_mode {
-                    self.load_all_resources().await?;
-                } else if let Some(sub) = self.state().selected_subscription.clone() {
-                    info!("Refreshing resources for subscription {}", sub.id);
-                    if let Err(e) = self.core.load_resources(&sub.id).await {
-                        warn!("Failed to refresh resources: {}", e);
-                        self.state_mut()
-                            .set_error(Some(format!("Refresh failed: {}", e)));
-                    }
-                }
+            (ViewMode::ResourceList, Some(subscription_ids)) => {
+                let resource_group = self.state().current_resource_group.clone();
+                self.core.request(LoadRequest::Resources {
+                    subscription_ids,
+                    resource_group,
+                });
             }
-            _ => {
-                debug!("Refresh not implemented for current view");
-            }
+            _ => debug!("Refresh not available for current view"),
         }
         Ok(())
     }
@@ -479,7 +444,7 @@ impl TuiApp {
             debug!("Navigate back to {:?}", ctx.view);
             state.view = ctx.view;
             state.list_state.reset();
-            state.cross_subscription_mode = false;
+            state.cross_subscription_mode = ctx.metadata.contains_key(CROSS_SUBSCRIPTION);
         }
         Ok(())
     }
@@ -553,87 +518,62 @@ impl TuiApp {
     async fn handle_subscription_select(&mut self) -> Result<bool> {
         if let Some(subscription) = self.state().selected_subscription().cloned() {
             info!("Selected subscription: {}", subscription.name);
-
-            // Push current context to navigation stack
-            let state = self.state_mut();
-            let ctx = NavigationContext {
-                view: ViewMode::SubscriptionList,
-                subscription_id: None,
-                resource_group: None,
-                resource_id: None,
-                metadata: std::collections::HashMap::new(),
-            };
-            state.push_navigation(ctx);
-            state.selected_subscription = Some(subscription.clone());
-            state.cross_subscription_mode = false;
-
-            // Load resource groups for this subscription
-            if let Err(e) = self.core.load_resource_groups(&subscription.id).await {
-                warn!("Failed to load resource groups: {}", e);
-                self.state_mut()
-                    .set_error(Some(format!("Failed to load resource groups: {}", e)));
-                return Ok(true);
-            }
-
-            // Navigate to resource group list view
-            let state = self.state_mut();
-            state.view = ViewMode::ResourceGroupList;
-            state.list_state.reset();
+            self.push_current_context(None);
+            let id = subscription.id.clone();
+            self.state_mut().selected_subscription = Some(subscription);
+            self.show_resource_groups(vec![id], false);
         }
         Ok(true)
     }
 
-    /// Handle resource group selection
+    /// Handle resource group selection: show only that group's resources
     async fn handle_resource_group_select(&mut self) -> Result<bool> {
         if let Some(resource_group) = self.state().selected_resource_group().cloned() {
             info!("Selected resource group: {}", resource_group.name);
-
-            // Push current context to navigation stack
-            let state = self.state_mut();
-            let ctx = NavigationContext {
-                view: ViewMode::ResourceGroupList,
-                subscription_id: state.selected_subscription.as_ref().map(|s| s.id.clone()),
-                resource_group: None,
-                resource_id: None,
-                metadata: std::collections::HashMap::new(),
-            };
-            state.push_navigation(ctx);
-
-            // Load resources for this subscription
-            if let Some(sub) = self.state().selected_subscription.clone() {
-                if let Err(e) = self.core.load_resources(&sub.id).await {
-                    warn!("Failed to load resources: {}", e);
-                    self.state_mut()
-                        .set_error(Some(format!("Failed to load resources: {}", e)));
-                    return Ok(true);
-                }
+            self.push_current_context(None);
+            // Use the group's own subscription: in "all subscriptions" mode the
+            // selected subscription is not the group's.
+            if let Some(sub) = self
+                .state()
+                .subscriptions
+                .iter()
+                .find(|s| s.id == resource_group.subscription_id)
+                .cloned()
+            {
+                self.state_mut().selected_subscription = Some(sub);
             }
-
-            // Navigate to resource list view
-            let state = self.state_mut();
-            state.view = ViewMode::ResourceList;
-            state.list_state.reset();
+            self.show_resources(
+                vec![resource_group.subscription_id.clone()],
+                Some(resource_group.name.clone()),
+                false,
+            );
         }
         Ok(true)
+    }
+
+    /// Remember the current view so Esc/Backspace can return to it
+    fn push_current_context(&mut self, resource_group: Option<String>) {
+        let state = self.state_mut();
+        let mut metadata = std::collections::HashMap::new();
+        if state.cross_subscription_mode {
+            metadata.insert(CROSS_SUBSCRIPTION.to_string(), String::new());
+        }
+        let ctx = NavigationContext {
+            view: state.view.clone(),
+            subscription_id: state.selected_subscription.as_ref().map(|s| s.id.clone()),
+            resource_group,
+            resource_id: None,
+            metadata,
+        };
+        state.push_navigation(ctx);
     }
 
     /// Handle resource selection
     async fn handle_resource_select(&mut self) -> Result<bool> {
         if let Some(resource) = self.state().selected_resource().cloned() {
             info!("Selected resource: {}", resource.name);
-
-            // Push current context to navigation stack
+            self.push_current_context(Some(resource.resource_group.clone()));
             let state = self.state_mut();
-            let ctx = NavigationContext {
-                view: ViewMode::ResourceList,
-                subscription_id: state.selected_subscription.as_ref().map(|s| s.id.clone()),
-                resource_group: Some(resource.resource_group.clone()),
-                resource_id: None,
-                metadata: std::collections::HashMap::new(),
-            };
-            state.push_navigation(ctx);
-
-            // Store the selected resource for detail view
             state.selected_resource_detail = Some(resource);
             state.view = ViewMode::ResourceDetail;
             state.list_state.reset();

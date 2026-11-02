@@ -154,6 +154,20 @@ impl<'a> StatefulWidget for SelectableList<'a> {
     }
 }
 
+/// Shorten `s` to at most `max` characters, ending in "..." when cut.
+///
+/// Counts characters, not bytes, so names with multi-byte UTF-8 characters
+/// never cause a panic.
+pub fn truncate_with_ellipsis(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let keep = max.saturating_sub(3);
+    let mut out: String = s.chars().take(keep).collect();
+    out.push_str("...");
+    out
+}
+
 /// Helper function to create a list item from a string
 pub fn list_item<'a, S: Into<String>>(s: S) -> ListItem<'a> {
     ListItem::new(Line::from(s.into()))
@@ -162,4 +176,29 @@ pub fn list_item<'a, S: Into<String>>(s: S) -> ListItem<'a> {
 /// Helper function to create a list item with styled spans
 pub fn list_item_spans<'a>(spans: Vec<Span<'a>>) -> ListItem<'a> {
     ListItem::new(Line::from(spans))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_keeps_short_strings() {
+        assert_eq!(truncate_with_ellipsis("vm-01", 35), "vm-01");
+    }
+
+    #[test]
+    fn truncate_cuts_long_strings_to_max() {
+        let out = truncate_with_ellipsis(&"a".repeat(50), 35);
+        assert_eq!(out.chars().count(), 35);
+        assert!(out.ends_with("..."));
+    }
+
+    #[test]
+    fn truncate_is_utf8_safe() {
+        // Byte slicing at 32 would land inside a multi-byte character and panic.
+        let name = "ż".repeat(40);
+        let out = truncate_with_ellipsis(&name, 35);
+        assert_eq!(out.chars().count(), 35);
+    }
 }

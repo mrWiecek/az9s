@@ -1,7 +1,6 @@
-use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, MouseEvent};
+use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, KeyEventKind, MouseEvent};
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::time::interval;
 use tracing::{debug, warn};
 
 /// Application events
@@ -11,7 +10,7 @@ pub enum Event {
     Key(KeyEvent),
     /// Mouse event
     Mouse(MouseEvent),
-    /// Periodic tick
+    /// Periodic tick (no input arrived within the tick interval)
     Tick,
     /// Terminal resize
     Resize(u16, u16),
@@ -19,96 +18,83 @@ pub enum Event {
     Error(String),
 }
 
-/// Event handler for terminal events
+/// Event handler for terminal events.
 ///
-/// This handler runs a background task that polls for terminal events
-/// and sends them through a channel. It also generates periodic tick events.
+/// A dedicated OS thread blocks on terminal input and forwards **every** event
+/// as soon as it arrives. If no input arrives within `tick_rate`, a
+/// [`Event::Tick`] is sent instead, so the UI can redraw (spinners, data age).
+///
+/// The previous implementation polled once per tick and forwarded at most one
+/// event per tick, which capped input at ~4 keys/second and made navigation lag.
 pub struct EventHandler {
     rx: mpsc::UnboundedReceiver<Event>,
-    #[allow(dead_code)]
-    _tx: mpsc::UnboundedSender<Event>,
 }
 
 impl EventHandler {
-    /// Create a new event handler
+    /// Create a new event handler.
     ///
     /// # Arguments
-    /// * `tick_rate_ms` - Milliseconds between tick events
+    /// * `tick_rate_ms` - Milliseconds of input inactivity before a tick is sent
     pub fn new(tick_rate_ms: u64) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        let event_tx = tx.clone();
+        let tick_rate = Duration::from_millis(tick_rate_ms);
 
-        // Spawn event reader task
-        tokio::spawn(async move {
-            Self::event_reader_task(event_tx, tick_rate_ms).await;
-        });
+        std::thread::Builder::new()
+            .name("az9s-input".into())
+            .spawn(move || Self::reader_loop(tx, tick_rate))
+            .expect("failed to spawn input thread");
 
-        Self { rx, _tx: tx }
+        Self { rx }
     }
 
-    /// Background task that reads terminal events
-    async fn event_reader_task(tx: mpsc::UnboundedSender<Event>, tick_rate_ms: u64) {
-        let mut tick_interval = interval(Duration::from_millis(tick_rate_ms));
-
+    fn reader_loop(tx: mpsc::UnboundedSender<Event>, tick_rate: Duration) {
         loop {
-            tokio::select! {
-                _ = tick_interval.tick() => {
-                    // Check for terminal events without blocking
-                    match event::poll(Duration::from_millis(0)) {
-                        Ok(true) => {
-                            match event::read() {
-                                Ok(CrosstermEvent::Key(key)) => {
-                                    if tx.send(Event::Key(key)).is_err() {
-                                        debug!("Event receiver dropped, stopping event reader");
-                                        break;
-                                    }
-                                }
-                                Ok(CrosstermEvent::Mouse(mouse)) => {
-                                    if tx.send(Event::Mouse(mouse)).is_err() {
-                                        break;
-                                    }
-                                }
-                                Ok(CrosstermEvent::Resize(w, h)) => {
-                                    if tx.send(Event::Resize(w, h)).is_err() {
-                                        break;
-                                    }
-                                }
-                                Ok(_) => {
-                                    // Ignore other events
-                                }
-                                Err(e) => {
-                                    warn!("Error reading terminal event: {}", e);
-                                    if tx.send(Event::Error(e.to_string())).is_err() {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        Ok(false) => {
-                            // No events available, send tick
-                            if tx.send(Event::Tick).is_err() {
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            warn!("Error polling terminal events: {}", e);
-                            if tx.send(Event::Error(e.to_string())).is_err() {
-                                break;
-                            }
-                        }
+            let event = match event::poll(tick_rate) {
+                Ok(true) => match event::read() {
+                    // Windows reports key release events too; only act on presses.
+                    Ok(CrosstermEvent::Key(key)) if key.kind != KeyEventKind::Release => {
+                        Event::Key(key)
                     }
+                    Ok(CrosstermEvent::Mouse(mouse)) => Event::Mouse(mouse),
+                    Ok(CrosstermEvent::Resize(w, h)) => Event::Resize(w, h),
+                    Ok(_) => continue,
+                    Err(e) => {
+                        warn!("Error reading terminal event: {}", e);
+                        Event::Error(e.to_string())
+                    }
+                },
+                Ok(false) => Event::Tick,
+                Err(e) => {
+                    warn!("Error polling terminal events: {}", e);
+                    Event::Error(e.to_string())
                 }
+            };
+
+            let is_error = matches!(event, Event::Error(_));
+            if tx.send(event).is_err() {
+                debug!("Event receiver dropped, stopping input thread");
+                return;
+            }
+            if is_error {
+                // Avoid a hot loop if the terminal is persistently failing.
+                std::thread::sleep(tick_rate);
             }
         }
-
-        debug!("Event reader task stopped");
     }
 
-    /// Get the next event
+    /// Wait for the next event.
     ///
-    /// Returns `None` if the event channel is closed
+    /// Returns `None` if the event channel is closed.
     pub async fn next(&mut self) -> Option<Event> {
         self.rx.recv().await
+    }
+
+    /// Return an already-queued event without waiting.
+    ///
+    /// Used to drain all pending input before the next redraw, so holding a key
+    /// moves the selection as fast as the terminal repeats it.
+    pub fn try_next(&mut self) -> Option<Event> {
+        self.rx.try_recv().ok()
     }
 }
 
@@ -118,9 +104,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_event_handler_creation() {
-        let mut handler = EventHandler::new(250);
+        let mut handler = EventHandler::new(50);
 
-        // Should receive tick events
+        // Without a terminal we still receive ticks or errors, never silence.
         tokio::time::timeout(Duration::from_secs(1), async {
             let event = handler.next().await;
             assert!(event.is_some());

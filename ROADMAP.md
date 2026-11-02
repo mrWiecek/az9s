@@ -21,7 +21,9 @@ see policy compliance without leaving the terminal.
    stores no credentials.
 5. **Open source, cross-platform.** It must work on Linux, macOS and Windows, and CI
    proves that. Licensed under Apache-2.0.
-6. **Management groups are first-class.** Platform engineers work at management-group
+6. **Commands are singular.** `:sub`, `:rg`, `:res`, `:mg`, `:policy`,
+   `:assignment`, `:exemption`. Plural forms are not accepted.
+7. **Management groups are first-class.** Platform engineers work at management-group
    scope. The scope tree (tenant root → management groups → subscriptions) is the
    top of navigation, and Policy is viewed per scope.
 
@@ -71,44 +73,85 @@ raise `rust-version` (currently `1.75`; not checked against the dependency tree)
 
 ## M1 — Speed (2–3 weeks) → v0.1.0
 
-Goal: fix the main complaint that az9s is slow. Root causes found in the current code:
+Goal: fix the main complaint that az9s is slow, **at the scale of the target user:
+400+ subscriptions and thousands of resources** under a management-group hierarchy,
+with read access at the tenant root management group. Targets below use 100k rows as
+a safety margin.
+
+Root causes found in the current code:
 
 | Cause | Where | Effect |
 |---|---|---|
 | Input loop reads **one** key per 250 ms tick | `crates/az9s-tui/src/event.rs` | Navigation lags; holding `j` crawls |
 | Azure calls are `await`ed inside the key handler | `crates/az9s-tui/src/app.rs` | UI freezes, spinner never draws |
 | Opening a resource group refetches **every resource in the subscription** | `handle_resource_group_select` | Seconds per click on large subs |
-| "All subscriptions" views loop over subscriptions **sequentially** | `load_all_*` | Time grows with subscription count |
+| "All subscriptions" views loop over subscriptions **sequentially** | `load_all_*` | `:res all` = 400+ sequential ARM list calls, which takes minutes |
+| Every frame re-filters (lowercasing every field) and builds a `ListItem` for **every** row, not just the visible ones | `crates/az9s-tui/src/ui/mod.rs`, `state.rs` | Each frame costs O(total rows); at 100k rows every keypress stalls |
 | Startup blocks on `az account list` before the first frame | `App::new` | Slow launch |
 | Cache is written but only read as a fallback | `crates/az9s-core` | Data is fetched again on every navigation |
+| **Bug:** opening a resource group shows every resource in the subscription; the view is never filtered to the RG | `handle_resource_group_select` | Wrong results, and slow too |
 
-Work items:
+Work items, in order:
 
-- [ ] **Event loop rewrite.** Block on input with a timeout, drain all pending
-      events, and redraw on change (not on a fixed tick).
-- [ ] **Async architecture.** Move all I/O into background tasks that report
+- [x] **Measure first.** Add durations around every Azure call, cache write,
+      frame render and key event, plus a `--timings` summary on exit. Record
+      before and after numbers against a 400+ subscription tenant in the PR
+      description.
+- [x] **Event loop rewrite.** A dedicated input thread forwards every event
+      immediately. The main loop drains all pending events before redrawing.
+- [x] **Async architecture.** Move all I/O into background tasks that report
       results to the UI over a channel (an action/message pattern). The UI thread
       only renders and updates state. Cancel stale requests when the user moves on.
-- [ ] **Azure Resource Graph as the read backend.** One KQL query lists resource
-      groups and resources across *all* subscriptions, with server-side filtering
+      *(Done: `az9s_core::loader`. Also, multi-subscription views now run up to 16
+      ARM calls at a time as a stopgap until Resource Graph.)*
+- [x] **Azure Resource Graph as the read backend.** One KQL query lists resource
+      groups and resources across all subscriptions, with server-side filtering
       (by RG, type, location or tag) and paging. The same backend serves Policy
       later (`policyresources` table).
-      - Trade-off: Resource Graph indexes changes with a small delay. After an
-        action, refresh the single resource through ARM `GET`.
+  - **Scope by management group**, not by passing 400+ subscription IDs. The default
+    scope is the **tenant root management group**, so one query covers the whole
+    estate. Fall back to batched subscription lists only when no management group
+    is readable.
+  - **Never pull the whole tenant into memory by default.** Fetch counts first
+    (`summarize count()`), then page rows in (`$top` / `$skipToken`) as the user
+    scrolls.
+  - **Filtering:** filter locally while the full result set is in memory. Above a
+    threshold, push `/` filters into the KQL `where` clause (debounced).
+  - **Respect Resource Graph throttling.** Read the per-user quota headers, back
+    off, and never fire one query per subscription.
+  - Trade-off: Resource Graph indexes changes with a small delay. After an action,
+    refresh the single resource through ARM `GET`.
+- [x] **Virtualized rendering.** Build widgets only for the visible rows, persist
+      the scroll offset, filter without allocating, and memoize the filter result.
+      With 100k rows, a frame went from 78 ms to 0.4 ms (101 ms to 0.6 ms with a
+      filter active), measured with `just perf`.
+- [x] **Fix the RG view bug.** Resources shown under a resource group are filtered to
+      that group on the server (ARM `list_by_resource_group` for now; Resource
+      Graph in step 3).
 - [ ] **Cache-first (stale-while-revalidate).** Render cached data immediately,
       refresh in the background, and show data age in the status bar.
-- [ ] **Scope-aware queries.** Resource Graph queries can target a management group
+- [x] **Scope-aware queries.** Resource Graph queries can target a management group
       as well as a list of subscriptions.
+      *(Done in step 3. Still to validate against a real 400+ subscription tenant:
+      run the ignored live test in `crates/az9s-core/tests/integration_startup.rs`.)*
 - [ ] **Shared clients.** Create one HTTP client and one credential at startup and
       cache the token.
-- [ ] **Performance budget in CI.** Add a benchmark for list rendering and filtering
-      with 10k resources, plus a startup-time check.
+- [ ] **Performance budget in CI.** Add benchmarks for rendering and filtering
+      100k-row lists with synthetic data (no Azure needed), plus a startup-time
+      check. *(The 100k-row test exists as `just perf`; it is not yet a CI job.)*
 - [ ] **Release pipeline.** Publish binaries to GitHub Releases (e.g. `cargo-dist`)
       and support `cargo install az9s`.
 
-**Done when:** a cold start shows cached data in under 200 ms, `:res all` across 20+
-subscriptions returns in roughly one Resource Graph round-trip, and scrolling 10k rows
-is smooth.
+**Done when** (measured against a 400+ subscription tenant):
+
+| Scenario | Target |
+|---|---|
+| Launch with a warm cache → first usable frame | < 200 ms |
+| Keypress → rendered frame (scroll or filter), 100k rows loaded | < 16 ms |
+| `:rg all` across 400+ subscriptions, cold | < 3 s |
+| `:res all`, first page visible, cold | < 3 s |
+| Open a resource group (≤ 1k resources), cold | < 1 s |
+| Any network call | never blocks input; a spinner is always visible |
 
 ## M2 — Inspect (2 weeks) → v0.2.0
 
@@ -122,11 +165,13 @@ is smooth.
 - [ ] Config file `~/.config/az9s/config.toml` for default subscription, refresh
       interval, theme, and read-only mode.
 - [ ] **Scope tree:** tenant root → management groups → subscriptions → resource
-      groups, with `:mg` to jump. This becomes the top-level navigation (needed by M3).
+      groups, with `:mg` to jump. This becomes the top-level navigation (needed by M3),
+      and az9s opens at the tenant root management group by default.
 - [ ] `:ctx` to switch tenant.
 
 ## M3 — Policy (3 weeks) → v0.3.0
 
+- [ ] `:policy`, `:assignment` and `:exemption` commands.
 - [ ] Browse policy assignments **per scope, starting at management groups**, with
       inherited assignments shown at child scopes. Browse definitions and
       initiatives (set definitions).
@@ -180,5 +225,7 @@ is smooth.
 | Auth | Azure CLI credential (`az login`) | **Decided** |
 | Actions default | Enabled with confirmation; `--readonly` available | **Decided** |
 | License | Apache-2.0 | **Decided** |
+| Command naming | Always singular (`:sub`, `:rg`, `:res`, `:mg`, …); no plural aliases | **Decided** (done) |
+| Default scope | Tenant root management group | **Decided** |
 | Read backend | Azure Resource Graph for lists, ARM for single-resource reads and writes | Proposed (validate in M1) |
 | Multi-tenant | Switch tenants with `:ctx`; no parallel multi-tenant view | Proposed |

@@ -8,15 +8,16 @@ Browse every subscription, resource group and resource from the terminal, filter
 instantly, and (soon) act on resources and check Azure Policy compliance, the way k9s
 works for Kubernetes.
 
-> ⚠️ **Status: early development.** No release yet. The app can browse resources but is
-> slow and read-only for now. See the [Roadmap](ROADMAP.md).
+> ⚠️ **Status: early development.** No release yet. The app browses resources across
+> all your subscriptions with Azure Resource Graph and never freezes while loading.
+> It is read-only for now. See the [Roadmap](ROADMAP.md).
 
 ## Features
 
 | Today | Planned |
 |---|---|
 | Subscriptions → resource groups → resources → detail | Instant, non-blocking UI backed by Azure Resource Graph (M1) |
-| Cross-subscription views (`:rgs all`, `:res all`) | Management-group tree, rich detail views, JSON, open in Portal, command palette (M2) |
+| Cross-subscription views (`:rg all`, `:res all`) | Management-group tree, rich detail views, JSON, open in Portal, command palette (M2) |
 | `/` filtering, vim keys, `:` commands, `?` help | Azure Policy at management-group scope: assignments, compliance, exemptions (M3) |
 | Offline fallback through a local SQLite cache | Safe actions: VM start/stop, restarts, tags, delete, policy scans (M4) |
 
@@ -40,6 +41,7 @@ cargo install --path crates/az9s --locked   # or: just install
 ```bash
 az login                                   # authenticate once (az9s uses your Azure CLI login)
 az9s                                       # launch
+az9s --timings                             # launch, print a timing summary on exit
 ```
 
 ## Keys
@@ -61,8 +63,8 @@ az9s                                       # launch
 
 | Command | Shows |
 |---|---|
-| `:subs` | Subscriptions |
-| `:rgs [all\|<sub>]` | Resource groups (all subscriptions or one) |
+| `:sub` | Subscriptions |
+| `:rg [all\|<sub>]` | Resource groups (all subscriptions or one) |
 | `:res [all\|<sub>]` | Resources (all subscriptions or one) |
 
 ## Development
@@ -72,6 +74,8 @@ Requires [just](https://github.com/casey/just).
 ```bash
 just run         # run (release mode, logs off)
 just run-debug   # run with debug logs written to az9s.log
+just run-timings # run, then print Azure/cache/frame timings on exit
+just perf        # rendering benchmark with 100k rows
 just ci          # everything CI runs: fmt check, clippy, tests
 just --list      # all recipes
 ```
@@ -85,6 +89,15 @@ crates/
 ```
 
 How it fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Troubleshooting
+
+| Symptom | Try |
+|---|---|
+| "Not connected to Azure" | Run `az login`, then press `r` |
+| Status bar says "Resource Graph unavailable … used ARM" | Lists still load, but more slowly; check `just run-debug` logs |
+| A resource you just changed looks stale | Resource Graph can lag ARM briefly; press `r`, or run with `AZ9S_BACKEND=arm` |
+| Something feels slow | Run `az9s --timings` and include the table in an issue |
 
 ## Contributing
 

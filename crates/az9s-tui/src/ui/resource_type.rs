@@ -111,13 +111,22 @@ static TYPE_LABELS: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
     m
 });
 
-/// Get a short, readable label for a resource type
+/// Same labels keyed by lowercase type. Azure Resource Graph returns types in
+/// lowercase (`microsoft.compute/virtualmachines`), ARM in canonical case.
+static TYPE_LABELS_LOWER: Lazy<HashMap<String, &'static str>> = Lazy::new(|| {
+    TYPE_LABELS
+        .iter()
+        .map(|(k, v)| (k.to_ascii_lowercase(), *v))
+        .collect()
+});
+
+/// Get a short, readable label for a resource type (case-insensitive)
 ///
 /// Returns a concise label like "vm", "nic", "storage" for common types.
 /// Falls back to intelligent truncation for unknown types.
 pub fn short_label(resource_type: &str) -> String {
     // Check if we have a predefined label
-    if let Some(label) = TYPE_LABELS.get(resource_type) {
+    if let Some(label) = TYPE_LABELS_LOWER.get(&resource_type.to_ascii_lowercase()) {
         return label.to_string();
     }
 
@@ -132,17 +141,17 @@ pub fn short_label(resource_type: &str) -> String {
             // Try to keep the first meaningful word
             if let Some(first_word) = kebab.split('-').next() {
                 if first_word.len() >= 4 {
-                    return format!("{}...", &first_word[..first_word.len().min(15)]);
+                    return format!("{}...", first_word.chars().take(15).collect::<String>());
                 }
             }
-            format!("{}...", &kebab[..17])
+            super::widgets::truncate_with_ellipsis(&kebab, 20)
         } else {
             kebab
         }
     } else {
         // Last resort: truncate the full type
         if resource_type.len() > 20 {
-            format!("{}...", &resource_type[..17])
+            super::widgets::truncate_with_ellipsis(resource_type, 20)
         } else {
             resource_type.to_string()
         }
@@ -189,6 +198,12 @@ mod tests {
         assert_eq!(short_label("Microsoft.Network/networkInterfaces"), "nic");
         assert_eq!(short_label("Microsoft.Storage/storageAccounts"), "storage");
         assert_eq!(short_label("Microsoft.KeyVault/vaults"), "key-vault");
+    }
+
+    #[test]
+    fn test_short_label_is_case_insensitive() {
+        assert_eq!(short_label("microsoft.compute/virtualmachines"), "vm");
+        assert_eq!(short_label("MICROSOFT.KEYVAULT/VAULTS"), "key-vault");
     }
 
     #[test]

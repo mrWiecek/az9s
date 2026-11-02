@@ -1,5 +1,6 @@
 use crate::models::{Resource, ResourceGroup, Subscription};
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// Application state management
 #[derive(Debug, Default)]
@@ -46,14 +47,48 @@ pub struct AppState {
     /// Loading state
     pub loading: bool,
 
-    /// Error message
+    /// Error message (modal; dismissed with Esc)
     pub error: Option<String>,
+
+    /// Non-blocking notice shown in the status bar (e.g. partial load failures)
+    pub notice: Option<String>,
+
+    /// Resource group whose resources are shown in the resource list, if any
+    pub current_resource_group: Option<String>,
+
+    /// Spinner animation frame, advanced on ticks while loading
+    pub spinner_frame: usize,
 
     /// Data source indicator (for UX transparency)
     pub data_source: DataSource,
 
     /// Cross-subscription mode (for "all" scope)
     pub cross_subscription_mode: bool,
+
+    /// Memoized filter result, so a frame doesn't rescan every row
+    filter_memo: Mutex<FilterMemo>,
+}
+
+/// Which list a memoized filter result belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListKind {
+    Subscriptions,
+    ResourceGroups,
+    Resources,
+}
+
+/// Cached indices of the rows matching `filter`.
+///
+/// The key identifies the list by (kind, buffer address, length). Lists are only
+/// ever replaced wholesale (`state.resources = new_vec`), and a replacement is
+/// allocated while the old buffer is still alive, so it always gets a new
+/// address. Mutating rows in place would not be detected; don't do that, or
+/// call [`AppState::invalidate_filter`].
+#[derive(Debug, Default)]
+struct FilterMemo {
+    key: Option<(ListKind, usize, usize)>,
+    filter: String,
+    indices: Vec<usize>,
 }
 
 /// Indicates where the current data came from
@@ -138,6 +173,24 @@ impl ListState {
         self.offset = 0;
     }
 
+    /// Clamp the selection to `len`, scroll so it is visible in a viewport of
+    /// `viewport` rows, and return the range of item indices to render.
+    ///
+    /// Only this range should be turned into widgets, so a frame costs
+    /// O(viewport) instead of O(total rows).
+    pub fn visible_range(&mut self, len: usize, viewport: usize) -> std::ops::Range<usize> {
+        if len == 0 || viewport == 0 {
+            self.selected = 0;
+            self.offset = 0;
+            return 0..0;
+        }
+        self.selected = self.selected.min(len - 1);
+        self.update_offset(viewport);
+        // Don't leave empty space at the bottom when the list shrank (e.g. filtering).
+        self.offset = self.offset.min(len.saturating_sub(viewport));
+        self.offset..(self.offset + viewport).min(len)
+    }
+
     /// Update scroll offset based on viewport height
     pub fn update_offset(&mut self, viewport_height: usize) {
         if viewport_height == 0 {
@@ -185,51 +238,63 @@ impl AppState {
 
     /// Get filtered subscriptions based on current filter
     pub fn filtered_subscriptions(&self) -> Vec<&Subscription> {
-        if self.filter.is_empty() {
-            self.subscriptions.iter().collect()
-        } else {
-            let filter_lower = self.filter.to_lowercase();
-            self.subscriptions
-                .iter()
-                .filter(|s| {
-                    s.name.to_lowercase().contains(&filter_lower)
-                        || s.id.to_lowercase().contains(&filter_lower)
-                })
-                .collect()
-        }
+        self.filter_list(ListKind::Subscriptions, &self.subscriptions, |s, needle| {
+            contains_ignore_ascii_case(&s.name, needle) || contains_ignore_ascii_case(&s.id, needle)
+        })
     }
 
     /// Get filtered resource groups based on current filter
     pub fn filtered_resource_groups(&self) -> Vec<&ResourceGroup> {
-        if self.filter.is_empty() {
-            self.resource_groups.iter().collect()
-        } else {
-            let filter_lower = self.filter.to_lowercase();
-            self.resource_groups
-                .iter()
-                .filter(|rg| {
-                    rg.name.to_lowercase().contains(&filter_lower)
-                        || rg.location.to_lowercase().contains(&filter_lower)
-                })
-                .collect()
-        }
+        self.filter_list(
+            ListKind::ResourceGroups,
+            &self.resource_groups,
+            |rg, needle| {
+                contains_ignore_ascii_case(&rg.name, needle)
+                    || contains_ignore_ascii_case(&rg.location, needle)
+            },
+        )
     }
 
     /// Get filtered resources based on current filter
     pub fn filtered_resources(&self) -> Vec<&Resource> {
+        self.filter_list(ListKind::Resources, &self.resources, |r, needle| {
+            contains_ignore_ascii_case(&r.name, needle)
+                || contains_ignore_ascii_case(&r.resource_type, needle)
+                || contains_ignore_ascii_case(&r.location, needle)
+        })
+    }
+
+    /// Filter `items` by the current filter, reusing the previous result when
+    /// neither the filter nor the list changed.
+    fn filter_list<'a, T>(
+        &self,
+        kind: ListKind,
+        items: &'a [T],
+        matches: impl Fn(&T, &str) -> bool,
+    ) -> Vec<&'a T> {
         if self.filter.is_empty() {
-            self.resources.iter().collect()
-        } else {
-            let filter_lower = self.filter.to_lowercase();
-            self.resources
-                .iter()
-                .filter(|r| {
-                    r.name.to_lowercase().contains(&filter_lower)
-                        || r.resource_type.to_lowercase().contains(&filter_lower)
-                        || r.location.to_lowercase().contains(&filter_lower)
-                })
-                .collect()
+            return items.iter().collect();
         }
+        let key = (kind, items.as_ptr() as usize, items.len());
+        let mut memo = self.filter_memo.lock().unwrap_or_else(|e| e.into_inner());
+        if memo.key != Some(key) || memo.filter != self.filter {
+            let needle = self.filter.to_ascii_lowercase();
+            memo.indices = items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| matches(item, &needle))
+                .map(|(i, _)| i)
+                .collect();
+            memo.key = Some(key);
+            memo.filter.clone_from(&self.filter);
+        }
+        memo.indices.iter().map(|&i| &items[i]).collect()
+    }
+
+    /// Drop the memoized filter result (only needed after in-place row edits).
+    pub fn invalidate_filter(&self) {
+        let mut memo = self.filter_memo.lock().unwrap_or_else(|e| e.into_inner());
+        memo.key = None;
     }
 
     /// Get the selected subscription in the current view
@@ -345,6 +410,22 @@ impl AppState {
     }
 }
 
+/// Case-insensitive (ASCII) substring check that does not allocate.
+///
+/// `needle_lower` must already be ASCII-lowercased. Azure names, types and
+/// locations are ASCII in practice; non-ASCII bytes are compared exactly.
+pub fn contains_ignore_ascii_case(haystack: &str, needle_lower: &str) -> bool {
+    let (h, n) = (haystack.as_bytes(), needle_lower.as_bytes());
+    if n.is_empty() {
+        return true;
+    }
+    if n.len() > h.len() {
+        return false;
+    }
+    h.windows(n.len())
+        .any(|w| w.iter().zip(n).all(|(a, b)| a.to_ascii_lowercase() == *b))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,6 +481,86 @@ mod tests {
 
         state.select_last(0);
         assert_eq!(state.selected(), 0);
+    }
+
+    #[test]
+    fn test_contains_ignore_ascii_case() {
+        assert!(contains_ignore_ascii_case("MyResourceGroup", "resource"));
+        assert!(contains_ignore_ascii_case(
+            "westeurope",
+            "WESTEUROPE".to_ascii_lowercase().as_str()
+        ));
+        assert!(contains_ignore_ascii_case("anything", ""));
+        assert!(!contains_ignore_ascii_case("abc", "abcd"));
+        assert!(!contains_ignore_ascii_case("rg-prod", "dev"));
+        assert!(contains_ignore_ascii_case("zażółć-rg", "ółć-rg"));
+    }
+
+    #[test]
+    fn test_visible_range_scrolls_and_persists_offset() {
+        let mut ls = ListState::new();
+        // Move to the bottom of a 100-row list in a 10-row viewport.
+        ls.selected = 99;
+        assert_eq!(ls.visible_range(100, 10), 90..100);
+        // Moving up inside the viewport must not scroll (offset persists).
+        ls.selected = 95;
+        assert_eq!(ls.visible_range(100, 10), 90..100);
+        // Moving above the viewport scrolls up just enough.
+        ls.selected = 85;
+        assert_eq!(ls.visible_range(100, 10), 85..95);
+    }
+
+    #[test]
+    fn test_visible_range_clamps_when_list_shrinks() {
+        let mut ls = ListState::new();
+        ls.selected = 50;
+        ls.visible_range(100, 10);
+        // Filter reduced the list to 5 items.
+        assert_eq!(ls.visible_range(5, 10), 0..5);
+        assert_eq!(ls.selected, 4);
+        assert_eq!(ls.visible_range(0, 10), 0..0);
+        assert_eq!(ls.selected, 0);
+    }
+
+    fn resource(name: &str) -> Resource {
+        Resource {
+            id: format!("/subscriptions/s/resourceGroups/rg/providers/x/{name}"),
+            name: name.into(),
+            resource_type: "Microsoft.Compute/virtualMachines".into(),
+            location: "westeurope".into(),
+            resource_group: "rg".into(),
+            subscription_id: "s".into(),
+            tags: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_filter_memo_tracks_filter_and_list_changes() {
+        let mut state = AppState::new();
+        state.resources = vec![resource("web-1"), resource("db-1"), resource("web-2")];
+
+        state.filter = "web".into();
+        assert_eq!(state.filtered_resources().len(), 2);
+        // Same filter and list: served from the memo, same answer.
+        assert_eq!(state.filtered_resources().len(), 2);
+
+        // Filter changes.
+        state.filter = "db".into();
+        assert_eq!(state.filtered_resources()[0].name, "db-1");
+
+        // List replaced, even with the same length.
+        state.resources = vec![resource("db-9"), resource("x"), resource("db-8")];
+        let names: Vec<_> = state
+            .filtered_resources()
+            .iter()
+            .map(|r| r.name.clone())
+            .collect();
+        assert_eq!(names, ["db-9", "db-8"]);
+
+        // Different list kinds don't share results.
+        state.subscriptions = vec![];
+        assert!(state.filtered_subscriptions().is_empty());
+        assert_eq!(state.filtered_resources().len(), 2);
     }
 
     #[test]

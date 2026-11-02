@@ -132,10 +132,8 @@ mod tests {
 
     #[test]
     fn test_breadcrumb_with_filter() {
-        let state = AppState {
-            filter: "vm".to_string(),
-            ..Default::default()
-        };
+        let mut state = AppState::default();
+        state.filter = "vm".to_string();
 
         let line = Breadcrumb::render(&state);
         let text = format!("{:?}", line);
@@ -146,10 +144,8 @@ mod tests {
 
     #[test]
     fn test_breadcrumb_loading() {
-        let state = AppState {
-            loading: true,
-            ..Default::default()
-        };
+        let mut state = AppState::default();
+        state.loading = true;
 
         let line = Breadcrumb::render(&state);
         let text = format!("{:?}", line);
