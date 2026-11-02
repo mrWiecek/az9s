@@ -4,6 +4,7 @@ pub mod models;
 pub mod resource_graph;
 #[cfg(any(test, feature = "test-util"))]
 pub mod testing;
+pub mod timing;
 
 pub use auth::{AuthProvider, AzureAuth};
 pub use client::AzureClient;

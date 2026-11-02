@@ -143,6 +143,10 @@ pub enum Accept {
 
 pub trait Fetcher: Send + Sync + 'static {
     fn fetch(&self, request: LoadRequest, _sink: ChunkSink) -> BoxFuture<'static, FetchOutcome>;
+
+    /// Start slow one-time setup (e.g. getting a token) in the background, so
+    /// the first real request doesn't pay for it. Must not block.
+    fn warm_up(&self) {}
 }
 
 pub type LoadReceiver = mpsc::UnboundedReceiver<LoadResult>;
@@ -340,7 +344,10 @@ pub struct GraphFetcher {
     graph: Arc<ResourceGraphClient>,
     /// Used for subscriptions, and as a fallback when Resource Graph fails.
     arm: Arc<dyn Fetcher>,
-    home_tenant: tokio::sync::OnceCell<Option<String>>,
+    /// Tenant of the signed-in identity, resolved once. Shared through an
+    /// `Arc`: cloning a `OnceCell` copies it, so a per-request clone would
+    /// never keep the value (that bug made every `:rg all` re-fetch it).
+    home_tenant: Arc<tokio::sync::OnceCell<Option<String>>>,
 }
 
 impl GraphFetcher {
@@ -348,12 +355,34 @@ impl GraphFetcher {
         Self {
             graph,
             arm,
-            home_tenant: tokio::sync::OnceCell::new(),
+            home_tenant: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 }
 
+impl GraphFetcher {
+    async fn resolve_tenant(
+        graph: &ResourceGraphClient,
+        cell: &tokio::sync::OnceCell<Option<String>>,
+    ) -> Option<String> {
+        cell.get_or_init(|| async { graph.home_tenant_id().await.ok() })
+            .await
+            .clone()
+    }
+}
+
 impl Fetcher for GraphFetcher {
+    fn warm_up(&self) {
+        // Getting the first token through the Azure CLI takes ~0.8 s. Do it
+        // now, while the user looks at the subscription list.
+        let graph = self.graph.clone();
+        let cell = self.home_tenant.clone();
+        tokio::spawn(async move {
+            let _t = timing::timer("azure.warm_up");
+            let _ = Self::resolve_tenant(&graph, &cell).await;
+        });
+    }
+
     fn fetch(&self, request: LoadRequest, sink: ChunkSink) -> BoxFuture<'static, FetchOutcome> {
         // Subscriptions come from the Azure CLI (with tenant information).
         if request == LoadRequest::Subscriptions {
@@ -388,10 +417,7 @@ impl Fetcher for GraphFetcher {
             }
 
             let tenant = if subscription_ids.len() > 1 {
-                home_tenant
-                    .get_or_init(|| async { graph.home_tenant_id().await.ok() })
-                    .await
-                    .clone()
+                Self::resolve_tenant(&graph, &home_tenant).await
             } else {
                 None
             };

@@ -37,6 +37,15 @@ pub struct Reply {
     pub status: u16,
     pub headers: Vec<(&'static str, &'static str)>,
     pub body: String,
+    /// Simulated server latency before the response is sent.
+    pub delay: std::time::Duration,
+}
+
+impl Reply {
+    pub fn after(mut self, delay: std::time::Duration) -> Self {
+        self.delay = delay;
+        self
+    }
 }
 
 /// 200 with a JSON body.
@@ -45,6 +54,7 @@ pub fn ok(body: Value) -> Reply {
         status: 200,
         headers: vec![],
         body: body.to_string(),
+        delay: Default::default(),
     }
 }
 
@@ -54,6 +64,7 @@ pub fn error(status: u16, message: &str) -> Reply {
         status,
         headers: vec![],
         body: serde_json::json!({"error": {"code": "Test", "message": message}}).to_string(),
+        delay: Default::default(),
     }
 }
 
@@ -96,6 +107,9 @@ where
                 };
                 seen.lock().unwrap().push(body.clone());
                 let reply = respond(&body);
+                if !reply.delay.is_zero() {
+                    tokio::time::sleep(reply.delay).await;
+                }
                 let mut response = format!(
                     "HTTP/1.1 {} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n",
                     reply.status,

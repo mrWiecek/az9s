@@ -26,13 +26,20 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   - `list_resource_groups` and `list_resources` call ARM through
     `azure_mgmt_resources`, one subscription per call, and page through all results.
 - `resource_graph.rs`: Azure Resource Graph REST client.
-  - `query_pages` POSTs KQL scoped to a management group or a subscription list,
-    follows `$skipToken` (1000 rows per page) and hands each page to a callback.
+  - `query_pages` POSTs KQL scoped to a management group or a subscription list
+    and hands each 1000-row page to a callback, in order. After the first page
+    reports `totalRecords`, the remaining pages are fetched by `$skip`, 4 at a
+    time (`PARALLEL_PAGES`). If that fails, it falls back to sequential
+    `$skipToken` paging without repeating rows.
+  - `CachingTokenSource` reuses the bearer token until 5 minutes before its
+    `exp` claim. Concurrent callers share one refresh.
   - It respects the per-user quota headers and retries 429s. Errors carry the HTTP
     status and the ARM error message (`AzureError::Http`).
   - It also holds the KQL builders and row → model mapping. The resource group
     name is taken from the resource ID to keep its casing, because Resource
     Graph lowercases the `resourceGroup` column.
+- `timing.rs`: always-on duration stats (`timing::timer("azure.token")`),
+  re-exported as `az9s_core::timing`. `az9s --timings` prints a summary on exit.
 - `testing.rs` (feature `test-util`): a static token source and a local mock HTTP
   server, used by tests in this crate and in `az9s-core`.
 - `models.rs`: Azure-side DTOs (`AzureSubscription`, `AzureResourceGroup`,
@@ -73,6 +80,9 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
     - `AzureFetcher` uses ARM (one call per subscription, 16 at a time) and
       handles the subscription list (Azure CLI). Set `AZ9S_BACKEND=arm` to use it
       for everything.
+    - `Fetcher::warm_up` starts one-time setup in the background at startup.
+      `GraphFetcher` uses it to resolve the tenant (and so the token) before
+      the first request.
     - Tests use fake fetchers.
 - `state.rs`: `AppState` holds:
   - the current `ViewMode` (`SubscriptionList`, `ResourceGroupList`, `ResourceList`,
@@ -101,9 +111,6 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
     `Cache::flush` waits for queued writes. In-memory caches (tests) write
     synchronously.
   - `warming.rs`: cache-warming strategies. **Not yet used by the app.**
-- `timing.rs`: always-on duration stats (`timing::timer("azure.list_resources")`).
-  `az9s --timings` prints a summary on exit. Recorded operations include
-  `startup.first_frame`, `ui.frame`, `ui.handle_key`, `azure.*` and `cache.*`.
 - `App::offline(cache)` builds an app with no Azure connection. Tests and benchmarks
   use it.
 - `models.rs`: core domain models (`Subscription`, `ResourceGroup`, `Resource`,

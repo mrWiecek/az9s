@@ -73,8 +73,8 @@ Goal: a repository a stranger can clone, understand and contribute to in 10 minu
 **Done when:** `just ci` passes locally and in GitHub Actions, the README is accurate,
 and no file or crate says "aztui".
 
-Remaining in M0: confirm the first CI run is green on all three OSes, and verify or
-raise `rust-version` (currently `1.75`; not checked against the dependency tree).
+CI is green on Linux, macOS and Windows. Still open: verify or raise
+`rust-version` (currently `1.75`; not checked against the dependency tree).
 
 ## M1 — Speed (2–3 weeks)
 
@@ -137,10 +137,13 @@ Work items, in order:
       refresh in the background, and show data age in the status bar.
 - [x] **Scope-aware queries.** Resource Graph queries can target a management group
       as well as a list of subscriptions.
-      *(Done in step 3. Still to validate against a real 400+ subscription tenant:
-      run the ignored live test in `crates/az9s-core/tests/integration_startup.rs`.)*
-- [ ] **Shared clients.** Create one HTTP client and one credential at startup and
-      cache the token.
+      *(Validated live in #9 with 412 subscriptions and 3,469 resource groups:
+      first rows in 1.59 s, complete in 3.36 s. v0.2.1 adds parallel pages and
+      token reuse to bring the complete load under the 3 s target.)*
+- [x] **Shared clients.** Create one HTTP client and one credential at startup and
+      cache the token. *(The Resource Graph client, credential and cached token
+      are shared and warmed up at startup. The ARM fallback still builds its
+      client per call.)*
 - [ ] **Performance budget in CI.** Add benchmarks for rendering and filtering
       100k-row lists with synthetic data (no Azure needed), plus a startup-time
       check. *(The 100k-row test exists as `just perf`; it is not yet a CI job.)*

@@ -265,3 +265,87 @@ async fn refresh_replaces_rather_than_duplicates_streamed_rows() {
     }
     assert_eq!(app.state().resources.len(), 2);
 }
+
+/// Counts credential calls; hands out a token for `TENANT`.
+struct CountingToken {
+    calls: Arc<AtomicUsize>,
+    inner: StaticToken,
+}
+
+impl az9s_azure::resource_graph::TokenSource for CountingToken {
+    fn token(&self) -> BoxFuture<'_, az9s_azure::Result<String>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.token()
+    }
+}
+
+fn counting_app(endpoint: &str) -> (App, Arc<AtomicUsize>, Arc<GraphFetcher>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tokens = CountingToken {
+        calls: calls.clone(),
+        inner: StaticToken::for_tenant(TENANT),
+    };
+    let graph = ResourceGraphClient::with_endpoint(endpoint, Arc::new(tokens));
+    let fetcher = Arc::new(GraphFetcher::new(
+        Arc::new(graph),
+        Arc::new(FakeArm::default()),
+    ));
+    let app = App::with_fetcher(
+        Cache::new(Path::new(":memory:")).unwrap(),
+        Some(fetcher.clone()),
+    );
+    (app, calls, fetcher)
+}
+
+/// Regression: the tenant cache was a cloned `OnceCell`, so every
+/// "all subscriptions" request resolved the tenant (an extra token fetch,
+/// ~0.8 s with the Azure CLI) again.
+#[tokio::test]
+async fn tenant_is_resolved_once_across_requests() {
+    let (endpoint, _) = serve(|_| ok(json!({ "data": [rg_row("sub-a", "rg-1")] }))).await;
+    let (mut app, calls, _) = counting_app(&endpoint);
+    let request = LoadRequest::ResourceGroups {
+        subscription_ids: vec!["sub-a".into(), "sub-b".into()],
+    };
+
+    let mut rx = app.take_load_receiver().unwrap();
+    for _ in 0..3 {
+        app.request(request.clone());
+        while app.state().loading {
+            app.apply(rx.recv().await.unwrap());
+        }
+    }
+    // 1 token to resolve the tenant + 1 per request for its single page.
+    assert_eq!(calls.load(Ordering::SeqCst), 1 + 3);
+}
+
+#[tokio::test]
+async fn warm_up_resolves_the_tenant_before_the_first_request() {
+    let (endpoint, requests) = serve(|_| ok(json!({ "data": [rg_row("sub-a", "rg-1")] }))).await;
+    let (mut app, calls, fetcher) = counting_app(&endpoint);
+
+    fetcher.warm_up();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "tenant resolved in the background"
+    );
+    assert!(
+        requests.lock().unwrap().is_empty(),
+        "warm-up sends no queries"
+    );
+
+    load(
+        &mut app,
+        LoadRequest::ResourceGroups {
+            subscription_ids: vec!["sub-a".into(), "sub-b".into()],
+        },
+    )
+    .await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "only the page's token, no tenant lookup"
+    );
+}

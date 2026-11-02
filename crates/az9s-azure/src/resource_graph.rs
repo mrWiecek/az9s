@@ -10,10 +10,11 @@
 //! `x-ms-user-quota-resets-after` headers, and exceeding it returns 429.
 
 use crate::models::{AzureResource, AzureResourceGroup};
-use crate::{AzureError, Result};
+use crate::{timing, AzureError, Result};
 use azure_core::auth::TokenCredential;
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::{stream, StreamExt};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -46,6 +47,55 @@ impl TokenSource for CredentialTokenSource {
                 .await
                 .map_err(|e| AzureError::AuthenticationFailed(e.to_string()))?;
             Ok(token.token.secret().to_string())
+        }
+        .boxed()
+    }
+}
+
+/// Caches the bearer token until shortly before it expires, so a load of
+/// many pages costs one credential call (an Azure CLI call is ~0.5-0.8 s).
+/// Concurrent callers wait for the same refresh instead of each fetching.
+pub struct CachingTokenSource<T> {
+    inner: T,
+    cached: tokio::sync::Mutex<Option<(String, i64)>>,
+}
+
+/// Refresh this long before the token's `exp`.
+const TOKEN_REFRESH_MARGIN_SECS: i64 = 300;
+/// Assumed lifetime when the token has no readable `exp` claim.
+const TOKEN_DEFAULT_LIFETIME_SECS: i64 = 600;
+
+impl<T: TokenSource> CachingTokenSource<T> {
+    pub fn new(inner: T) -> Self {
+        Self {
+            inner,
+            cached: tokio::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl<T: TokenSource> TokenSource for CachingTokenSource<T> {
+    fn token(&self) -> BoxFuture<'_, Result<String>> {
+        async move {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or_default();
+            let mut cached = self.cached.lock().await;
+            if let Some((token, expires)) = cached.as_ref() {
+                if expires - now > TOKEN_REFRESH_MARGIN_SECS {
+                    return Ok(token.clone());
+                }
+            }
+            let token = {
+                let _t = timing::timer("azure.token");
+                self.inner.token().await?
+            };
+            let expires = claims(&token)
+                .and_then(|c| c.get("exp").and_then(Value::as_i64))
+                .unwrap_or(now + TOKEN_DEFAULT_LIFETIME_SECS);
+            *cached = Some((token.clone(), expires));
+            Ok(token)
         }
         .boxed()
     }
@@ -118,29 +168,100 @@ impl ResourceGraphClient {
 
         let mut total = 0;
         for batch in &batches {
-            let mut skip_token: Option<String> = None;
-            loop {
-                let page = self.query_page(query, batch, skip_token.as_deref()).await?;
-                total += page.rows.len();
-                on_page(page.rows);
-                match page.skip_token {
-                    Some(token) => skip_token = Some(token),
-                    None => break,
-                }
-            }
+            total += self.query_batch(query, batch, &mut on_page).await?;
         }
         Ok(total)
+    }
+
+    /// Fetch every page of one scope, in order.
+    ///
+    /// The first page tells us `totalRecords`. The remaining pages are then
+    /// requested by offset (`$skip`), [`PARALLEL_PAGES`] at a time, and
+    /// delivered in order. Sequential `$skipToken` paging is about 0.6 s per
+    /// page, which dominated large loads (3 extra pages ≈ 1.75 s at 400+
+    /// subscriptions). If an offset request fails, paging continues with
+    /// `$skipToken`, dropping rows already delivered so nothing repeats.
+    async fn query_batch<F>(
+        &self,
+        query: &str,
+        scope: &GraphScope,
+        on_page: &mut F,
+    ) -> Result<usize>
+    where
+        F: FnMut(Vec<Value>),
+    {
+        let first = self.query_page(query, scope, Paging::First).await?;
+        let page_size = self.page_size as usize;
+        let mut delivered = first.rows.len();
+        let full_first_page = delivered == page_size;
+        on_page(first.rows);
+        let Some(next_token) = first.skip_token else {
+            return Ok(delivered);
+        };
+
+        if let (Some(total_records), true) = (first.total_records, full_first_page) {
+            let offsets: Vec<usize> = (1..)
+                .map(|i| i * page_size)
+                .take_while(|offset| *offset < total_records)
+                .collect();
+            let mut pages = stream::iter(offsets)
+                .map(|offset| self.query_page(query, scope, Paging::Skip(offset)))
+                .buffered(PARALLEL_PAGES);
+            let mut failure = None;
+            while let Some(page) = pages.next().await {
+                match page {
+                    Ok(page) if page.rows.is_empty() => break,
+                    Ok(page) => {
+                        delivered += page.rows.len();
+                        on_page(page.rows);
+                    }
+                    Err(e) => {
+                        failure = Some(e);
+                        break;
+                    }
+                }
+            }
+            match failure {
+                None => return Ok(delivered),
+                Some(e) => warn!(
+                    "Parallel Resource Graph paging failed after {} rows ({}); continuing with $skipToken",
+                    delivered, e
+                ),
+            }
+        }
+
+        // Sequential paging, skipping rows the parallel pass already delivered.
+        let mut already = delivered - page_size.min(delivered);
+        let mut token = Some(next_token);
+        while let Some(current) = token {
+            let page = self
+                .query_page(query, scope, Paging::Token(&current))
+                .await?;
+            let mut rows = page.rows;
+            let drop = already.min(rows.len());
+            rows.drain(..drop);
+            already -= drop;
+            if !rows.is_empty() {
+                delivered += rows.len();
+                on_page(rows);
+            }
+            token = page.skip_token;
+        }
+        Ok(delivered)
     }
 
     async fn query_page(
         &self,
         query: &str,
         scope: &GraphScope,
-        skip_token: Option<&str>,
+        paging: Paging<'_>,
     ) -> Result<Page> {
+        let _t = timing::timer("azure.graph_page");
         let mut options = json!({ "$top": self.page_size, "resultFormat": "objectArray" });
-        if let Some(token) = skip_token {
-            options["$skipToken"] = json!(token);
+        match paging {
+            Paging::First => {}
+            Paging::Token(token) => options["$skipToken"] = json!(token),
+            Paging::Skip(offset) => options["$skip"] = json!(offset),
         }
         let mut body = json!({ "query": query, "options": options });
         match scope {
@@ -214,7 +335,15 @@ impl ResourceGraphClient {
                 rows.len(),
                 skip_token.is_some()
             );
-            return Ok(Page { rows, skip_token });
+            let total_records = value
+                .get("totalRecords")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize);
+            return Ok(Page {
+                rows,
+                skip_token,
+                total_records,
+            });
         }
     }
 }
@@ -222,7 +351,21 @@ impl ResourceGraphClient {
 struct Page {
     rows: Vec<Value>,
     skip_token: Option<String>,
+    total_records: Option<usize>,
 }
+
+/// Which page to ask for.
+#[derive(Clone, Copy)]
+enum Paging<'a> {
+    First,
+    Token(&'a str),
+    Skip(usize),
+}
+
+/// Pages requested at once after the first. Resource Graph allows about 15
+/// requests per 5 seconds per user; 4 in flight stays well inside that for
+/// typical loads, and 429s are retried with the server's back-off anyway.
+pub const PARALLEL_PAGES: usize = 4;
 
 #[derive(Debug, Default)]
 struct Throttle {
@@ -271,10 +414,14 @@ fn error_message(body: &str) -> String {
 /// Read the `tid` (tenant ID) claim from a JWT without verifying it. The token
 /// comes from our own credential; we only need to know which tenant it is for.
 pub fn tenant_id_from_jwt(token: &str) -> Option<String> {
+    claims(token)?.get("tid")?.as_str().map(str::to_string)
+}
+
+/// Decode a JWT's payload (claims) without verifying it.
+fn claims(token: &str) -> Option<Value> {
     let payload = token.split('.').nth(1)?;
     let bytes = base64::decode_config(payload, base64::URL_SAFE_NO_PAD).ok()?;
-    let claims: Value = serde_json::from_slice(&bytes).ok()?;
-    claims.get("tid")?.as_str().map(str::to_string)
+    serde_json::from_slice(&bytes).ok()
 }
 
 /// Quote a value as a KQL string literal.
@@ -368,7 +515,9 @@ pub fn resource_from_row(row: &Value) -> Option<AzureResource> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{ok, serve_sequence, Reply, StaticToken};
+    use crate::testing::{error, ok, serve, serve_sequence, Reply, StaticToken};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Instant;
 
     fn client(endpoint: &str) -> ResourceGraphClient {
         ResourceGraphClient::with_endpoint(endpoint, Arc::new(StaticToken("t".into())))
@@ -408,6 +557,7 @@ mod tests {
                 status: 429,
                 headers: vec![("x-ms-user-quota-resets-after", "00:00:00.05")],
                 body: "{}".into(),
+                delay: Default::default(),
             },
             ok(json!({"data": [{"id": "1"}]})),
         ])
@@ -432,6 +582,7 @@ mod tests {
             headers: vec![],
             body: json!({"error": {"code": "AuthorizationFailed", "message": "no access to root"}})
                 .to_string(),
+            delay: Default::default(),
         }])
         .await;
 
@@ -450,6 +601,219 @@ mod tests {
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    /// Mock of a result set of `total` rows (`{"id": "<n>"}`) paged by
+    /// `page` rows: the first page reports totalRecords and a skipToken;
+    /// `$skip` requests return that offset, slower for earlier offsets so the
+    /// test can tell whether delivery stays in order.
+    fn paged(
+        total: usize,
+        page: usize,
+        skip_fails_from: Option<usize>,
+    ) -> impl Fn(&Value) -> Reply {
+        move |body: &Value| {
+            let rows = |from: usize| -> Vec<Value> {
+                (from..(from + page).min(total))
+                    .map(|i| json!({"id": i.to_string()}))
+                    .collect()
+            };
+            let opts = &body["options"];
+            if let Some(skip) = opts.get("$skip").and_then(Value::as_u64) {
+                let skip = skip as usize;
+                if skip_fails_from.is_some_and(|f| skip >= f) {
+                    return error(400, "$skip not supported here");
+                }
+                let delay = Duration::from_millis(((total - skip) * 10) as u64);
+                return ok(json!({"data": rows(skip), "totalRecords": total})).after(delay);
+            }
+            let from = match opts.get("$skipToken").and_then(Value::as_str) {
+                None => 0,
+                Some(t) => t.trim_start_matches('t').parse::<usize>().unwrap(),
+            };
+            let mut reply = json!({"data": rows(from), "totalRecords": total});
+            if from + page < total {
+                reply["$skipToken"] = json!(format!("t{}", from + page));
+            }
+            ok(reply)
+        }
+    }
+
+    fn ids(pages: &[Vec<Value>]) -> Vec<usize> {
+        pages
+            .iter()
+            .flatten()
+            .map(|r| r["id"].as_str().unwrap().parse().unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn later_pages_are_fetched_in_parallel_by_offset_and_delivered_in_order() {
+        let (endpoint, requests) = serve(paged(7, 2, None)).await;
+        let mut pages = Vec::new();
+        let total = client(&endpoint)
+            .with_page_size(2)
+            .query_pages(
+                "resources",
+                &GraphScope::ManagementGroup("t".into()),
+                |rows| pages.push(rows),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(total, 7);
+        assert_eq!(
+            ids(&pages),
+            (0..7).collect::<Vec<_>>(),
+            "in order, no gaps, no repeats"
+        );
+        let requests = requests.lock().unwrap();
+        let mut skips: Vec<u64> = requests
+            .iter()
+            .filter_map(|b| b["options"].get("$skip").and_then(Value::as_u64))
+            .collect();
+        skips.sort();
+        assert_eq!(skips, [2, 4, 6]);
+        assert!(requests
+            .iter()
+            .all(|b| b["options"].get("$skipToken").is_none()));
+    }
+
+    #[tokio::test]
+    async fn parallel_paging_is_faster_than_sequential() {
+        let page_delay = Duration::from_millis(200);
+        let (endpoint, _) = serve(move |body: &Value| {
+            let skip = body["options"]
+                .get("$skip")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let rows: Vec<Value> = (skip..skip + 2)
+                .map(|i| json!({"id": i.to_string()}))
+                .collect();
+            let mut reply = json!({"data": rows, "totalRecords": 12});
+            if skip == 0 {
+                reply["$skipToken"] = json!("t2");
+            }
+            ok(reply).after(page_delay)
+        })
+        .await;
+
+        let started = Instant::now();
+        let total = client(&endpoint)
+            .with_page_size(2)
+            .query_pages(
+                "resources",
+                &GraphScope::Subscriptions(vec!["s".into()]),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(total, 12);
+        // 6 pages one after another: 6 x 200 ms. First page, then 5 more
+        // with 4 in flight: about 3 x 200 ms.
+        assert!(elapsed < Duration::from_millis(1000), "took {elapsed:?}");
+    }
+
+    #[tokio::test]
+    async fn failed_offset_paging_continues_by_token_without_repeating_rows() {
+        // Offsets 2 succeeds, offset 4 fails: rows 0-3 are delivered, then the
+        // $skipToken pass must skip its first page (rows 2-3) and continue.
+        let (endpoint, requests) = serve(paged(7, 2, Some(4))).await;
+        let mut pages = Vec::new();
+        let total = client(&endpoint)
+            .with_page_size(2)
+            .query_pages(
+                "resources",
+                &GraphScope::ManagementGroup("t".into()),
+                |rows| pages.push(rows),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(total, 7);
+        assert_eq!(ids(&pages), (0..7).collect::<Vec<_>>());
+        assert!(requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|b| b["options"].get("$skipToken").is_some()));
+    }
+
+    #[tokio::test]
+    async fn a_short_first_page_needs_no_further_requests() {
+        let (endpoint, requests) = serve(paged(1, 2, None)).await;
+        let total = client(&endpoint)
+            .with_page_size(2)
+            .query_pages(
+                "resources",
+                &GraphScope::ManagementGroup("t".into()),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(requests.lock().unwrap().len(), 1);
+    }
+
+    /// Token source that counts calls and hands out JWTs expiring at `exp`.
+    struct Counting {
+        calls: AtomicUsize,
+        exp: i64,
+    }
+
+    impl TokenSource for Counting {
+        fn token(&self) -> BoxFuture<'_, Result<String>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let exp = self.exp;
+            async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                let payload = base64::encode_config(
+                    format!(r#"{{"tid":"t","exp":{exp}}}"#),
+                    base64::URL_SAFE_NO_PAD,
+                );
+                Ok(format!("h.{payload}.s"))
+            }
+            .boxed()
+        }
+    }
+
+    fn unix_now() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
+    #[tokio::test]
+    async fn cached_token_is_reused_until_close_to_expiry() {
+        let source = CachingTokenSource::new(Counting {
+            calls: AtomicUsize::new(0),
+            exp: unix_now() + 3600,
+        });
+        for _ in 0..3 {
+            source.token().await.unwrap();
+        }
+        assert_eq!(source.inner.calls.load(Ordering::SeqCst), 1);
+
+        let expiring = CachingTokenSource::new(Counting {
+            calls: AtomicUsize::new(0),
+            exp: unix_now() + 60, // inside the refresh margin
+        });
+        expiring.token().await.unwrap();
+        expiring.token().await.unwrap();
+        assert_eq!(expiring.inner.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn concurrent_callers_share_one_token_fetch() {
+        let source = CachingTokenSource::new(Counting {
+            calls: AtomicUsize::new(0),
+            exp: unix_now() + 3600,
+        });
+        let results = futures::future::join_all((0..5).map(|_| source.token())).await;
+        assert!(results.iter().all(|r| r.is_ok()));
+        assert_eq!(source.inner.calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
