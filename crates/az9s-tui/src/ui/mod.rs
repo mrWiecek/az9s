@@ -1,6 +1,7 @@
 pub mod breadcrumb;
 pub mod help;
 pub mod resource_type;
+pub mod search;
 pub mod status_bar;
 pub mod widgets;
 
@@ -635,36 +636,26 @@ fn draw_resource_detail(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<(
     let doc = state.resource_document.as_ref();
     let tab = state.detail_tab;
 
-    let lines: Vec<Line> = match tab {
-        DetailTab::Overview => overview_lines(&detail::overview(doc, &resource)),
-        DetailTab::Tags => {
-            let tags = detail::tags(doc, &resource);
-            if tags.is_empty() {
-                vec![Line::from(Span::styled(
-                    "No tags.",
-                    Style::default().fg(Color::DarkGray),
-                ))]
-            } else {
-                let width = tags
-                    .iter()
-                    .map(|(k, _)| k.chars().count())
-                    .max()
-                    .unwrap_or(0);
-                tags.into_iter()
-                    .map(|(k, v)| {
-                        Line::from(vec![
-                            Span::styled(
-                                format!("{k:<width$}  "),
-                                Style::default().fg(Color::Yellow),
-                            ),
-                            Span::styled(v, Style::default().fg(Color::White)),
-                        ])
-                    })
-                    .collect()
+    let mut lines = detail_lines(state);
+
+    // Search: highlight every match, the current one more strongly.
+    let pattern = state.detail_pattern();
+    if !pattern.is_empty() {
+        let texts: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        let matches = search::find_matches(&texts, pattern);
+        let current = state.detail_match;
+        for (i, line) in lines.iter_mut().enumerate() {
+            let ranges: Vec<(usize, usize)> = matches
+                .iter()
+                .filter(|m| m.line == i)
+                .map(|m| (m.start, m.end))
+                .collect();
+            if !ranges.is_empty() {
+                let cur = current.filter(|(l, _)| *l == i).map(|(_, c)| c);
+                *line = search::highlight(std::mem::take(line), &ranges, cur);
             }
         }
-        DetailTab::Json => detail::json_text(doc).lines().map(json_line).collect(),
-    };
+    }
     let loading_hint = if doc.is_none() && state.loading {
         " · loading details…"
     } else {
@@ -704,11 +695,59 @@ fn draw_resource_detail(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<(
     // Clamp the scroll so the last line can reach the bottom but not beyond.
     let viewport = parts[1].height as usize;
     let max_scroll = lines.len().saturating_sub(viewport);
-    let scroll = state.detail_scroll.min(max_scroll);
+    let mut scroll = state.detail_scroll;
+    // Bring a search match into view, centred, if it is off screen.
+    if let Some(line) = state.detail_scroll_to {
+        if line < scroll || line >= scroll + viewport {
+            scroll = line.saturating_sub(viewport / 2);
+        }
+    }
+    let scroll = scroll.min(max_scroll);
     let content = Paragraph::new(lines).scroll((scroll.min(u16::MAX as usize) as u16, 0));
     f.render_widget(content, parts[1]);
-    app.state_mut().detail_scroll = scroll;
+    let state = app.state_mut();
+    state.detail_scroll = scroll;
+    state.detail_scroll_to = None;
     Ok(())
+}
+
+/// The lines of the detail view's current tab, before search highlighting.
+/// Search (`/`, `n`, `N`) runs over the same lines, so positions agree.
+pub fn detail_lines(state: &AppState) -> Vec<Line<'static>> {
+    let Some(resource) = state.selected_resource_detail.as_ref() else {
+        return vec![];
+    };
+    let doc = state.resource_document.as_ref();
+    match state.detail_tab {
+        DetailTab::Overview => overview_lines(&detail::overview(doc, resource)),
+        DetailTab::Tags => {
+            let tags = detail::tags(doc, resource);
+            if tags.is_empty() {
+                vec![Line::from(Span::styled(
+                    "No tags.",
+                    Style::default().fg(Color::DarkGray),
+                ))]
+            } else {
+                let width = tags
+                    .iter()
+                    .map(|(k, _)| k.chars().count())
+                    .max()
+                    .unwrap_or(0);
+                tags.into_iter()
+                    .map(|(k, v)| {
+                        Line::from(vec![
+                            Span::styled(
+                                format!("{k:<width$}  "),
+                                Style::default().fg(Color::Yellow),
+                            ),
+                            Span::styled(v, Style::default().fg(Color::White)),
+                        ])
+                    })
+                    .collect()
+            }
+        }
+        DetailTab::Json => detail::json_text(doc).lines().map(json_line).collect(),
+    }
 }
 
 /// The Overview tab: a heading per section, then aligned label/value rows.
@@ -797,6 +836,18 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
         f.render_widget(footer, area);
         return;
     }
+    // Typing a search in the detail view
+    if let Some(input) = &app.state().detail_search_input {
+        let footer = Paragraph::new(format!("/{input}_"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Search · Enter keep · Esc cancel"),
+            )
+            .style(Style::default().fg(Color::Cyan));
+        f.render_widget(footer, area);
+        return;
+    }
 
     let keybindings = if app.state().filter_mode {
         vec![
@@ -868,6 +919,8 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
             ViewMode::ResourceDetail => vec![
                 ("Tab/1-3", "Tabs"),
                 ("↑↓/jk", "Scroll"),
+                ("/ n N", "Search"),
+                ("c", "Copy"),
                 ("y", "Copy ID"),
                 ("o", "Portal"),
                 ("r", "Refresh"),

@@ -162,6 +162,10 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
 - `app.rs`: `TuiApp` wraps `App`. It handles keys per mode (normal, filter, command,
   help) and moves between views. Opening a view switches to it immediately and
   calls `App::request`; the list fills in when the result arrives.
+- `ui/search.rs`: Vim-style search for the detail view: smartcase matching,
+  next/previous with wrap-around, and highlighting that splits styled spans.
+  It runs over `ui::detail_lines`, the same lines the view draws, so match
+  positions and the screen agree.
 - `desktop.rs`: the `Desktop` trait for copying (OSC 52 escape sequence)
   and opening URLs (`open` / `xdg-open` / `start`). Tests record instead.
 - `command.rs`: parses `:` commands (`:mg`, `:sub`, `:rg [all|<sub>]`,

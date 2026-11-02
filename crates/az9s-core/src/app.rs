@@ -130,6 +130,7 @@ impl App {
         state.freshness.remove(&ViewMode::ResourceDetail);
         state.detail_tab = Default::default();
         state.detail_scroll = 0;
+        state.clear_detail_search();
         state.view = ViewMode::ResourceDetail;
         state.list_state.reset();
         self.request(request);

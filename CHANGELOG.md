@@ -15,6 +15,14 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 ## [0.6.0] - 2026-11-02
 
 ### Added
+- **Vim-style search in the resource detail view.** `/` searches the open
+  tab (Overview, Tags or JSON) instead of filtering: it jumps to the first
+  match as you type and highlights every match, the current one more
+  strongly. `Enter` keeps the search, `Esc` cancels it and returns to where
+  you were. `n` / `N` go to the next / previous match and wrap around
+  ("search hit BOTTOM, continuing at TOP"); the status bar shows "match 3
+  of 12". Lowercase ignores case, a capital letter makes it exact
+  (smartcase). `Esc` clears the highlights, then goes back.
 - **`c` copies the current view**, in every view:
   - lists (subscriptions, resource groups, resources): every row that passes
     the filters, not only the rows on screen, tab-separated with a header,

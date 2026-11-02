@@ -34,6 +34,22 @@ pub struct AppState {
     /// First visible line of the detail view's content
     pub detail_scroll: usize,
 
+    /// Committed search in the detail view (`/pattern` + Enter); `n`/`N` use it
+    pub detail_search: String,
+
+    /// The search being typed after `/` in the detail view, if any
+    pub detail_search_input: Option<String>,
+
+    /// Where the search started (scroll, current match), restored by Esc
+    pub detail_search_origin: (usize, Option<(usize, usize)>),
+
+    /// The current search match: (line, byte offset)
+    pub detail_match: Option<(usize, usize)>,
+
+    /// A line the detail view must scroll to show (set by search, applied
+    /// when drawing, since only drawing knows the viewport height)
+    pub detail_scroll_to: Option<usize>,
+
     /// Navigation history
     pub navigation_stack: Vec<NavigationContext>,
 
@@ -630,6 +646,22 @@ impl AppState {
     /// Set data source
     pub fn set_data_source(&mut self, source: DataSource) {
         self.data_source = source;
+    }
+
+    /// The pattern to highlight in the detail view: the one being typed, or
+    /// the committed one.
+    pub fn detail_pattern(&self) -> &str {
+        self.detail_search_input
+            .as_deref()
+            .unwrap_or(&self.detail_search)
+    }
+
+    /// Forget the detail view's search (new resource, or Esc).
+    pub fn clear_detail_search(&mut self) {
+        self.detail_search.clear();
+        self.detail_search_input = None;
+        self.detail_match = None;
+        self.detail_scroll_to = None;
     }
 
     /// Toggle help screen
