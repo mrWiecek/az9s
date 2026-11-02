@@ -14,6 +14,7 @@
 use super::repository::CacheRepository;
 use crate::{models::*, Result};
 use rusqlite::params;
+use serde_json::Value;
 
 /// Cached rows and the time (unix seconds) the oldest of them was written.
 #[derive(Debug, Default)]
@@ -44,6 +45,50 @@ impl CacheRepository<'_> {
             Some(row) => Some((row.get(0)?, row.get(1)?)),
             None => None,
         })
+    }
+
+    /// A resource's full document and when it was cached. IDs match
+    /// case-insensitively.
+    pub fn cached_resource_detail(&self, resource_id: &str) -> Result<Option<(Value, i64)>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT properties, cached_at FROM resource_details
+             WHERE lower(resource_id) = lower(?1)",
+        )?;
+        let mut rows = stmt.query([resource_id])?;
+        Ok(match rows.next()? {
+            Some(row) => {
+                let json: String = row.get(0)?;
+                Some((serde_json::from_str(&json)?, row.get(1)?))
+            }
+            None => None,
+        })
+    }
+
+    /// Cache a resource's full document. Skipped when the resource itself
+    /// is not cached (the table references `resources`); deleting the
+    /// resource from the cache deletes its document too.
+    pub fn put_resource_detail(&self, resource_id: &str, document: &Value) -> Result<()> {
+        let text = |key: &str| {
+            document
+                .get(key)
+                .and_then(|v| v.get("name").or(Some(v)))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+        self.conn().execute(
+            "INSERT INTO resource_details (resource_id, properties, sku, kind, cached_at)
+             SELECT id, ?2, ?3, ?4, ?5 FROM resources WHERE lower(id) = lower(?1) LIMIT 1
+             ON CONFLICT(resource_id) DO UPDATE SET properties = excluded.properties,
+                 sku = excluded.sku, kind = excluded.kind, cached_at = excluded.cached_at",
+            params![
+                resource_id,
+                serde_json::to_string(document)?,
+                text("sku"),
+                text("kind"),
+                chrono::Utc::now().timestamp()
+            ],
+        )?;
+        Ok(())
     }
 
     /// Store a whole document (e.g. the management group tree as JSON).
@@ -217,12 +262,20 @@ impl CacheRepository<'_> {
     ) -> Result<()> {
         let now = chrono::Utc::now().timestamp();
         let tx = self.conn().unchecked_transaction()?;
+        // Delete only resources that are gone: deleting a row cascades to
+        // its cached details, which must survive a refresh.
+        let kept: Vec<&str> = items.iter().map(|r| r.id.as_str()).collect();
         tx.execute(
             &format!(
                 "DELETE FROM resources
-                 WHERE {IN_SCOPE} AND (?2 IS NULL OR resource_group = ?2 COLLATE NOCASE)"
+                 WHERE {IN_SCOPE} AND (?2 IS NULL OR resource_group = ?2 COLLATE NOCASE)
+                   AND id NOT IN (SELECT value FROM json_each(?3))"
             ),
-            params![ids_json(subscription_ids)?, resource_group],
+            params![
+                ids_json(subscription_ids)?,
+                resource_group,
+                serde_json::to_string(&kept)?
+            ],
         )?;
         let mut insert = tx.prepare(
                 "INSERT INTO resources
@@ -284,6 +337,45 @@ mod tests {
 
     fn ids(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn resource_details_need_their_resource_and_match_ids_case_insensitively() {
+        let cache = Cache::new(Path::new(":memory:")).unwrap();
+        let repo = cache.repository();
+        let doc = serde_json::json!({"name": "vm", "sku": {"name": "Standard"}});
+        let r = res("s1", "rg", "vm");
+
+        repo.put_resource_detail(&r.id, &doc).unwrap();
+        assert!(
+            repo.cached_resource_detail(&r.id).unwrap().is_none(),
+            "no resource row: skipped"
+        );
+
+        repo.replace_subscriptions(&[Subscription {
+            id: "s1".into(),
+            name: "one".into(),
+            state: "Enabled".into(),
+            tenant_id: "t".into(),
+        }])
+        .unwrap();
+        repo.replace_resources(&ids(&["s1"]), None, std::slice::from_ref(&r))
+            .unwrap();
+        repo.put_resource_detail(&r.id.to_uppercase(), &doc)
+            .unwrap();
+        let (cached, _) = repo
+            .cached_resource_detail(&r.id.to_lowercase())
+            .unwrap()
+            .unwrap();
+        assert_eq!(cached, doc);
+
+        // Refreshing the resource list keeps the detail (upsert, no cascade)...
+        repo.replace_resources(&ids(&["s1"]), None, std::slice::from_ref(&r))
+            .unwrap();
+        assert!(repo.cached_resource_detail(&r.id).unwrap().is_some());
+        // ...and a resource deleted in Azure takes its detail with it.
+        repo.replace_resources(&ids(&["s1"]), None, &[]).unwrap();
+        assert!(repo.cached_resource_detail(&r.id).unwrap().is_none());
     }
 
     #[test]

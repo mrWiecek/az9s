@@ -166,9 +166,9 @@ Work items, in order:
 
 ## M2 — Inspect (2 weeks)
 
-- [ ] Generic resource detail view with three tabs: Overview, Tags, JSON (from
-      Resource Graph or ARM).
-- [ ] `y` copies the resource ID, `o` opens the resource in the Azure Portal.
+- [x] Generic resource detail view with three tabs: Overview, Tags, JSON (from
+      Resource Graph).
+- [x] `y` copies the resource ID, `o` opens the resource in the Azure Portal.
 - [ ] Filters: `:res type=Microsoft.Compute/virtualMachines`, `loc=westeurope`,
       `tag=env:prod`, and a resource-type summary view.
 - [ ] A real command palette with fuzzy search over commands and resources, and

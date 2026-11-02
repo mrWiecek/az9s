@@ -1,9 +1,11 @@
+use crate::desktop::{Desktop, SystemDesktop};
 use crate::event::Event;
 use crate::{Command, CommandKind, Scope};
 use anyhow::Result;
+use az9s_core::detail;
 use az9s_core::loader::{LoadReceiver, LoadRequest, LoadResult};
 use az9s_core::scope_tree::TreeRowKind;
-use az9s_core::state::{NavigationContext, ViewMode};
+use az9s_core::state::{DetailTab, NavigationContext, ViewMode};
 use az9s_core::{App, AppState};
 
 /// Navigation metadata key marking a view that showed all subscriptions.
@@ -21,14 +23,21 @@ use tracing::{debug, info, warn};
 pub struct TuiApp {
     core: App,
     should_quit: bool,
+    desktop: Box<dyn Desktop>,
 }
 
 impl TuiApp {
     /// Create a new TUI application
     pub fn new(core: App) -> Self {
+        Self::with_desktop(core, Box::new(SystemDesktop))
+    }
+
+    /// Like [`TuiApp::new`], with a custom clipboard/browser (for tests).
+    pub fn with_desktop(core: App, desktop: Box<dyn Desktop>) -> Self {
         Self {
             core,
             should_quit: false,
+            desktop,
         }
     }
 
@@ -457,6 +466,7 @@ impl TuiApp {
                 info!("Refreshing subscriptions");
                 self.core.request(LoadRequest::Subscriptions);
             }
+            (ViewMode::ResourceDetail, _) => self.core.refresh_resource_detail(),
             (ViewMode::ManagementGroupTree, _) => {
                 info!("Refreshing the management group tree");
                 self.core.request(LoadRequest::ScopeTree);
@@ -495,6 +505,10 @@ impl TuiApp {
 
     /// Navigate down in the current list
     fn navigate_down(&mut self) {
+        if self.state().view == ViewMode::ResourceDetail {
+            self.scroll_detail(1);
+            return;
+        }
         let state = self.state_mut();
         let list_len = state.current_list_len();
         if list_len > 0 {
@@ -504,6 +518,10 @@ impl TuiApp {
 
     /// Navigate up in the current list
     fn navigate_up(&mut self) {
+        if self.state().view == ViewMode::ResourceDetail {
+            self.scroll_detail(-1);
+            return;
+        }
         let state = self.state_mut();
         if state.current_list_len() > 0 {
             state.list_state.select_previous();
@@ -512,6 +530,10 @@ impl TuiApp {
 
     /// Navigate to first item
     fn navigate_first(&mut self) {
+        if self.state().view == ViewMode::ResourceDetail {
+            self.state_mut().detail_scroll = 0;
+            return;
+        }
         let state = self.state_mut();
         if state.current_list_len() > 0 {
             state.list_state.select_first();
@@ -520,6 +542,10 @@ impl TuiApp {
 
     /// Navigate to last item
     fn navigate_last(&mut self) {
+        if self.state().view == ViewMode::ResourceDetail {
+            self.state_mut().detail_scroll = usize::MAX;
+            return;
+        }
         let state = self.state_mut();
         let list_len = state.current_list_len();
         if list_len > 0 {
@@ -529,6 +555,10 @@ impl TuiApp {
 
     /// Navigate page down (viewport-aware)
     fn navigate_page_down(&mut self) {
+        if self.state().view == ViewMode::ResourceDetail {
+            self.scroll_detail(10);
+            return;
+        }
         let state = self.state_mut();
         let list_len = state.current_list_len();
         if list_len > 0 {
@@ -540,11 +570,47 @@ impl TuiApp {
 
     /// Navigate page up (viewport-aware)
     fn navigate_page_up(&mut self) {
+        if self.state().view == ViewMode::ResourceDetail {
+            self.scroll_detail(-10);
+            return;
+        }
         let state = self.state_mut();
         if state.current_list_len() > 0 {
             // Jump by 10 items or to the start
             state.list_state.selected = state.list_state.selected.saturating_sub(10);
         }
+    }
+
+    /// Scroll the detail view by `lines` (the drawing clamps the end).
+    fn scroll_detail(&mut self, lines: isize) {
+        let state = self.state_mut();
+        state.detail_scroll = state.detail_scroll.saturating_add_signed(lines);
+    }
+
+    /// Copy the selected item's ARM ID to the clipboard (`y`).
+    fn copy_selected_id(&mut self) {
+        let Some(id) = self.state().selected_arm_id() else {
+            return;
+        };
+        let notice = match self.desktop.copy(&id) {
+            Ok(()) => format!("Copied {id}"),
+            Err(e) => format!("Could not copy ({e}): {id}"),
+        };
+        self.state_mut().notice = Some(notice);
+    }
+
+    /// Open the selected item in the Azure Portal (`o`). The status bar
+    /// shows the link either way, e.g. for SSH sessions without a browser.
+    fn open_in_portal(&mut self) {
+        let Some(id) = self.state().selected_arm_id() else {
+            return;
+        };
+        let url = detail::portal_url(&id, self.state().portal_tenant().as_deref());
+        let notice = match self.desktop.open(&url) {
+            Ok(()) => format!("Opened {url}"),
+            Err(e) => format!("Could not open a browser ({e}): {url}"),
+        };
+        self.state_mut().notice = Some(notice);
     }
 
     /// Handle selection (Enter key)
@@ -683,16 +749,39 @@ impl TuiApp {
         if let Some(resource) = self.state().selected_resource().cloned() {
             info!("Selected resource: {}", resource.name);
             self.push_current_context(Some(resource.resource_group.clone()));
-            let state = self.state_mut();
-            state.selected_resource_detail = Some(resource);
-            state.view = ViewMode::ResourceDetail;
-            state.list_state.reset();
+            self.core.open_resource_detail(resource);
         }
         Ok(true)
     }
 
     /// Handle view-specific keys
     async fn handle_view_key(&mut self, key: KeyEvent) -> Result<bool> {
+        match key.code {
+            KeyCode::Char('y') => {
+                self.copy_selected_id();
+                return Ok(true);
+            }
+            KeyCode::Char('o') => {
+                self.open_in_portal();
+                return Ok(true);
+            }
+            _ => {}
+        }
+        if self.state().view == ViewMode::ResourceDetail {
+            let tab = self.state().detail_tab;
+            let next = match key.code {
+                KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => Some(tab.cycle(1)),
+                KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => Some(tab.cycle(-1)),
+                KeyCode::Char(c @ '1'..='3') => Some(DetailTab::ALL[c as usize - '1' as usize]),
+                _ => None,
+            };
+            if let Some(next) = next.filter(|n| *n != tab) {
+                let state = self.state_mut();
+                state.detail_tab = next;
+                state.detail_scroll = 0;
+            }
+            return Ok(true);
+        }
         if self.state().view == ViewMode::ManagementGroupTree {
             match key.code {
                 KeyCode::Char(' ') => self.tree_expand(None),

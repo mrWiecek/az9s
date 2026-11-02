@@ -93,6 +93,10 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
       `GraphFetcher` uses it to resolve the tenant (and so the token) before
       the first request.
     - Tests use fake fetchers.
+- `detail.rs`: what the resource detail view shows, derived from the
+  resource's full document (`LoadRequest::ResourceDetail`, one Resource
+  Graph query by ID; cached in `resource_details`): Overview sections, sorted
+  tags, pretty JSON, and Portal URLs.
 - `scope_tree.rs`: `ScopeTree` (root, groups, subscriptions, each with its
   parent; serializable, cached as one JSON document). `rows(expanded, known
   subscriptions, filter)` flattens it into the visible `TreeRow`s: groups
@@ -147,6 +151,8 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
 - `app.rs`: `TuiApp` wraps `App`. It handles keys per mode (normal, filter, command,
   help) and moves between views. Opening a view switches to it immediately and
   calls `App::request`; the list fills in when the result arrives.
+- `desktop.rs`: the `Desktop` trait for copying (OSC 52 escape sequence)
+  and opening URLs (`open` / `xdg-open` / `start`). Tests record instead.
 - `command.rs`: parses `:` commands (`:mg`, `:sub`, `:rg [all|<sub>]`,
   `:res [all|<sub>]`). Command names are always singular.
 - `ui/`: rendering. List views are **virtualized**: `ListState::visible_range`

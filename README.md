@@ -16,7 +16,7 @@ works for Kubernetes.
 
 | Today | Planned |
 |---|---|
-| Management group tree → subscriptions → resource groups → resources → detail | Rich detail views, JSON, open in Portal, command palette (M2) |
+| Management group tree → subscriptions → resource groups → resources → detail (Overview, Tags, JSON) | Filters, command palette, config file (M2) |
 | Resource groups across a whole management group, or all subscriptions (`:rg all`, `:res all`) via Azure Resource Graph | Azure Policy at management-group scope: assignments, compliance, exemptions (M3) |
 | Instant views from a local cache, refreshed in the background, with data age in the status bar | Safe actions: VM start/stop, restarts, tags, delete, policy scans (M4) |
 | `/` filtering, vim keys, `:` commands, `?` help | AKS, Key Vault, logs, themes (M5) |
@@ -65,6 +65,9 @@ az9s --timings                             # launch, print a timing summary on e
 | `/` | Filter |
 | `:` | Command mode |
 | `r` | Refresh |
+| `y` | Copy the selected item's Azure ID (works over SSH; in tmux enable `set-clipboard`) |
+| `o` | Open the selected item in the Azure Portal |
+| `Tab`, `1`-`3` | Detail view: Overview / Tags / JSON |
 | `?` | Help |
 | `q` / `Ctrl+C` | Quit |
 

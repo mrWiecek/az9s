@@ -1,5 +1,6 @@
 pub mod app;
 pub mod command;
+pub mod desktop;
 pub mod event;
 pub mod ui;
 
@@ -18,6 +19,7 @@ use tracing::{debug, error, info, warn};
 
 pub use app::TuiApp;
 pub use command::{Command, CommandKind, Scope};
+pub use desktop::{Desktop, SystemDesktop};
 pub use event::{Event, EventHandler};
 
 /// Run the TUI application

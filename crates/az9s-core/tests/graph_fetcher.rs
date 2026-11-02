@@ -349,3 +349,57 @@ async fn warm_up_resolves_the_tenant_before_the_first_request() {
         "only the page's token, no tenant lookup"
     );
 }
+
+#[tokio::test]
+async fn resource_detail_queries_one_id_in_its_subscription() {
+    let id = "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm";
+    let (url, requests) = serve(move |_| {
+        ok(json!({"totalRecords": 1, "count": 1, "data": [
+            {"id": id, "name": "vm", "properties": {"hardwareProfile": {"vmSize": "B2s"}}}
+        ]}))
+    })
+    .await;
+    let graph = ResourceGraphClient::with_endpoint(&url, Arc::new(StaticToken::for_tenant(TENANT)));
+    let fetcher = GraphFetcher::new(Arc::new(graph), Arc::new(FakeArm::default()));
+
+    let outcome = fetcher
+        .fetch(
+            LoadRequest::ResourceDetail {
+                resource_id: id.into(),
+                subscription_id: "s1".into(),
+            },
+            ChunkSink::discard(),
+        )
+        .await;
+    match outcome.data {
+        Ok(LoadedData::ResourceDetail(doc)) => {
+            assert_eq!(doc["properties"]["hardwareProfile"]["vmSize"], "B2s")
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    let body = requests.lock().unwrap()[0].clone();
+    assert_eq!(body["subscriptions"], json!(["s1"]));
+    assert!(body["query"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("id =~ '{id}'")));
+}
+
+#[tokio::test]
+async fn a_resource_missing_from_resource_graph_is_an_error_not_arm() {
+    let (url, _) = serve(|_| ok(json!({"totalRecords": 0, "count": 0, "data": []}))).await;
+    let graph = ResourceGraphClient::with_endpoint(&url, Arc::new(StaticToken::for_tenant(TENANT)));
+    let arm = Arc::new(FakeArm::default());
+    let fetcher = GraphFetcher::new(Arc::new(graph), arm.clone());
+    let outcome = fetcher
+        .fetch(
+            LoadRequest::ResourceDetail {
+                resource_id: "/subscriptions/s1/x".into(),
+                subscription_id: "s1".into(),
+            },
+            ChunkSink::discard(),
+        )
+        .await;
+    assert!(matches!(outcome.data, Err(e) if e.contains("not found")));
+    assert_eq!(arm.calls.load(Ordering::SeqCst), 0);
+}
