@@ -2,7 +2,7 @@ use rusqlite::{Connection, Result};
 use tracing::info;
 
 /// Current schema version
-const CURRENT_VERSION: i32 = 1;
+const CURRENT_VERSION: i32 = 2;
 
 /// Run all pending migrations
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -53,6 +53,7 @@ fn apply_migration(conn: &Connection, version: i32) -> Result<()> {
 
     match version {
         1 => migration_v1(conn)?,
+        2 => migration_v2(conn)?,
         _ => panic!("Unknown migration version: {}", version),
     }
 
@@ -142,6 +143,19 @@ fn migration_v1(conn: &Connection) -> Result<()> {
     )?;
 
     Ok(())
+}
+
+/// Small documents cached whole, e.g. the management group tree (JSON).
+fn migration_v2(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS kv (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            cached_at INTEGER NOT NULL
+        );
+        "#,
+    )
 }
 
 #[cfg(test)]

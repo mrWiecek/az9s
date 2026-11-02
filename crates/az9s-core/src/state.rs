@@ -1,5 +1,6 @@
 use crate::models::{Resource, ResourceGroup, Subscription};
-use std::collections::HashMap;
+use crate::scope_tree::{ScopeTree, TreeRow};
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 /// Application state management
@@ -68,6 +69,16 @@ pub struct AppState {
     /// Cross-subscription mode (for "all" scope)
     pub cross_subscription_mode: bool,
 
+    /// Management group hierarchy, once loaded
+    pub scope_tree: Option<ScopeTree>,
+
+    /// Groups that are open in the tree view
+    pub tree_expanded: HashSet<String>,
+
+    /// Management group whose subscriptions the cross-subscription lists show
+    /// (`None`: all subscriptions)
+    pub scope_group: Option<String>,
+
     /// Memoized filter result, so a frame doesn't rescan every row
     filter_memo: Mutex<FilterMemo>,
 }
@@ -117,6 +128,7 @@ pub enum DataSource {
 pub enum ViewMode {
     #[default]
     SubscriptionList,
+    ManagementGroupTree,
     ResourceGroupList,
     ResourceList,
     ResourceDetail,
@@ -243,7 +255,41 @@ impl AppState {
             ViewMode::SubscriptionList => self.filtered_subscriptions().len(),
             ViewMode::ResourceGroupList => self.filtered_resource_groups().len(),
             ViewMode::ResourceList => self.filtered_resources().len(),
+            ViewMode::ManagementGroupTree => self.tree_rows().len(),
             _ => 0,
+        }
+    }
+
+    /// Visible rows of the management group tree (expansion and filter applied).
+    pub fn tree_rows(&self) -> Vec<TreeRow> {
+        match &self.scope_tree {
+            Some(tree) => tree.rows(&self.tree_expanded, &self.subscriptions, &self.filter),
+            None => Vec::new(),
+        }
+    }
+
+    /// The selected row of the tree view.
+    pub fn selected_tree_row(&self) -> Option<TreeRow> {
+        if self.view != ViewMode::ManagementGroupTree {
+            return None;
+        }
+        self.tree_rows().into_iter().nth(self.list_state.selected)
+    }
+
+    /// Store a freshly loaded tree. The first tree opens its root group.
+    pub fn set_scope_tree(&mut self, tree: ScopeTree) {
+        if self.scope_tree.is_none() {
+            self.tree_expanded.insert(tree.root.clone());
+        }
+        self.scope_tree = Some(tree);
+    }
+
+    /// Open or close a group in the tree view.
+    pub fn set_tree_expanded(&mut self, key: &str, open: bool) {
+        if open {
+            self.tree_expanded.insert(key.to_string());
+        } else {
+            self.tree_expanded.remove(key);
         }
     }
 
@@ -324,6 +370,7 @@ impl AppState {
             ViewMode::SubscriptionList => self.selected_subscription().map(|s| s.id.clone()),
             ViewMode::ResourceGroupList => self.selected_resource_group().map(|r| r.id.clone()),
             ViewMode::ResourceList => self.selected_resource().map(|r| r.id.clone()),
+            ViewMode::ManagementGroupTree => self.selected_tree_row().map(|r| r.key),
             _ => None,
         }
     }
@@ -340,6 +387,7 @@ impl AppState {
                 .iter()
                 .position(|r| r.id == id),
             ViewMode::ResourceList => self.filtered_resources().iter().position(|r| r.id == id),
+            ViewMode::ManagementGroupTree => self.tree_rows().iter().position(|r| r.key == id),
             _ => None,
         };
         if let Some(i) = position {

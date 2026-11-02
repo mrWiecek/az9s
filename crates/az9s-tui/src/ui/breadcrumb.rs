@@ -22,8 +22,20 @@ impl Breadcrumb {
                 .add_modifier(Modifier::BOLD),
         )];
 
-        // Add subscription context if available
-        if let Some(sub) = &state.selected_subscription {
+        // Add the scope: a management group (cross-subscription lists opened
+        // from the tree) or the selected subscription.
+        let group = state
+            .scope_group
+            .as_deref()
+            .filter(|_| state.cross_subscription_mode)
+            .and_then(|g| state.scope_tree.as_ref()?.label_of(g));
+        if let Some(group) = group {
+            spans.push(Span::raw(" > "));
+            spans.push(Span::styled(
+                Self::truncate(group, 30),
+                Style::default().fg(Color::Yellow),
+            ));
+        } else if let Some(sub) = &state.selected_subscription {
             spans.push(Span::raw(" > "));
             spans.push(Span::styled(
                 Self::truncate(&sub.name, 30),
@@ -61,6 +73,7 @@ impl Breadcrumb {
     /// Get human-readable view name
     fn view_name(view: &ViewMode) -> &'static str {
         match view {
+            ViewMode::ManagementGroupTree => "Management Groups",
             ViewMode::SubscriptionList => "Subscriptions",
             ViewMode::ResourceGroupList => "Resource Groups",
             ViewMode::ResourceList => "Resources",
@@ -73,11 +86,8 @@ impl Breadcrumb {
     ///
     /// This ensures breadcrumbs don't overflow on narrow terminals
     fn truncate(s: &str, max_len: usize) -> String {
-        if s.len() <= max_len {
-            s.to_string()
-        } else {
-            format!("{}...", &s[..max_len.saturating_sub(3)])
-        }
+        // Character-based: byte slicing panics on non-ASCII names.
+        super::widgets::truncate_with_ellipsis(s, max_len)
     }
 }
 
@@ -151,6 +161,12 @@ mod tests {
         let text = format!("{:?}", line);
 
         assert!(text.contains("⟳"));
+    }
+
+    #[test]
+    fn test_truncate_non_ascii_does_not_panic() {
+        let result = Breadcrumb::truncate("Zarządzanie-grupą-główną-ąęółżź", 10);
+        assert_eq!(result.chars().count(), 10);
     }
 
     #[test]

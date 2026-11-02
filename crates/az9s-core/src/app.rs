@@ -8,12 +8,16 @@ use crate::{
     timing,
 };
 use anyhow::Context;
+use az9s_azure::management_groups::ManagementGroupClient;
 use az9s_azure::resource_graph::{CachingTokenSource, CredentialTokenSource};
 use az9s_azure::{AuthProvider, AzureAuth, AzureClient, ResourceGraphClient};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
+
+/// Cache key of the management group tree.
+const SCOPE_TREE_KEY: &str = "scope_tree";
 
 /// Main application coordinator.
 ///
@@ -65,6 +69,7 @@ impl App {
         let mut app = Self::with_fetcher(cache, fetcher);
         app.load_cached_subscriptions();
         app.request(LoadRequest::Subscriptions);
+        app.open_scope_tree();
         Ok(app)
     }
 
@@ -79,10 +84,11 @@ impl App {
         let tokens = Arc::new(CachingTokenSource::new(CredentialTokenSource(
             auth.credential(),
         )));
-        Arc::new(GraphFetcher::new(
-            Arc::new(ResourceGraphClient::new(tokens)),
-            arm,
-        ))
+        let management_groups = Arc::new(ManagementGroupClient::new(tokens.clone()));
+        Arc::new(
+            GraphFetcher::new(Arc::new(ResourceGraphClient::new(tokens)), arm)
+                .with_management_groups(management_groups),
+        )
     }
 
     /// Create an application with no Azure connection, backed by `cache`.
@@ -99,6 +105,27 @@ impl App {
             loader: Loader::new(fetcher),
             pending: HashMap::new(),
         }
+    }
+
+    /// Switch to the management group tree (the start view) and load it:
+    /// the cached tree at once, the fresh one in the background. If it can't
+    /// be loaded and nothing is cached, [`App::apply`] falls back to the
+    /// subscription list.
+    pub fn open_scope_tree(&mut self) {
+        self.state.view = ViewMode::ManagementGroupTree;
+        self.state.list_state.reset();
+        self.request(LoadRequest::ScopeTree);
+    }
+
+    /// The tree couldn't be shown: go to the subscription list and say why.
+    fn fall_back_to_subscriptions(&mut self, reason: &str) {
+        if self.state.view == ViewMode::ManagementGroupTree {
+            self.state.view = ViewMode::SubscriptionList;
+            self.state.list_state.reset();
+        }
+        self.state.notice = Some(format!(
+            "Management group tree unavailable ({reason}); showing subscriptions"
+        ));
     }
 
     /// Show cached subscriptions immediately (before Azure answers).
@@ -121,6 +148,16 @@ impl App {
         let repo = self.cache.repository();
         let result = match request {
             LoadRequest::Subscriptions => return,
+            LoadRequest::ScopeTree => repo.document(SCOPE_TREE_KEY).map(|doc| match doc {
+                Some((json, cached_at)) => match serde_json::from_str(&json) {
+                    Ok(tree) => (LoadedData::ScopeTree(tree), Some(cached_at)),
+                    Err(e) => {
+                        warn!("Ignoring unreadable cached tree: {}", e);
+                        (LoadedData::ScopeTree(Default::default()), None)
+                    }
+                },
+                None => (LoadedData::ScopeTree(Default::default()), None),
+            }),
             LoadRequest::ResourceGroups { subscription_ids } => {
                 let _t = timing::timer("cache.read_resource_groups");
                 repo.cached_resource_groups(subscription_ids).map(|c| {
@@ -164,6 +201,7 @@ impl App {
             LoadKind::Subscriptions => self.state.subscriptions.len(),
             LoadKind::ResourceGroups => self.state.resource_groups.len(),
             LoadKind::Resources => self.state.resources.len(),
+            LoadKind::ScopeTree => usize::from(self.state.scope_tree.is_some()),
         }
     }
 
@@ -193,6 +231,7 @@ impl App {
                 );
             }
             Err(e) if staged => self.state.notice = Some(format!("{e}; showing cached data")),
+            Err(e) if kind == LoadKind::ScopeTree => self.fall_back_to_subscriptions(&e),
             Err(e) => self.state.set_error(Some(e)),
         }
         self.state.set_loading(self.loader.is_loading());
@@ -268,7 +307,9 @@ impl App {
                 warn!("Loading {} failed: {}", kind.label(), e);
                 // Cached rows are still on screen: a non-blocking notice is
                 // enough. Otherwise the list is empty or incomplete: error.
-                if pending.staged {
+                if kind == LoadKind::ScopeTree && !pending.staged {
+                    self.fall_back_to_subscriptions(&e);
+                } else if pending.staged {
                     let age = self
                         .state
                         .freshness
@@ -302,6 +343,7 @@ impl App {
                 put(&mut self.state.resource_groups, items, append)
             }
             LoadedData::Resources(items) => put(&mut self.state.resources, items, append),
+            LoadedData::ScopeTree(tree) => self.state.set_scope_tree(tree),
         }
     }
 
@@ -340,6 +382,19 @@ impl App {
                 resource_group: resource_group.clone(),
                 items: self.state.resources.clone(),
             },
+            LoadRequest::ScopeTree => match &self.state.scope_tree {
+                Some(tree) => match serde_json::to_string(tree) {
+                    Ok(value) => WriteJob::Document {
+                        key: SCOPE_TREE_KEY.into(),
+                        value,
+                    },
+                    Err(e) => {
+                        warn!("Could not serialize the tree: {}", e);
+                        return;
+                    }
+                },
+                None => return,
+            },
         };
         self.cache.write(job);
     }
@@ -373,6 +428,7 @@ fn view_of(kind: LoadKind) -> ViewMode {
         LoadKind::Subscriptions => ViewMode::SubscriptionList,
         LoadKind::ResourceGroups => ViewMode::ResourceGroupList,
         LoadKind::Resources => ViewMode::ResourceList,
+        LoadKind::ScopeTree => ViewMode::ManagementGroupTree,
     }
 }
 
@@ -383,6 +439,7 @@ fn merge(acc: &mut Option<LoadedData>, data: LoadedData) {
         (Some(LoadedData::Subscriptions(a)), LoadedData::Subscriptions(b)) => a.extend(b),
         (Some(LoadedData::ResourceGroups(a)), LoadedData::ResourceGroups(b)) => a.extend(b),
         (Some(LoadedData::Resources(a)), LoadedData::Resources(b)) => a.extend(b),
+        // A tree arrives whole; the newest replaces the rest.
         (Some(_), other) => *acc = Some(other),
     }
 }

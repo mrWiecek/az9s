@@ -2,11 +2,16 @@ use crate::event::Event;
 use crate::{Command, CommandKind, Scope};
 use anyhow::Result;
 use az9s_core::loader::{LoadReceiver, LoadRequest, LoadResult};
+use az9s_core::scope_tree::TreeRowKind;
 use az9s_core::state::{NavigationContext, ViewMode};
 use az9s_core::{App, AppState};
 
 /// Navigation metadata key marking a view that showed all subscriptions.
 const CROSS_SUBSCRIPTION: &str = "cross_subscription";
+/// Navigation metadata key: the management group a view was scoped to.
+const SCOPE_GROUP: &str = "scope_group";
+/// Navigation metadata key: the row that was selected, restored on going back.
+const SELECTED: &str = "selected";
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use tracing::{debug, info, warn};
 
@@ -267,7 +272,14 @@ impl TuiApp {
             return Ok(());
         }
 
+        // Commands always start a new, unscoped navigation.
+        self.state_mut().scope_group = None;
         match command.kind {
+            CommandKind::ManagementGroups => {
+                debug!("Command: management group tree");
+                self.state_mut().clear_navigation();
+                self.core.open_scope_tree();
+            }
             CommandKind::Subscriptions => {
                 debug!("Command: Navigate to subscriptions");
                 let state = self.state_mut();
@@ -325,6 +337,30 @@ impl TuiApp {
             .iter()
             .filter(|s| !s.state.eq_ignore_ascii_case("Disabled"))
             .map(|s| s.id.clone())
+            .collect()
+    }
+
+    /// IDs of the enabled subscriptions a cross-subscription view covers: all,
+    /// or those below the management group the view was opened from.
+    fn scope_subscription_ids(&self) -> Vec<String> {
+        self.enabled_subscriptions_under(self.state().scope_group.as_deref())
+    }
+
+    /// Enabled subscriptions below `group` (all of them for `None`).
+    fn enabled_subscriptions_under(&self, group: Option<&str>) -> Vec<String> {
+        let state = self.state();
+        let (Some(group), Some(tree)) = (group, &state.scope_tree) else {
+            return self.enabled_subscription_ids();
+        };
+        let disabled: std::collections::HashSet<String> = state
+            .subscriptions
+            .iter()
+            .filter(|s| s.state.eq_ignore_ascii_case("Disabled"))
+            .map(|s| s.id.to_ascii_lowercase())
+            .collect();
+        tree.subscriptions_under(group, &state.subscriptions)
+            .into_iter()
+            .filter(|id| !disabled.contains(id))
             .collect()
     }
 
@@ -408,7 +444,7 @@ impl TuiApp {
     async fn handle_refresh(&mut self) -> Result<()> {
         let state = self.state();
         let scope_ids = if state.cross_subscription_mode {
-            Some(self.enabled_subscription_ids())
+            Some(self.scope_subscription_ids())
         } else {
             state
                 .selected_subscription
@@ -420,6 +456,10 @@ impl TuiApp {
             (ViewMode::SubscriptionList, _) => {
                 info!("Refreshing subscriptions");
                 self.core.request(LoadRequest::Subscriptions);
+            }
+            (ViewMode::ManagementGroupTree, _) => {
+                info!("Refreshing the management group tree");
+                self.core.request(LoadRequest::ScopeTree);
             }
             (ViewMode::ResourceGroupList, Some(subscription_ids)) => {
                 self.core
@@ -445,6 +485,10 @@ impl TuiApp {
             state.view = ctx.view;
             state.list_state.reset();
             state.cross_subscription_mode = ctx.metadata.contains_key(CROSS_SUBSCRIPTION);
+            state.scope_group = ctx.metadata.get(SCOPE_GROUP).cloned();
+            if let Some(id) = ctx.metadata.get(SELECTED) {
+                state.select_id(id);
+            }
         }
         Ok(())
     }
@@ -506,11 +550,71 @@ impl TuiApp {
     /// Handle selection (Enter key)
     async fn handle_select(&mut self) -> Result<bool> {
         match self.state().view {
+            ViewMode::ManagementGroupTree => self.handle_tree_select(),
             ViewMode::SubscriptionList => self.handle_subscription_select().await,
             ViewMode::ResourceGroupList => self.handle_resource_group_select().await,
             ViewMode::ResourceList => self.handle_resource_select().await,
             ViewMode::ResourceDetail => Ok(true),
             ViewMode::Logs => Ok(true),
+        }
+    }
+
+    /// Enter on the tree: a subscription opens its resource groups; a group
+    /// opens the resource groups of every enabled subscription below it.
+    fn handle_tree_select(&mut self) -> Result<bool> {
+        let Some(row) = self.state().selected_tree_row() else {
+            return Ok(true);
+        };
+        if row.kind == TreeRowKind::Subscription {
+            let sub = self
+                .state()
+                .subscriptions
+                .iter()
+                .find(|s| s.id.eq_ignore_ascii_case(&row.key))
+                .cloned()
+                .unwrap_or_else(|| az9s_core::models::Subscription {
+                    id: row.key.clone(),
+                    name: row.label.clone(),
+                    state: "Enabled".into(),
+                    tenant_id: String::new(),
+                });
+            self.push_current_context(None);
+            let id = sub.id.clone();
+            let state = self.state_mut();
+            state.selected_subscription = Some(sub);
+            state.scope_group = None;
+            self.show_resource_groups(vec![id], false);
+            return Ok(true);
+        }
+
+        let ids = self.enabled_subscriptions_under(Some(&row.key));
+        if ids.is_empty() {
+            self.state_mut().notice = Some(format!("No enabled subscriptions under {}", row.label));
+            return Ok(true);
+        }
+        self.push_current_context(None);
+        let state = self.state_mut();
+        state.scope_group = Some(row.key.clone());
+        state.selected_subscription = None;
+        self.show_resource_groups(ids, true);
+        Ok(true)
+    }
+
+    /// Open (`open = true`) or close the selected group in the tree. Closing
+    /// a row that is already closed (or a subscription) moves to its parent.
+    fn tree_expand(&mut self, open: Option<bool>) {
+        let rows = self.state().tree_rows();
+        let selected = self.state().list_state.selected;
+        let Some(row) = rows.get(selected) else {
+            return;
+        };
+        let open = open.unwrap_or(!row.expanded);
+        if row.is_group() && row.has_children && row.expanded != open {
+            self.state_mut().set_tree_expanded(&row.key, open);
+        } else if !open && row.depth > 0 {
+            if let Some(parent) = rows[..selected].iter().rposition(|r| r.depth < row.depth) {
+                self.state_mut().list_state.selected = parent;
+            }
         }
     }
 
@@ -558,6 +662,12 @@ impl TuiApp {
         if state.cross_subscription_mode {
             metadata.insert(CROSS_SUBSCRIPTION.to_string(), String::new());
         }
+        if let Some(group) = &state.scope_group {
+            metadata.insert(SCOPE_GROUP.to_string(), group.clone());
+        }
+        if let Some(id) = state.selected_id() {
+            metadata.insert(SELECTED.to_string(), id);
+        }
         let ctx = NavigationContext {
             view: state.view.clone(),
             subscription_id: state.selected_subscription.as_ref().map(|s| s.id.clone()),
@@ -582,8 +692,15 @@ impl TuiApp {
     }
 
     /// Handle view-specific keys
-    async fn handle_view_key(&mut self, _key: KeyEvent) -> Result<bool> {
-        // View-specific handlers can be added here
+    async fn handle_view_key(&mut self, key: KeyEvent) -> Result<bool> {
+        if self.state().view == ViewMode::ManagementGroupTree {
+            match key.code {
+                KeyCode::Char(' ') => self.tree_expand(None),
+                KeyCode::Right | KeyCode::Char('l') => self.tree_expand(Some(true)),
+                KeyCode::Left | KeyCode::Char('h') => self.tree_expand(Some(false)),
+                _ => {}
+            }
+        }
         Ok(true)
     }
 }

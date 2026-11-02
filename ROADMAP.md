@@ -175,7 +175,7 @@ Work items, in order:
       autocomplete for `:` commands.
 - [ ] Config file `~/.config/az9s/config.toml` for default subscription, refresh
       interval, theme, and read-only mode.
-- [ ] **Scope tree:** tenant root → management groups → subscriptions → resource
+- [x] **Scope tree:** tenant root → management groups → subscriptions → resource
       groups, with `:mg` to jump. This becomes the top-level navigation (needed by M3),
       and az9s opens at the tenant root management group by default.
 - [ ] `:ctx` to switch tenant.

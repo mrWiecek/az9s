@@ -6,7 +6,8 @@ pub mod widgets;
 
 use crate::TuiApp;
 use anyhow::Result;
-use az9s_core::state::ViewMode;
+use az9s_core::scope_tree::TreeRowKind;
+use az9s_core::state::{AppState, ViewMode};
 use breadcrumb::Breadcrumb;
 use help::render_help;
 use ratatui::{
@@ -74,12 +75,139 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &TuiApp) {
 /// Draw the main content area based on current view
 fn draw_content(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     match app.state().view {
+        ViewMode::ManagementGroupTree => draw_tree(f, area, app),
         ViewMode::SubscriptionList => draw_subscription_list(f, area, app),
         ViewMode::ResourceGroupList => draw_resource_group_list(f, area, app),
         ViewMode::ResourceList => draw_resource_list(f, area, app),
         ViewMode::ResourceDetail => draw_resource_detail(f, area, app),
         ViewMode::Logs => draw_logs(f, area, app),
     }
+}
+
+/// " [ALL SUBSCRIPTIONS]" or " [MG: name]" for cross-subscription lists.
+fn scope_info(state: &AppState) -> String {
+    if !state.cross_subscription_mode {
+        return String::new();
+    }
+    let group = state
+        .scope_group
+        .as_deref()
+        .and_then(|g| state.scope_tree.as_ref()?.label_of(g));
+    match group {
+        Some(name) => format!(" [MG: {}]", truncate_with_ellipsis(name, 40)),
+        None => " [ALL SUBSCRIPTIONS]".to_string(),
+    }
+}
+
+/// Draw the management group tree
+fn draw_tree(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
+    let rows = app.state().tree_rows();
+
+    if rows.is_empty() {
+        let state = app.state();
+        let message = if state.loading && state.scope_tree.is_none() {
+            "Loading the management group tree...".to_string()
+        } else if !state.filter.is_empty() {
+            "Nothing in the tree matches the current filter.\n\nPress Esc to clear the filter."
+                .to_string()
+        } else {
+            "No management groups loaded.\n\nPress 'r' to retry or ':sub' for subscriptions."
+                .to_string()
+        };
+        let content = Paragraph::new(message)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Management Groups"),
+            )
+            .style(Style::default().fg(Color::Gray))
+            .wrap(Wrap { trim: true });
+        f.render_widget(content, area);
+        return Ok(());
+    }
+
+    let viewport = area.height.saturating_sub(2) as usize;
+    let mut list_state = app.state().list_state.clone();
+    let visible = list_state.visible_range(rows.len(), viewport);
+    let items: Vec<_> = rows[visible.clone()]
+        .iter()
+        .map(|row| {
+            let indent = "  ".repeat(row.depth);
+            let marker = match (row.has_children, row.expanded) {
+                (false, _) => "  ",
+                (true, true) => "▾ ",
+                (true, false) => "▸ ",
+            };
+            let (icon, color) = match row.kind {
+                TreeRowKind::ManagementGroup => ("◆ ", Color::Cyan),
+                TreeRowKind::Unplaced => ("◇ ", Color::DarkGray),
+                TreeRowKind::Subscription => match row.state.as_deref() {
+                    Some(s) if s.eq_ignore_ascii_case("Disabled") => ("● ", Color::Red),
+                    Some(s) if s.eq_ignore_ascii_case("Warned") => ("● ", Color::Yellow),
+                    _ => ("● ", Color::Green),
+                },
+            };
+            let width = 60usize.saturating_sub(indent.chars().count() + 4).max(10);
+            let label = truncate_with_ellipsis(&row.label, width);
+            let detail = if row.is_group() {
+                format!("{} subscriptions", row.subscription_count)
+            } else {
+                match row.state.as_deref() {
+                    Some(s) if !s.eq_ignore_ascii_case("Enabled") => format!("{s}  {}", row.key),
+                    _ => row.key.clone(),
+                }
+            };
+            let label_style = if row.is_group() {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            list_item_spans(vec![
+                Span::raw(indent),
+                Span::styled(marker, Style::default().fg(Color::DarkGray)),
+                Span::styled(icon, Style::default().fg(color)),
+                Span::styled(format!("{label:<width$}  "), label_style),
+                Span::styled(detail, Style::default().fg(Color::DarkGray)),
+            ])
+        })
+        .collect();
+
+    let total = app
+        .state()
+        .scope_tree
+        .as_ref()
+        .map_or(0, |t| t.groups.len() + 1);
+    let title = if app.state().filter_mode {
+        format!(
+            "Management Groups ({total}) - Filter: {}_",
+            app.state().filter
+        )
+    } else if !app.state().filter.is_empty() {
+        format!(
+            "Management Groups ({total}) - Filtered by: {}",
+            app.state().filter
+        )
+    } else {
+        format!("Management Groups ({total}) - Enter opens resource groups, Space expands")
+    };
+
+    let list = SelectableList::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
+    let mut widget_state = SelectableListState {
+        selected: list_state.selected - visible.start,
+        offset: 0,
+    };
+    list.render(area, f.buffer_mut(), &mut widget_state);
+    app.state_mut().list_state = list_state;
+    Ok(())
 }
 
 /// Draw subscription list view
@@ -239,11 +367,7 @@ fn draw_resource_group_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Resu
         .collect();
 
     // Create title with filter indicator and scope
-    let scope_info = if app.state().cross_subscription_mode {
-        " [ALL SUBSCRIPTIONS]"
-    } else {
-        ""
-    };
+    let scope_info = scope_info(app.state());
 
     let title = if app.state().filter_mode {
         format!(
@@ -356,11 +480,7 @@ fn draw_resource_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()>
         .collect();
 
     // Create title with filter indicator and scope
-    let scope_info = if app.state().cross_subscription_mode {
-        " [ALL SUBSCRIPTIONS]"
-    } else {
-        ""
-    };
+    let scope_info = scope_info(app.state());
 
     let title = if app.state().filter_mode {
         format!(
@@ -556,6 +676,17 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
         vec![("Esc/?/q", "Close Help")]
     } else {
         match app.state().view {
+            ViewMode::ManagementGroupTree => vec![
+                ("↑↓/jk", "Navigate"),
+                ("Space", "Expand"),
+                ("←→/hl", "Close/Open"),
+                ("Enter", "Resource Groups"),
+                ("/", "Filter"),
+                (":", "Command"),
+                ("?", "Help"),
+                ("r", "Refresh"),
+                ("q", "Quit"),
+            ],
             ViewMode::SubscriptionList => vec![
                 ("↑↓/jk", "Navigate"),
                 ("g/G", "First/Last"),

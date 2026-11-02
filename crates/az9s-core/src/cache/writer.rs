@@ -32,6 +32,11 @@ pub enum WriteJob {
         resource_group: Option<String>,
         items: Vec<Resource>,
     },
+    /// Store a whole document under a key.
+    Document {
+        key: String,
+        value: String,
+    },
 }
 
 impl WriteJob {
@@ -56,6 +61,10 @@ impl WriteJob {
             } => {
                 let _t = timing::timer("cache.write_resources");
                 repo.replace_resources(&subscription_ids, resource_group.as_deref(), &items)
+            }
+            WriteJob::Document { key, value } => {
+                let _t = timing::timer("cache.write_document");
+                repo.put_document(&key, &value)
             }
         }
     }

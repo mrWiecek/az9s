@@ -2,6 +2,7 @@
 ///
 /// Handles k9s-like colon commands for quick navigation:
 /// Command names are always singular (k9s style); plural forms are not accepted.
+/// - `:mg` / `:managementgroup` - Go to the management group tree
 /// - `:sub` / `:subscription` - Go to subscriptions view
 /// - `:rg <sub>` / `:resourcegroup <sub>` - Go to resource groups for a subscription
 /// - `:rg all` - Go to resource groups across all subscriptions
@@ -14,6 +15,8 @@ pub struct Command {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandKind {
+    /// Navigate to the management group tree
+    ManagementGroups,
     /// Navigate to subscriptions view
     Subscriptions,
     /// Navigate to resource groups view
@@ -51,6 +54,9 @@ impl Command {
         let cmd = parts[0].to_lowercase();
 
         match cmd.as_str() {
+            "mg" | "managementgroup" | "management-group" => Self {
+                kind: CommandKind::ManagementGroups,
+            },
             "sub" | "subscription" => Self {
                 kind: CommandKind::Subscriptions,
             },
@@ -99,7 +105,7 @@ impl Command {
         match &self.kind {
             CommandKind::Unknown(cmd) if !cmd.is_empty() => {
                 Some(format!(
-                    "Unknown command: '{}'\n\nAvailable commands:\n  :sub - Subscriptions\n  :rg [all|<sub>] - Resource groups\n  :res [all|<sub>] - Resources",
+                    "Unknown command: '{}'\n\nAvailable commands:\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] - Resource groups\n  :res [all|<sub>] - Resources",
                     cmd
                 ))
             }
@@ -112,6 +118,17 @@ impl Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_management_groups() {
+        for input in [":mg", "managementgroup", ":management-group"] {
+            assert_eq!(Command::parse(input).kind, CommandKind::ManagementGroups);
+        }
+        assert!(matches!(
+            Command::parse(":mgs").kind,
+            CommandKind::Unknown(_)
+        ));
+    }
 
     #[test]
     fn test_parse_subscriptions() {

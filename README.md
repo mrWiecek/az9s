@@ -16,10 +16,10 @@ works for Kubernetes.
 
 | Today | Planned |
 |---|---|
-| Subscriptions → resource groups → resources → detail | Instant, non-blocking UI backed by Azure Resource Graph (M1) |
-| Cross-subscription views (`:rg all`, `:res all`) | Management-group tree, rich detail views, JSON, open in Portal, command palette (M2) |
-| `/` filtering, vim keys, `:` commands, `?` help | Azure Policy at management-group scope: assignments, compliance, exemptions (M3) |
+| Management group tree → subscriptions → resource groups → resources → detail | Rich detail views, JSON, open in Portal, command palette (M2) |
+| Resource groups across a whole management group, or all subscriptions (`:rg all`, `:res all`) via Azure Resource Graph | Azure Policy at management-group scope: assignments, compliance, exemptions (M3) |
 | Instant views from a local cache, refreshed in the background, with data age in the status bar | Safe actions: VM start/stop, restarts, tags, delete, policy scans (M4) |
+| `/` filtering, vim keys, `:` commands, `?` help | AKS, Key Vault, logs, themes (M5) |
 
 ## Requirements
 
@@ -37,7 +37,7 @@ Download a prebuilt binary for Linux, macOS or Windows from
 
 ```bash
 cargo install --git https://github.com/mrWiecek/az9s --locked az9s              # latest
-cargo install --git https://github.com/mrWiecek/az9s --tag v0.1.0 --locked az9s # a specific version
+cargo install --git https://github.com/mrWiecek/az9s --tag v0.3.0 --locked az9s # a specific version
 ```
 
 `az9s --version` shows the installed version and commit. Versions follow
@@ -59,7 +59,8 @@ az9s --timings                             # launch, print a timing summary on e
 | `j` / `k`, `↑` / `↓` | Move down / up |
 | `g` / `G` | First / last item |
 | `Ctrl+D` / `Ctrl+U` | Page down / up |
-| `Enter` | Open |
+| `Enter` | Open (in the tree: resource groups of the group or subscription) |
+| `Space`, `l`/`→`, `h`/`←` | Tree: open/close a group (`h` on a closed row goes to the parent) |
 | `Esc` / `Backspace` | Back, clear filter, or dismiss error |
 | `/` | Filter |
 | `:` | Command mode |
@@ -71,6 +72,7 @@ az9s --timings                             # launch, print a timing summary on e
 
 | Command | Shows |
 |---|---|
+| `:mg` | Management group tree (the start view) |
 | `:sub` | Subscriptions |
 | `:rg [all\|<sub>]` | Resource groups (all subscriptions or one) |
 | `:res [all\|<sub>]` | Resources (all subscriptions or one) |
@@ -103,6 +105,7 @@ How it fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | Symptom | Try |
 |---|---|
 | "Not connected to Azure" | Run `az login`, then press `r` |
+| "Management group tree unavailable" | You need read access on the tenant root management group; `:sub` and `:rg all` still work |
 | Status bar says "Resource Graph unavailable … used ARM" | Lists still load, but more slowly; check `just run-debug` logs |
 | A resource you just changed looks stale | Resource Graph can lag ARM briefly; press `r`, or run with `AZ9S_BACKEND=arm` |
 | Something feels slow | Run `az9s --timings` and include the table in an issue |

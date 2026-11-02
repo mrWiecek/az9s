@@ -4,6 +4,7 @@
 use az9s_core::cache::Cache;
 use az9s_core::loader::{ChunkSink, FetchOutcome, Fetcher, LoadRequest, LoadedData};
 use az9s_core::models::{Resource, ResourceGroup, Subscription};
+use az9s_core::scope_tree::{GroupNode, ScopeTree, SubscriptionNode};
 use az9s_core::state::ViewMode;
 use az9s_core::App;
 use az9s_tui::{Event, TuiApp};
@@ -59,6 +60,7 @@ impl Fetcher for SlowAzure {
                         })
                         .collect(),
                 ),
+                LoadRequest::ScopeTree => LoadedData::ScopeTree(tree()),
             };
             FetchOutcome {
                 data: Ok(data),
@@ -67,6 +69,28 @@ impl Fetcher for SlowAzure {
             }
         }
         .boxed()
+    }
+}
+
+/// Tenant Root Group
+/// ├── Platform: prod
+/// └── Workloads: dev
+fn tree() -> ScopeTree {
+    let mg = |name: &str, parent: &str| GroupNode {
+        name: name.into(),
+        display_name: name.to_uppercase(),
+        parent: parent.into(),
+    };
+    let sub = |id: &str, parent: &str| SubscriptionNode {
+        id: id.into(),
+        display_name: id.into(),
+        parent: parent.into(),
+    };
+    ScopeTree {
+        root: "tenant".into(),
+        root_display_name: "Tenant Root Group".into(),
+        groups: vec![mg("platform", "tenant"), mg("workloads", "tenant")],
+        subscriptions: vec![sub("id-prod", "platform"), sub("id-dev", "workloads")],
     }
 }
 
@@ -232,4 +256,115 @@ async fn reopening_a_subscription_shows_cached_groups_before_azure_answers() {
     app.apply_load(loads.recv().await.unwrap());
     let fresh = app.state().current_freshness().unwrap();
     assert_eq!(fresh.source, az9s_core::state::DataSource::Azure);
+}
+
+/// Labels of the visible tree rows, indented by depth.
+fn tree_labels(app: &TuiApp) -> Vec<String> {
+    app.state()
+        .tree_rows()
+        .iter()
+        .map(|r| format!("{}{}", "  ".repeat(r.depth), r.label))
+        .collect()
+}
+
+#[tokio::test]
+async fn management_group_tree_expands_and_opens_a_group_scoped_to_its_subscriptions() {
+    let (mut app, azure) = setup();
+    let mut loads = app.take_load_receiver().unwrap();
+
+    type_command(&mut app, "mg").await;
+    assert_eq!(app.state().view, ViewMode::ManagementGroupTree);
+    app.apply_load(loads.recv().await.unwrap());
+    assert_eq!(
+        tree_labels(&app),
+        ["Tenant Root Group", "  PLATFORM", "  WORKLOADS"]
+    );
+
+    // Open "Platform" (Space), then close it again with h.
+    press(&mut app, KeyCode::Char('j')).await;
+    press(&mut app, KeyCode::Char(' ')).await;
+    assert_eq!(
+        tree_labels(&app),
+        [
+            "Tenant Root Group",
+            "  PLATFORM",
+            "    id-prod",
+            "  WORKLOADS"
+        ]
+    );
+    press(&mut app, KeyCode::Char('h')).await;
+    assert_eq!(tree_labels(&app).len(), 3);
+    // h on a closed group moves to its parent.
+    press(&mut app, KeyCode::Char('h')).await;
+    assert_eq!(app.state().list_state.selected, 0);
+
+    // Enter on "Workloads": resource groups of its subscriptions only.
+    press(&mut app, KeyCode::Char('G')).await;
+    press(&mut app, KeyCode::Enter).await;
+    assert_eq!(app.state().view, ViewMode::ResourceGroupList);
+    assert_eq!(
+        last_request(&azure).await,
+        LoadRequest::ResourceGroups {
+            subscription_ids: vec!["id-dev".into()],
+        }
+    );
+    app.apply_load(loads.recv().await.unwrap());
+
+    // Refresh keeps the management group scope.
+    press(&mut app, KeyCode::Char('r')).await;
+    assert_eq!(
+        last_request(&azure).await,
+        LoadRequest::ResourceGroups {
+            subscription_ids: vec!["id-dev".into()],
+        }
+    );
+    app.apply_load(loads.recv().await.unwrap());
+
+    // Back to the tree, with "Workloads" still selected.
+    press(&mut app, KeyCode::Esc).await;
+    assert_eq!(app.state().view, ViewMode::ManagementGroupTree);
+    assert_eq!(app.state().selected_id().as_deref(), Some("workloads"));
+}
+
+#[tokio::test]
+async fn enter_on_a_subscription_in_the_tree_opens_its_resource_groups() {
+    let (mut app, azure) = setup();
+    let mut loads = app.take_load_receiver().unwrap();
+    type_command(&mut app, "mg").await;
+    app.apply_load(loads.recv().await.unwrap());
+
+    press(&mut app, KeyCode::Char('j')).await; // Platform
+    press(&mut app, KeyCode::Char('l')).await; // open
+    press(&mut app, KeyCode::Char('j')).await; // prod
+    press(&mut app, KeyCode::Enter).await;
+
+    assert_eq!(app.state().view, ViewMode::ResourceGroupList);
+    assert!(!app.state().cross_subscription_mode);
+    assert_eq!(
+        app.state().selected_subscription.as_ref().unwrap().name,
+        "prod"
+    );
+    assert_eq!(
+        last_request(&azure).await,
+        LoadRequest::ResourceGroups {
+            subscription_ids: vec!["id-prod".into()],
+        }
+    );
+}
+
+#[tokio::test]
+async fn filtering_the_tree_shows_matches_with_their_groups() {
+    let (mut app, _azure) = setup();
+    let mut loads = app.take_load_receiver().unwrap();
+    type_command(&mut app, "mg").await;
+    app.apply_load(loads.recv().await.unwrap());
+
+    press(&mut app, KeyCode::Char('/')).await;
+    for c in "prod".chars() {
+        press(&mut app, KeyCode::Char(c)).await;
+    }
+    assert_eq!(
+        tree_labels(&app),
+        ["Tenant Root Group", "  PLATFORM", "    id-prod"]
+    );
 }
