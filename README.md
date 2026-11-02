@@ -16,10 +16,10 @@ works for Kubernetes.
 
 | Today | Planned |
 |---|---|
-| Management group tree → subscriptions → resource groups → resources → detail (Overview, Tags, JSON) | Filters, command palette, config file (M2) |
+| Management group tree → subscriptions → resource groups → resources → detail (Overview, Tags, JSON) | Command palette, config file, `:ctx` (M2) |
 | Resource groups across a whole management group, or all subscriptions (`:rg all`, `:res all`) via Azure Resource Graph | Azure Policy at management-group scope: assignments, compliance, exemptions (M3) |
 | Instant views from a local cache, refreshed in the background, with data age in the status bar | Safe actions: VM start/stop, restarts, tags, delete, policy scans (M4) |
-| `/` filtering, vim keys, `:` commands, `?` help | AKS, Key Vault, logs, themes (M5) |
+| Filters (`type=`, `loc=`, `tag=`), a resource-type summary (`:type`), `/` text filter, `y` copy ID, `o` open in Portal, vim keys | AKS, Key Vault, logs, themes (M5) |
 
 ## Requirements
 
@@ -78,7 +78,8 @@ az9s --timings                             # launch, print a timing summary on e
 | `:mg` | Management group tree (the start view) |
 | `:sub` | Subscriptions |
 | `:rg [all\|<sub>]` | Resource groups (all subscriptions or one) |
-| `:res [all\|<sub>]` | Resources (all subscriptions or one) |
+| `:res [all\|<sub>] [filters]` | Resources (all subscriptions or one), e.g. `:res all type=virtualMachines loc=westeurope tag=env:prod` |
+| `:type [all\|<sub>] [filters]` | Resource counts per type; `Enter` lists that type |
 
 ## Development
 

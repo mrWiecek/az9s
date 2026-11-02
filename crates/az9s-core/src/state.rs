@@ -1,4 +1,5 @@
 use crate::models::{Resource, ResourceGroup, Subscription};
+use crate::query::ResourceQuery;
 use crate::scope_tree::{ScopeTree, TreeRow};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -88,8 +89,14 @@ pub struct AppState {
     /// (`None`: all subscriptions)
     pub scope_group: Option<String>,
 
+    /// Structured filter on the resource list (`:res type=… loc=… tag=…`)
+    pub resource_query: ResourceQuery,
+
     /// Memoized filter result, so a frame doesn't rescan every row
     filter_memo: Mutex<FilterMemo>,
+
+    /// Memoized resource-type summary: (list key, query) → counts
+    type_summary_memo: Mutex<Option<TypeSummaryMemo>>,
 }
 
 /// Which list a memoized filter result belongs to.
@@ -112,6 +119,14 @@ struct FilterMemo {
     key: Option<(ListKind, usize, usize)>,
     filter: String,
     indices: Vec<usize>,
+}
+
+/// Memoized type counts: which resource list (buffer address, length) and
+/// query they were counted for, and the counts.
+#[derive(Debug)]
+struct TypeSummaryMemo {
+    key: (usize, usize, String),
+    rows: Vec<(String, usize)>,
 }
 
 /// Where a list's data came from and when (unix seconds): fetched from
@@ -140,6 +155,8 @@ pub enum ViewMode {
     ManagementGroupTree,
     ResourceGroupList,
     ResourceList,
+    /// Resource counts per type (`:type`)
+    ResourceTypeSummary,
     ResourceDetail,
     Logs,
 }
@@ -295,6 +312,7 @@ impl AppState {
             ViewMode::SubscriptionList => self.filtered_subscriptions().len(),
             ViewMode::ResourceGroupList => self.filtered_resource_groups().len(),
             ViewMode::ResourceList => self.filtered_resources().len(),
+            ViewMode::ResourceTypeSummary => self.type_summary().len(),
             ViewMode::ManagementGroupTree => self.tree_rows().len(),
             _ => 0,
         }
@@ -353,12 +371,72 @@ impl AppState {
     }
 
     /// Get filtered resources based on current filter
+    /// Resources matching the structured query and the `/` text filter.
     pub fn filtered_resources(&self) -> Vec<&Resource> {
-        self.filter_list(ListKind::Resources, &self.resources, |r, needle| {
-            contains_ignore_ascii_case(&r.name, needle)
-                || contains_ignore_ascii_case(&r.resource_type, needle)
-                || contains_ignore_ascii_case(&r.location, needle)
-        })
+        let query = &self.resource_query;
+        let signature = query.to_string();
+        self.filter_list_with(
+            ListKind::Resources,
+            &self.resources,
+            &signature,
+            |r, needle| {
+                query.matches(r)
+                    && (needle.is_empty()
+                        || contains_ignore_ascii_case(&r.name, needle)
+                        || contains_ignore_ascii_case(&r.resource_type, needle)
+                        || contains_ignore_ascii_case(&r.location, needle))
+            },
+        )
+    }
+
+    /// Resource counts per type (types lowercase, most common first) over the
+    /// resources matching the structured query, narrowed by the `/` filter
+    /// on the type name.
+    pub fn type_summary(&self) -> Vec<(String, usize)> {
+        let key = (
+            self.resources.as_ptr() as usize,
+            self.resources.len(),
+            self.resource_query.to_string(),
+        );
+        let mut memo = self
+            .type_summary_memo
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if memo.as_ref().map(|m| &m.key) != Some(&key) {
+            let mut counts: HashMap<String, usize> = HashMap::new();
+            for r in self
+                .resources
+                .iter()
+                .filter(|r| self.resource_query.matches(r))
+            {
+                *counts
+                    .entry(r.resource_type.to_ascii_lowercase())
+                    .or_default() += 1;
+            }
+            let mut rows: Vec<(String, usize)> = counts.into_iter().collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            *memo = Some(TypeSummaryMemo { key, rows });
+        }
+        let rows = &memo.as_ref().expect("set above").rows;
+        if self.filter.is_empty() {
+            return rows.clone();
+        }
+        let needle = self.filter.to_ascii_lowercase();
+        rows.iter()
+            .filter(|(t, _)| contains_ignore_ascii_case(t, &needle))
+            .cloned()
+            .collect()
+    }
+
+    /// The selected row of the type summary.
+    pub fn selected_type(&self) -> Option<String> {
+        if self.view != ViewMode::ResourceTypeSummary {
+            return None;
+        }
+        self.type_summary()
+            .into_iter()
+            .nth(self.list_state.selected)
+            .map(|(t, _)| t)
     }
 
     /// Filter `items` by the current filter, reusing the previous result when
@@ -369,12 +447,26 @@ impl AppState {
         items: &'a [T],
         matches: impl Fn(&T, &str) -> bool,
     ) -> Vec<&'a T> {
-        if self.filter.is_empty() {
+        self.filter_list_with(kind, items, "", matches)
+    }
+
+    /// Like `filter_list`, plus an extra filter identified by `signature`
+    /// (part of the memo key; empty means none). `matches` gets the
+    /// lowercase text filter, which may be empty.
+    fn filter_list_with<'a, T>(
+        &self,
+        kind: ListKind,
+        items: &'a [T],
+        signature: &str,
+        matches: impl Fn(&T, &str) -> bool,
+    ) -> Vec<&'a T> {
+        if self.filter.is_empty() && signature.is_empty() {
             return items.iter().collect();
         }
         let key = (kind, items.as_ptr() as usize, items.len());
+        let memo_filter = format!("{signature}\u{0}{}", self.filter);
         let mut memo = self.filter_memo.lock().unwrap_or_else(|e| e.into_inner());
-        if memo.key != Some(key) || memo.filter != self.filter {
+        if memo.key != Some(key) || memo.filter != memo_filter {
             let needle = self.filter.to_ascii_lowercase();
             memo.indices = items
                 .iter()
@@ -383,7 +475,7 @@ impl AppState {
                 .map(|(i, _)| i)
                 .collect();
             memo.key = Some(key);
-            memo.filter.clone_from(&self.filter);
+            memo.filter = memo_filter;
         }
         memo.indices.iter().map(|&i| &items[i]).collect()
     }
@@ -402,6 +494,8 @@ impl AppState {
             ViewMode::ResourceDetail if self.resource_document.is_none() => {
                 self.freshness.get(&ViewMode::ResourceList).copied()
             }
+            // The summary counts the resource list.
+            ViewMode::ResourceTypeSummary => self.freshness.get(&ViewMode::ResourceList).copied(),
             ref v => self.freshness.get(v).copied(),
         }
     }
@@ -431,7 +525,7 @@ impl AppState {
                     crate::scope_tree::TreeRowKind::Unplaced => None,
                 }
             }
-            ViewMode::Logs => None,
+            ViewMode::ResourceTypeSummary | ViewMode::Logs => None,
         }
     }
 
@@ -742,6 +836,52 @@ mod tests {
             subscription_id: "s".into(),
             tags: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn structured_query_combines_with_text_filter_and_feeds_the_type_summary() {
+        let mut state = AppState::new();
+        let mk = |name: &str, t: &str| Resource {
+            resource_type: t.into(),
+            ..resource(name)
+        };
+        state.resources = vec![
+            mk("vm-a", "Microsoft.Compute/virtualMachines"),
+            mk("vm-b", "microsoft.compute/virtualmachines"),
+            mk("disk-a", "Microsoft.Compute/disks"),
+            mk("kv", "Microsoft.KeyVault/vaults"),
+        ];
+        state.view = ViewMode::ResourceTypeSummary;
+        assert_eq!(
+            state.type_summary(),
+            [
+                ("microsoft.compute/virtualmachines".to_string(), 2),
+                ("microsoft.compute/disks".to_string(), 1),
+                ("microsoft.keyvault/vaults".to_string(), 1),
+            ],
+            "types merged case-insensitively, most common first"
+        );
+        assert_eq!(
+            state.selected_type().as_deref(),
+            Some("microsoft.compute/virtualmachines")
+        );
+
+        state.resource_query = ResourceQuery::parse(["type=microsoft.compute"]).unwrap();
+        assert_eq!(state.type_summary().len(), 2, "summary follows the query");
+
+        state.view = ViewMode::ResourceList;
+        let names = |s: &AppState| {
+            s.filtered_resources()
+                .iter()
+                .map(|r| r.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&state), ["vm-a", "vm-b", "disk-a"]);
+        state.filter = "disk".into();
+        assert_eq!(names(&state), ["disk-a"], "query AND text filter");
+        state.filter.clear();
+        state.resource_query = ResourceQuery::default();
+        assert_eq!(names(&state).len(), 4, "memo notices the query changed");
     }
 
     #[test]

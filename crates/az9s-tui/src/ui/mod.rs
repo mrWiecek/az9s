@@ -80,6 +80,7 @@ fn draw_content(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         ViewMode::SubscriptionList => draw_subscription_list(f, area, app),
         ViewMode::ResourceGroupList => draw_resource_group_list(f, area, app),
         ViewMode::ResourceList => draw_resource_list(f, area, app),
+        ViewMode::ResourceTypeSummary => draw_type_summary(f, area, app),
         ViewMode::ResourceDetail => draw_resource_detail(f, area, app),
         ViewMode::Logs => draw_logs(f, area, app),
     }
@@ -415,6 +416,94 @@ fn draw_resource_group_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Resu
     Ok(())
 }
 
+/// Draw the resource counts per type (`:type`)
+fn draw_type_summary(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
+    let rows = app.state().type_summary();
+    let state = app.state();
+    let query = &state.resource_query;
+    let scope = scope_info(state);
+    let scope = if query.is_empty() {
+        scope
+    } else {
+        format!("{scope} [{query}]")
+    };
+
+    if rows.is_empty() {
+        let message = if state.loading {
+            "Loading resources...".to_string()
+        } else if !state.filter.is_empty() {
+            "No resource types match the current filter.\n\nPress Esc to clear the filter."
+                .to_string()
+        } else {
+            "No resources loaded.\n\nPress 'r' to refresh.".to_string()
+        };
+        let content = Paragraph::new(message)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!("Resource Types{scope}")),
+            )
+            .style(Style::default().fg(Color::Gray))
+            .wrap(Wrap { trim: true });
+        f.render_widget(content, area);
+        return Ok(());
+    }
+
+    let total: usize = rows.iter().map(|(_, n)| n).sum();
+    let count_width = rows[0].1.to_string().len().max(5);
+    let viewport = area.height.saturating_sub(2) as usize;
+    let mut list_state = state.list_state.clone();
+    let visible = list_state.visible_range(rows.len(), viewport);
+    let items: Vec<_> = rows[visible.clone()]
+        .iter()
+        .map(|(resource_type, count)| {
+            list_item_spans(vec![
+                Span::styled(
+                    format!("{count:>count_width$}  "),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:<20}", resource_type::short_label(resource_type)),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(resource_type.clone(), Style::default().fg(Color::DarkGray)),
+            ])
+        })
+        .collect();
+
+    let title = if state.filter_mode {
+        format!(
+            "Resource Types ({}){scope} - Filter: {}_",
+            rows.len(),
+            state.filter
+        )
+    } else {
+        format!(
+            "Resource Types ({}, {total} resources){scope} - Enter lists them",
+            rows.len()
+        )
+    };
+    let list = SelectableList::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
+    let mut widget_state = SelectableListState {
+        selected: list_state.selected - visible.start,
+        offset: 0,
+    };
+    list.render(area, f.buffer_mut(), &mut widget_state);
+    app.state_mut().list_state = list_state;
+    Ok(())
+}
+
 /// Draw resource list view
 fn draw_resource_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     let filtered_resources = app.state().filtered_resources();
@@ -424,6 +513,8 @@ fn draw_resource_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()>
             "Loading resources...\n\nPlease wait while we fetch resources from Azure."
         } else if !app.state().filter.is_empty() {
             "No resources match the current filter.\n\nPress Esc to clear the filter."
+        } else if !app.state().resource_query.is_empty() && !app.state().resources.is_empty() {
+            "No resources match the filters in the title.\n\nRun :res without filters to see all."
         } else {
             "No resources loaded.\n\nSelect a subscription to view resources.\nPress 'r' to refresh."
         };
@@ -483,6 +574,12 @@ fn draw_resource_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()>
     // Create title with filter indicator and scope
     let scope_info = scope_info(app.state());
 
+    let query = &app.state().resource_query;
+    let scope_info = if query.is_empty() {
+        scope_info
+    } else {
+        format!("{scope_info} [{query}]")
+    };
     let title = if app.state().filter_mode {
         format!(
             "Resources ({}){}  - Filter: {}_",
@@ -758,6 +855,16 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("g/G", "First/Last"),
                 ("PgUp/PgDn", "Page"),
                 ("Enter", "Details"),
+                ("/", "Filter"),
+                (":", "Command"),
+                ("?", "Help"),
+                ("r", "Refresh"),
+                ("Esc", "Back"),
+                ("q", "Quit"),
+            ],
+            ViewMode::ResourceTypeSummary => vec![
+                ("↑↓/jk", "Navigate"),
+                ("Enter", "List Resources"),
                 ("/", "Filter"),
                 (":", "Command"),
                 ("?", "Help"),

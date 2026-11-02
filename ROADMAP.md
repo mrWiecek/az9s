@@ -169,8 +169,8 @@ Work items, in order:
 - [x] Generic resource detail view with three tabs: Overview, Tags, JSON (from
       Resource Graph).
 - [x] `y` copies the resource ID, `o` opens the resource in the Azure Portal.
-- [ ] Filters: `:res type=Microsoft.Compute/virtualMachines`, `loc=westeurope`,
-      `tag=env:prod`, and a resource-type summary view.
+- [x] Filters: `:res type=Microsoft.Compute/virtualMachines`, `loc=westeurope`,
+      `tag=env:prod`, and a resource-type summary view (`:type`).
 - [ ] A real command palette with fuzzy search over commands and resources, and
       autocomplete for `:` commands.
 - [ ] Config file `~/.config/az9s/config.toml` for default subscription, refresh

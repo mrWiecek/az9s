@@ -3,6 +3,7 @@ pub mod cache;
 pub mod detail;
 pub mod loader;
 pub mod models;
+pub mod query;
 pub mod scope_tree;
 pub mod state;
 /// Timing stats (defined in az9s-azure so its HTTP clients can record too).
