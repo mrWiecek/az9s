@@ -12,6 +12,17 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-02
+
+### Fixed
+- The declared minimum Rust version was 1.75, but dependencies require
+  **1.88** (`time 0.3.47`). `rust-version` and the README now say 1.88, and a
+  new `msrv` CI job builds with exactly that version.
+
+### Changed
+- CI runs the 100k-row rendering benchmark (`perf` job) and fails if a frame
+  takes 16 ms or more.
+
 ## [0.2.1] - 2026-11-02
 
 ### Changed
@@ -183,7 +194,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/mrWiecek/az9s/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/mrWiecek/az9s/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/mrWiecek/az9s/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/mrWiecek/az9s/releases/tag/v0.1.0
