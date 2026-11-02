@@ -12,6 +12,22 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-02
+
+### Fixed
+- **`o` failed on WSL** with an OS error and a cut-off link: az9s ran
+  `xdg-open`, which WSL usually doesn't have. On WSL it now opens the
+  Windows browser (`wslview`, then `cmd.exe /c start`, then `xdg-open`).
+  If no browser can be started anywhere, the Portal link is copied to the
+  clipboard instead, with a short message, rather than printed into the
+  status bar where it was truncated.
+- **`:rg`, `:res` and `:type` without a scope always opened all
+  subscriptions.** Without a scope they now apply to where you are: the
+  highlighted subscription (subscription list, tree), the highlighted
+  management group (tree), or the subscription or management group the
+  current list is scoped to. Only with no such context, or with `all`, do
+  they cover all subscriptions.
+
 ## [0.5.0] - 2026-11-02
 
 ### Added
@@ -283,7 +299,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/mrWiecek/az9s/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/mrWiecek/az9s/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mrWiecek/az9s/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/mrWiecek/az9s/compare/v0.3.0...v0.3.1

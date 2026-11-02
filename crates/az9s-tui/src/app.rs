@@ -284,8 +284,22 @@ impl TuiApp {
             return Ok(());
         }
 
+        // A command without a scope means "where I am": decide that before
+        // the command resets the navigation.
+        let context = self.current_context();
         // Commands always start a new, unscoped navigation.
         self.state_mut().scope_group = None;
+        let mut command = command;
+        match &mut command.kind {
+            CommandKind::ResourceGroups { scope }
+            | CommandKind::Resources { scope, .. }
+            | CommandKind::ResourceTypes { scope, .. }
+                if *scope == Scope::Current =>
+            {
+                *scope = context;
+            }
+            _ => {}
+        }
         match command.kind {
             CommandKind::ManagementGroups => {
                 debug!("Command: management group tree");
@@ -303,14 +317,14 @@ impl TuiApp {
                 debug!("Command: resource groups, scope {:?}", scope);
                 if let Some(subscription_ids) = self.resolve_scope(&scope) {
                     self.state_mut().clear_navigation();
-                    self.show_resource_groups(subscription_ids, scope == Scope::All);
+                    self.show_resource_groups(subscription_ids, scope.is_cross_subscription());
                 }
             }
             CommandKind::Resources { scope, query } => {
                 debug!("Command: resources, scope {:?}, filter {}", scope, query);
                 if let Some(subscription_ids) = self.resolve_scope(&scope) {
                     self.state_mut().clear_navigation();
-                    self.show_resources(subscription_ids, None, scope == Scope::All);
+                    self.show_resources(subscription_ids, None, scope.is_cross_subscription());
                     self.state_mut().resource_query = query;
                 }
             }
@@ -321,7 +335,7 @@ impl TuiApp {
                 );
                 if let Some(subscription_ids) = self.resolve_scope(&scope) {
                     self.state_mut().clear_navigation();
-                    self.show_resources(subscription_ids, None, scope == Scope::All);
+                    self.show_resources(subscription_ids, None, scope.is_cross_subscription());
                     let state = self.state_mut();
                     state.resource_query = query;
                     state.view = ViewMode::ResourceTypeSummary;
@@ -343,7 +357,19 @@ impl TuiApp {
     /// subscription is unknown.
     fn resolve_scope(&mut self, scope: &Scope) -> Option<Vec<String>> {
         match scope {
-            Scope::All => Some(self.enabled_subscription_ids()),
+            Scope::All | Scope::Current => Some(self.enabled_subscription_ids()),
+            Scope::Group(group) => {
+                let ids = self.enabled_subscriptions_under(Some(group));
+                if ids.is_empty() {
+                    self.state_mut()
+                        .set_error(Some(format!("No enabled subscriptions under {group}")));
+                    return None;
+                }
+                let state = self.state_mut();
+                state.scope_group = Some(group.clone());
+                state.selected_subscription = None;
+                Some(ids)
+            }
             Scope::Subscription(name) => match self.find_subscription(name).cloned() {
                 Some(sub) => {
                     let id = sub.id.clone();
@@ -356,6 +382,41 @@ impl TuiApp {
                     None
                 }
             },
+        }
+    }
+
+    /// What a command without a scope applies to: the highlighted
+    /// subscription or management group in the list/tree, else the
+    /// management group or subscription the current view is scoped to, else
+    /// all subscriptions.
+    fn current_context(&self) -> Scope {
+        let state = self.state();
+        match state.view {
+            ViewMode::SubscriptionList => {
+                if let Some(sub) = state.selected_subscription() {
+                    return Scope::Subscription(sub.id.clone());
+                }
+            }
+            ViewMode::ManagementGroupTree => {
+                if let Some(row) = state.selected_tree_row() {
+                    return match row.kind {
+                        TreeRowKind::Subscription => Scope::Subscription(row.key),
+                        TreeRowKind::ManagementGroup => Scope::Group(row.key),
+                        TreeRowKind::Unplaced => Scope::All,
+                    };
+                }
+            }
+            _ => {}
+        }
+        if state.cross_subscription_mode {
+            return match &state.scope_group {
+                Some(group) => Scope::Group(group.clone()),
+                None => Scope::All,
+            };
+        }
+        match &state.selected_subscription {
+            Some(sub) => Scope::Subscription(sub.id.clone()),
+            None => Scope::All,
         }
     }
 
@@ -633,8 +694,13 @@ impl TuiApp {
         };
         let url = detail::portal_url(&id, self.state().portal_tenant().as_deref());
         let notice = match self.desktop.open(&url) {
-            Ok(()) => format!("Opened {url}"),
-            Err(e) => format!("Could not open a browser ({e}): {url}"),
+            Ok(()) => "Opened in the Azure Portal".to_string(),
+            // The link is too long for the status bar: put it on the
+            // clipboard instead, so it can be pasted into a browser.
+            Err(e) => match self.desktop.copy(&url) {
+                Ok(()) => format!("No browser could be started; Portal link copied ({e})"),
+                Err(_) => format!("No browser could be started ({e}): {url}"),
+            },
         };
         self.state_mut().notice = Some(notice);
     }

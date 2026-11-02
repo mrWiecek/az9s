@@ -85,7 +85,7 @@ pub fn render_help(f: &mut Frame, area: Rect) {
         )]),
         Line::from("  :mg                      Go to the management group tree"),
         Line::from("  :sub                     Go to subscriptions"),
-        Line::from("  :rg [all|<sub>]          Go to resource groups"),
+        Line::from("  :rg [all|<sub>]          Go to resource groups (no scope: where you are)"),
         Line::from("  :res [all|<sub>] [filters]  Go to resources"),
         Line::from("  :type [all|<sub>] [filters] Resource counts per type"),
         Line::from("    filters: type=vm,disks  loc=westeurope  tag=env:prod (or tag=env)"),

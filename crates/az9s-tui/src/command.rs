@@ -6,6 +6,8 @@ use az9s_core::query::ResourceQuery;
 /// Command names are always singular (k9s style); plural forms are not accepted.
 /// - `:mg` / `:managementgroup` - Go to the management group tree
 /// - `:sub` / `:subscription` - Go to subscriptions view
+/// - `:rg` - Resource groups where you are (current subscription or management
+///   group; all subscriptions if there is no context)
 /// - `:rg <sub>` / `:resourcegroup <sub>` - Go to resource groups for a subscription
 /// - `:rg all` - Go to resource groups across all subscriptions
 /// - `:res <sub>` / `:resource <sub>` - Go to resources for a subscription
@@ -37,10 +39,22 @@ pub enum CommandKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Scope {
+    /// No scope given: where the user is (the current or highlighted
+    /// subscription or management group), else all subscriptions
+    Current,
     /// All subscriptions
     All,
+    /// The enabled subscriptions below a management group (from the context)
+    Group(String),
     /// Specific subscription by name or ID
     Subscription(String),
+}
+
+impl Scope {
+    /// Whether the scope spans several subscriptions (all, or a group).
+    pub fn is_cross_subscription(&self) -> bool {
+        matches!(self, Scope::All | Scope::Group(_))
+    }
 }
 
 impl Command {
@@ -76,8 +90,7 @@ impl Command {
                         Scope::Subscription(parts[1..].join(" "))
                     }
                 } else {
-                    // Default to current subscription if available
-                    Scope::All
+                    Scope::Current
                 };
                 Self {
                     kind: CommandKind::ResourceGroups { scope },
@@ -95,7 +108,7 @@ impl Command {
                     }
                 };
                 let scope = match scope_terms.first() {
-                    None => Scope::All,
+                    None => Scope::Current,
                     Some(t) if t.eq_ignore_ascii_case("all") => Scope::All,
                     Some(_) => Scope::Subscription(scope_terms.join(" ")),
                 };
@@ -196,6 +209,27 @@ mod tests {
     }
 
     #[test]
+    fn test_no_scope_means_current_context_and_all_means_all() {
+        assert_eq!(
+            Command::parse(":rg").kind,
+            CommandKind::ResourceGroups {
+                scope: Scope::Current
+            }
+        );
+        assert_eq!(
+            Command::parse(":rg ALL").kind,
+            CommandKind::ResourceGroups { scope: Scope::All }
+        );
+        assert!(matches!(
+            Command::parse(":res").kind,
+            CommandKind::Resources {
+                scope: Scope::Current,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn test_parse_filters_and_type_summary() {
         let cmd = Command::parse(":res my sub type=vm,disks loc=westeurope");
         let CommandKind::Resources { scope, query } = cmd.kind else {
@@ -209,7 +243,7 @@ mod tests {
         assert!(matches!(
             cmd.kind,
             CommandKind::Resources {
-                scope: Scope::All,
+                scope: Scope::Current,
                 ..
             }
         ));
@@ -217,7 +251,7 @@ mod tests {
         assert_eq!(
             Command::parse(":type").kind,
             CommandKind::ResourceTypes {
-                scope: Scope::All,
+                scope: Scope::Current,
                 query: ResourceQuery::default()
             }
         );

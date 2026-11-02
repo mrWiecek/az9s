@@ -371,3 +371,88 @@ async fn filtering_the_tree_shows_matches_with_their_groups() {
         ["Tenant Root Group", "  PLATFORM", "    id-prod"]
     );
 }
+
+fn rg_request(ids: &[&str]) -> LoadRequest {
+    LoadRequest::ResourceGroups {
+        subscription_ids: ids.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+#[tokio::test]
+async fn rg_without_scope_uses_the_highlighted_subscription() {
+    let (mut app, azure) = setup();
+    press(&mut app, KeyCode::Char('j')).await; // highlight "dev"
+    type_command(&mut app, "rg").await;
+    assert_eq!(last_request(&azure).await, rg_request(&["id-dev"]));
+    assert!(!app.state().cross_subscription_mode);
+    assert_eq!(
+        app.state().selected_subscription.as_ref().unwrap().name,
+        "dev"
+    );
+}
+
+#[tokio::test]
+async fn res_without_scope_stays_in_the_subscription_you_are_in() {
+    let (mut app, azure) = setup();
+    let mut loads = app.take_load_receiver().unwrap();
+    press(&mut app, KeyCode::Enter).await; // into "prod"
+    app.apply_load(loads.recv().await.unwrap());
+
+    type_command(&mut app, "res").await;
+    assert_eq!(
+        last_request(&azure).await,
+        LoadRequest::Resources {
+            subscription_ids: vec!["id-prod".into()],
+            resource_group: None,
+        }
+    );
+    assert!(!app.state().cross_subscription_mode);
+}
+
+#[tokio::test]
+async fn rg_without_scope_in_the_tree_uses_the_highlighted_group() {
+    let (mut app, azure) = setup();
+    let mut loads = app.take_load_receiver().unwrap();
+    type_command(&mut app, "mg").await;
+    app.apply_load(loads.recv().await.unwrap());
+
+    press(&mut app, KeyCode::Char('G')).await; // "Workloads"
+    type_command(&mut app, "rg").await;
+    assert_eq!(last_request(&azure).await, rg_request(&["id-dev"]));
+    assert!(app.state().cross_subscription_mode);
+    assert_eq!(app.state().scope_group.as_deref(), Some("workloads"));
+    app.apply_load(loads.recv().await.unwrap());
+
+    // From that group's list, :res keeps the group.
+    type_command(&mut app, "res").await;
+    assert_eq!(
+        last_request(&azure).await,
+        LoadRequest::Resources {
+            subscription_ids: vec!["id-dev".into()],
+            resource_group: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn all_still_means_all_and_carries_over_to_the_next_command() {
+    let (mut app, azure) = setup();
+    let mut loads = app.take_load_receiver().unwrap();
+    press(&mut app, KeyCode::Char('j')).await; // highlight "dev"
+    type_command(&mut app, "rg all").await;
+    assert_eq!(
+        last_request(&azure).await,
+        rg_request(&["id-prod", "id-dev"])
+    );
+    app.apply_load(loads.recv().await.unwrap());
+
+    // In an all-subscriptions list, :res means all subscriptions too.
+    type_command(&mut app, "res").await;
+    assert_eq!(
+        last_request(&azure).await,
+        LoadRequest::Resources {
+            subscription_ids: vec!["id-prod".into(), "id-dev".into()],
+            resource_group: None,
+        }
+    );
+}

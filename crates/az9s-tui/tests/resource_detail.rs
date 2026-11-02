@@ -240,9 +240,14 @@ async fn y_copies_and_o_opens_the_portal_with_the_tenant() {
         [
             format!("copy {VM_ID}"),
             format!("open https://portal.azure.com/#@tenant-1/resource{VM_ID}"),
+            // No browser (e.g. WSL without wslview): the link is copied instead,
+            // because it is too long for the status bar.
+            format!("copy https://portal.azure.com/#@tenant-1/resource{VM_ID}"),
         ]
     );
-    // The browser failed (no display): the link is in the status bar.
     let notice = app.state().notice.clone().unwrap();
-    assert!(notice.contains("Could not open a browser") && notice.contains(VM_ID));
+    assert!(
+        notice.contains("No browser could be started") && notice.contains("Portal link copied"),
+        "{notice}"
+    );
 }
