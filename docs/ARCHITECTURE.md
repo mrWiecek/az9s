@@ -102,8 +102,9 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   (`type=`, `loc=`, `tag=`): parsing, matching, and `Display` back to the
   typed form (stored in navigation contexts so `Esc` restores it). Applied
   on the client in `AppState::filtered_resources`, with the `/` text filter,
-  in one memoized pass; `AppState::type_summary` counts types (memoized per
-  list and query).
+  in one memoized pass; `AppState::type_summary` counts types and
+  `AppState::tag_summary` counts tag key/value pairs (each memoized per list
+  and query).
 - `export.rs`: `view_text`, what `c` copies: a list's filtered rows as TSV
   with a header, the tree or type summary rows, or the detail view's tab.
 - `resource_type.rs`: short aliases for resource types (`vm`, `vnet`, …),

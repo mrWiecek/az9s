@@ -15,6 +15,12 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 ## [0.6.0] - 2026-11-02
 
 ### Added
+- **Tags view: `:tag [all|<sub>] [filters]`.** Lists every tag on the
+  resources in scope as key, value and how many resources carry it, most
+  common first. Keys are grouped ignoring case, as Azure treats them. `/`
+  narrows by key or value, `Enter` opens the resources with that tag
+  (without reloading), `Esc` comes back, `c` copies the list. Filters work
+  as for `:res`, e.g. `:tag all type=keyvault`.
 - **Vim-style search in the resource detail view.** `/` searches the open
   tab (Overview, Tags or JSON) instead of filtering: it jumps to the first
   match as you type and highlights every match, the current one more

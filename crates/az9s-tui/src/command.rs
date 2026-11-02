@@ -14,6 +14,7 @@ use az9s_core::query::ResourceQuery;
 /// - `:res all` - Go to resources across all subscriptions
 /// - `:res [all|<sub>] type=… loc=… tag=…` - Resources narrowed by filters
 /// - `:type [all|<sub>] [filters]` - Resource counts per type
+/// - `:tag [all|<sub>] [filters]` - Tag key/value counts
 #[derive(Debug, Clone)]
 pub struct Command {
     pub kind: CommandKind,
@@ -31,6 +32,8 @@ pub enum CommandKind {
     Resources { scope: Scope, query: ResourceQuery },
     /// Resource counts per type
     ResourceTypes { scope: Scope, query: ResourceQuery },
+    /// Tag key/value counts
+    Tags { scope: Scope, query: ResourceQuery },
     /// A known command with bad arguments (the message says why)
     Invalid(String),
     /// Unknown/invalid command
@@ -82,7 +85,7 @@ impl Command {
             "sub" | "subscription" => Self {
                 kind: CommandKind::Subscriptions,
             },
-            "rg" | "resourcegroup" | "resource-group" | "res" | "resource" | "type" => {
+            "rg" | "resourcegroup" | "resource-group" | "res" | "resource" | "type" | "tag" => {
                 let (filters, scope_terms): (Vec<&str>, Vec<&str>) =
                     parts[1..].iter().partition(|t| ResourceQuery::is_filter(t));
                 let query = match ResourceQuery::parse(filters) {
@@ -100,6 +103,7 @@ impl Command {
                 };
                 let kind = match cmd.as_str() {
                     "type" => CommandKind::ResourceTypes { scope, query },
+                    "tag" => CommandKind::Tags { scope, query },
                     "res" | "resource" => CommandKind::Resources { scope, query },
                     _ if !query.types.is_empty() => CommandKind::Invalid(format!(
                         ":{cmd}: type= filters resources, not resource groups \
@@ -125,7 +129,7 @@ impl Command {
         match &self.kind {
             CommandKind::Unknown(cmd) if !cmd.is_empty() => {
                 Some(format!(
-                    "Unknown command: '{}'\n\nAvailable commands:\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type",
+                    "Unknown command: '{}'\n\nAvailable commands:\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type\n  :tag [all|<sub>] - Tags and how many resources carry them",
                     cmd
                 ))
             }
@@ -216,6 +220,16 @@ mod tests {
         assert_eq!(query.to_string(), "loc=westeurope tag=env:prod");
         let bad = Command::parse(":rg type=vm");
         assert!(bad.error_message().unwrap().contains("not resource groups"));
+    }
+
+    #[test]
+    fn test_parse_tag_view() {
+        let CommandKind::Tags { scope, query } = Command::parse(":tag all type=vm").kind else {
+            panic!()
+        };
+        assert_eq!(scope, Scope::All);
+        assert_eq!(query.types, ["vm"]);
+        assert!(!Command::parse(":tags").is_valid(), "singular only");
     }
 
     #[test]

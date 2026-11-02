@@ -117,6 +117,9 @@ pub struct AppState {
 
     /// Memoized resource-type summary: (list key, query) → counts
     type_summary_memo: Mutex<Option<TypeSummaryMemo>>,
+
+    /// Memoized tag counts, like `type_summary_memo`
+    tag_summary_memo: Mutex<Option<TagSummaryMemo>>,
 }
 
 /// Which list a memoized filter result belongs to.
@@ -149,6 +152,22 @@ struct TypeSummaryMemo {
     rows: Vec<(String, usize)>,
 }
 
+/// One row of the tags view: a tag key and value, and how many resources
+/// carry it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagCount {
+    pub key: String,
+    pub value: String,
+    pub count: usize,
+}
+
+/// Memoized tag counts for one resource list and query.
+#[derive(Debug)]
+struct TagSummaryMemo {
+    key: (usize, usize, String),
+    rows: Vec<TagCount>,
+}
+
 /// Where a list's data came from and when (unix seconds): fetched from
 /// Azure at that time, or read from the cache, written at that time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +196,8 @@ pub enum ViewMode {
     ResourceList,
     /// Resource counts per type (`:type`)
     ResourceTypeSummary,
+    /// Tag key/value counts (`:tag`)
+    TagSummary,
     ResourceDetail,
     Logs,
 }
@@ -333,6 +354,7 @@ impl AppState {
             ViewMode::ResourceGroupList => self.filtered_resource_groups().len(),
             ViewMode::ResourceList => self.filtered_resources().len(),
             ViewMode::ResourceTypeSummary => self.type_summary().len(),
+            ViewMode::TagSummary => self.tag_summary().len(),
             ViewMode::ManagementGroupTree => self.tree_rows().len(),
             _ => 0,
         }
@@ -453,6 +475,69 @@ impl AppState {
             .collect()
     }
 
+    /// Tags on the resources matching the structured query: one row per
+    /// key and value, most common first. Keys are grouped ignoring case (as
+    /// Azure treats them) and shown as first seen; values are kept as they
+    /// are. The `/` filter narrows rows by key or value.
+    pub fn tag_summary(&self) -> Vec<TagCount> {
+        let key = (
+            self.resources.as_ptr() as usize,
+            self.resources.len(),
+            self.resource_query.to_string(),
+        );
+        let mut memo = self
+            .tag_summary_memo
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if memo.as_ref().map(|m| &m.key) != Some(&key) {
+            // (lowercase key, value) -> (key as first seen, count)
+            let mut counts: HashMap<(String, String), (String, usize)> = HashMap::new();
+            for r in self
+                .resources
+                .iter()
+                .filter(|r| self.resource_query.matches(r))
+            {
+                for (k, v) in &r.tags {
+                    counts
+                        .entry((k.to_lowercase(), v.clone()))
+                        .or_insert_with(|| (k.clone(), 0))
+                        .1 += 1;
+                }
+            }
+            let mut rows: Vec<TagCount> = counts
+                .into_iter()
+                .map(|((_, value), (key, count))| TagCount { key, value, count })
+                .collect();
+            rows.sort_by(|a, b| {
+                b.count
+                    .cmp(&a.count)
+                    .then_with(|| a.key.to_lowercase().cmp(&b.key.to_lowercase()))
+                    .then_with(|| a.value.cmp(&b.value))
+            });
+            *memo = Some(TagSummaryMemo { key, rows });
+        }
+        let rows = &memo.as_ref().expect("set above").rows;
+        if self.filter.is_empty() {
+            return rows.clone();
+        }
+        let needle = self.filter.to_ascii_lowercase();
+        rows.iter()
+            .filter(|t| {
+                contains_ignore_ascii_case(&t.key, &needle)
+                    || contains_ignore_ascii_case(&t.value, &needle)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// The selected row of the tags view.
+    pub fn selected_tag(&self) -> Option<TagCount> {
+        if self.view != ViewMode::TagSummary {
+            return None;
+        }
+        self.tag_summary().into_iter().nth(self.list_state.selected)
+    }
+
     /// The selected row of the type summary.
     pub fn selected_type(&self) -> Option<String> {
         if self.view != ViewMode::ResourceTypeSummary {
@@ -520,7 +605,9 @@ impl AppState {
                 self.freshness.get(&ViewMode::ResourceList).copied()
             }
             // The summary counts the resource list.
-            ViewMode::ResourceTypeSummary => self.freshness.get(&ViewMode::ResourceList).copied(),
+            ViewMode::ResourceTypeSummary | ViewMode::TagSummary => {
+                self.freshness.get(&ViewMode::ResourceList).copied()
+            }
             ref v => self.freshness.get(v).copied(),
         }
     }
@@ -550,7 +637,7 @@ impl AppState {
                     crate::scope_tree::TreeRowKind::Unplaced => None,
                 }
             }
-            ViewMode::ResourceTypeSummary | ViewMode::Logs => None,
+            ViewMode::ResourceTypeSummary | ViewMode::TagSummary | ViewMode::Logs => None,
         }
     }
 
@@ -877,6 +964,45 @@ mod tests {
             subscription_id: "s".into(),
             tags: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn tag_summary_counts_key_value_pairs_grouping_keys_ignoring_case() {
+        let mut state = AppState::new();
+        let tagged = |name: &str, tags: &[(&str, &str)]| Resource {
+            tags: tags
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..resource(name)
+        };
+        state.resources = vec![
+            tagged("a", &[("env", "prod"), ("owner", "team-a")]),
+            tagged("b", &[("Env", "prod")]),
+            tagged("c", &[("env", "dev")]),
+            tagged("d", &[]),
+        ];
+        state.view = ViewMode::TagSummary;
+        let rows: Vec<(String, String, usize)> = state
+            .tag_summary()
+            .into_iter()
+            .map(|t| (t.key.to_lowercase(), t.value, t.count))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("env".into(), "prod".into(), 2),
+                ("env".into(), "dev".into(), 1),
+                ("owner".into(), "team-a".into(), 1),
+            ]
+        );
+        assert_eq!(state.selected_tag().unwrap().value, "prod");
+
+        state.filter = "team".into();
+        assert_eq!(state.tag_summary().len(), 1, "/ matches values too");
+        state.filter.clear();
+        state.resource_query = ResourceQuery::parse(["tag=owner"]).unwrap();
+        assert_eq!(state.tag_summary().len(), 2, "follows the query: only a");
     }
 
     #[test]

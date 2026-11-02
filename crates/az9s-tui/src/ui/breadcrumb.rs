@@ -78,6 +78,7 @@ impl Breadcrumb {
             ViewMode::ResourceGroupList => "Resource Groups",
             ViewMode::ResourceList => "Resources",
             ViewMode::ResourceTypeSummary => "Resource Types",
+            ViewMode::TagSummary => "Tags",
             ViewMode::ResourceDetail => "Resource Detail",
             ViewMode::Logs => "Logs",
         }

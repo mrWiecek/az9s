@@ -313,6 +313,7 @@ impl TuiApp {
             CommandKind::ResourceGroups { scope, .. }
             | CommandKind::Resources { scope, .. }
             | CommandKind::ResourceTypes { scope, .. }
+            | CommandKind::Tags { scope, .. }
                 if *scope == Scope::Current =>
             {
                 *scope = context;
@@ -359,6 +360,16 @@ impl TuiApp {
                     let state = self.state_mut();
                     state.resource_query = query;
                     state.view = ViewMode::ResourceTypeSummary;
+                }
+            }
+            CommandKind::Tags { scope, query } => {
+                debug!("Command: tags, scope {:?}, filter {}", scope, query);
+                if let Some(subscription_ids) = self.resolve_scope(&scope) {
+                    self.state_mut().clear_navigation();
+                    self.show_resources(subscription_ids, None, scope.is_cross_subscription());
+                    let state = self.state_mut();
+                    state.resource_query = query;
+                    state.view = ViewMode::TagSummary;
                 }
             }
             CommandKind::Invalid(_) => {
@@ -592,7 +603,10 @@ impl TuiApp {
                 self.core
                     .request(LoadRequest::ResourceGroups { subscription_ids });
             }
-            (ViewMode::ResourceList | ViewMode::ResourceTypeSummary, Some(subscription_ids)) => {
+            (
+                ViewMode::ResourceList | ViewMode::ResourceTypeSummary | ViewMode::TagSummary,
+                Some(subscription_ids),
+            ) => {
                 let resource_group = self.state().current_resource_group.clone();
                 self.core.request(LoadRequest::Resources {
                     subscription_ids,
@@ -871,6 +885,10 @@ impl TuiApp {
                 self.handle_type_select();
                 Ok(true)
             }
+            ViewMode::TagSummary => {
+                self.handle_tag_select();
+                Ok(true)
+            }
             ViewMode::ResourceGroupList => self.handle_resource_group_select().await,
             ViewMode::ResourceList => self.handle_resource_select().await,
             ViewMode::ResourceDetail => Ok(true),
@@ -946,6 +964,20 @@ impl TuiApp {
         self.push_current_context(None);
         let state = self.state_mut();
         state.resource_query.types = vec![resource_type];
+        state.filter.clear();
+        state.view = ViewMode::ResourceList;
+        state.list_state.reset();
+    }
+
+    /// Enter on the tags view: the resources with that tag (on top of any
+    /// other filters). The rows are already loaded.
+    fn handle_tag_select(&mut self) {
+        let Some(tag) = self.state().selected_tag() else {
+            return;
+        };
+        self.push_current_context(None);
+        let state = self.state_mut();
+        state.resource_query.tags = vec![(tag.key, Some(tag.value))];
         state.filter.clear();
         state.view = ViewMode::ResourceList;
         state.list_state.reset();
