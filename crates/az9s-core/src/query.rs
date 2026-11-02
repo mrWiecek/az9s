@@ -5,12 +5,14 @@
 //! - Different keys must all match (AND). Comma-separated values of one key
 //!   are alternatives (OR): `type=virtualmachines,disks`.
 //! - `type=` matches the full type (`Microsoft.Compute/virtualMachines`), its
-//!   last segment (`virtualMachines`), or a provider (`Microsoft.Compute`).
-//! - `loc=` matches the location exactly. `tag=env:prod` matches a tag key
-//!   and value; `tag=env` matches any resource that has the key.
+//!   last segment (`virtualMachines`), a provider (`Microsoft.Compute`), or
+//!   its short alias (`vm`, `vnet`, `nsg`; see `resource_type`).
+//! - `loc=` matches the location exactly. `tag=env:prod` (or `tag=env=prod`)
+//!   matches a tag key and value; `tag=env` matches any resource that has the key.
 //! - Everything is case-insensitive.
 
-use crate::models::Resource;
+use crate::models::{Resource, ResourceGroup};
+use std::collections::HashMap;
 use std::fmt;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -51,7 +53,9 @@ impl ResourceQuery {
                 "loc" | "location" => query.locations.extend(values.iter().map(|v| v.to_string())),
                 "tag" => query
                     .tags
-                    .extend(values.iter().map(|v| match v.split_once(':') {
+                    .extend(values.iter().map(|v| match v.split_once([':', '=']) {
+                        // tag=env:prod and tag=env=prod both mean key env, value prod
+                        // (split at the first separator: values may contain more).
                         Some((k, val)) => (k.to_string(), Some(val.to_string())),
                         None => (v.to_string(), None),
                     })),
@@ -71,14 +75,24 @@ impl ResourceQuery {
                 .types
                 .iter()
                 .any(|t| type_matches(&resource.resource_type, t)))
-            && (self.locations.is_empty()
-                || self
-                    .locations
-                    .iter()
-                    .any(|l| l.eq_ignore_ascii_case(&resource.location)))
+            && self.matches_place(&resource.location, &resource.tags)
+    }
+
+    /// For resource groups: `loc=` and `tag=` (`type=` is rejected when
+    /// parsing `:rg`).
+    pub fn matches_group(&self, group: &ResourceGroup) -> bool {
+        self.matches_place(&group.location, &group.tags)
+    }
+
+    fn matches_place(&self, location: &str, tags: &HashMap<String, String>) -> bool {
+        (self.locations.is_empty()
+            || self
+                .locations
+                .iter()
+                .any(|l| l.eq_ignore_ascii_case(location)))
             && (self.tags.is_empty()
                 || self.tags.iter().any(|(key, value)| {
-                    resource.tags.iter().any(|(k, v)| {
+                    tags.iter().any(|(k, v)| {
                         k.eq_ignore_ascii_case(key)
                             && value
                                 .as_ref()
@@ -91,9 +105,14 @@ impl ResourceQuery {
 fn type_matches(resource_type: &str, wanted: &str) -> bool {
     let full = resource_type.to_ascii_lowercase();
     let wanted = wanted.to_ascii_lowercase();
+    // Dashes and spaces don't matter for aliases: key-vault, keyvault.
+    let squash = |s: &str| s.replace(['-', ' '], "");
     full == wanted
         || full.rsplit('/').next() == Some(wanted.as_str())
         || full.starts_with(&format!("{wanted}/"))
+        // A provider without "Microsoft.": type=keyvault, type=network
+        || full.starts_with(&format!("microsoft.{wanted}/"))
+        || squash(&crate::resource_type::short_label(resource_type)) == squash(&wanted)
 }
 
 /// The filter as typed: `type=a,b loc=c tag=k:v`. Parses back to the same query.
@@ -153,6 +172,16 @@ mod tests {
         assert!(q(&["type=microsoft.compute"]).matches(&vm));
         assert!(!q(&["type=disks"]).matches(&vm));
         assert!(!q(&["type=virtual"]).matches(&vm), "no substring matches");
+        assert!(q(&["type=vm"]).matches(&vm), "short alias");
+        let kv = res("microsoft.keyvault/vaults", "westeurope", &[]);
+        for alias in ["key-vault", "keyvault", "KeyVault", "key vault", "vaults"] {
+            assert!(q(&[&format!("type={alias}")]).matches(&kv), "{alias}");
+        }
+        assert!(
+            q(&["type=compute"]).matches(&vm),
+            "provider without Microsoft."
+        );
+        assert!(!q(&["type=comp"]).matches(&vm));
         assert!(
             q(&["type=disks,virtualmachines"]).matches(&vm),
             "OR within a key"
@@ -165,6 +194,11 @@ mod tests {
         assert!(q(&["loc=westeurope"]).matches(&r));
         assert!(!q(&["loc=northeurope"]).matches(&r));
         assert!(q(&["tag=env:prod"]).matches(&r));
+        assert!(
+            q(&["tag=env=prod"]).matches(&r),
+            "= works as the separator too"
+        );
+        assert!(!q(&["tag=env=dev"]).matches(&r));
         assert!(!q(&["tag=env:dev"]).matches(&r));
         assert!(q(&["tag=OWNER"]).matches(&r), "key only: has the tag");
         assert!(!q(&["tag=cost"]).matches(&r));

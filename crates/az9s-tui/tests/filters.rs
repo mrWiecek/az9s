@@ -2,7 +2,7 @@
 
 use az9s_core::cache::Cache;
 use az9s_core::loader::{ChunkSink, FetchOutcome, Fetcher, LoadRequest, LoadedData};
-use az9s_core::models::{Resource, Subscription};
+use az9s_core::models::{Resource, ResourceGroup, Subscription};
 use az9s_core::state::ViewMode;
 use az9s_core::App;
 use az9s_tui::{Event, TuiApp};
@@ -25,7 +25,7 @@ fn res(name: &str, resource_type: &str, location: &str, env: &str) -> Resource {
     }
 }
 
-/// Every resources request returns the same five resources.
+/// Every request returns the same rows: five resources, three groups.
 struct Azure;
 
 impl Fetcher for Azure {
@@ -53,6 +53,22 @@ impl Fetcher for Azure {
                 res("disk-1", "Microsoft.Compute/disks", "westeurope", "prod"),
                 res("kv-1", "Microsoft.KeyVault/vaults", "westeurope", "prod"),
             ])),
+            LoadRequest::ResourceGroups { .. } => Ok(LoadedData::ResourceGroups(
+                [
+                    ("rg-weu", "westeurope", "prod"),
+                    ("rg-neu", "northeurope", "prod"),
+                    ("rg-dev", "westeurope", "dev"),
+                ]
+                .iter()
+                .map(|(name, loc, env)| ResourceGroup {
+                    id: format!("/subscriptions/s1/resourceGroups/{name}"),
+                    name: name.to_string(),
+                    location: loc.to_string(),
+                    subscription_id: "s1".into(),
+                    tags: HashMap::from([("env".to_string(), env.to_string())]),
+                })
+                .collect(),
+            )),
             _ => Err("unexpected".into()),
         };
         async move {
@@ -177,4 +193,69 @@ async fn type_summary_counts_types_and_opens_a_filtered_list() {
     assert_eq!(app.state().view, ViewMode::ResourceDetail);
     press(&mut app, KeyCode::Esc).await;
     assert_eq!(visible_names(&app), ["disk-1"]);
+}
+
+#[tokio::test]
+async fn rg_takes_location_and_tag_filters() {
+    let mut app = setup();
+    let mut loads = app.take_load_receiver().unwrap();
+    command(&mut app, "rg all loc=westeurope tag=env:prod").await;
+    app.apply_load(loads.recv().await.unwrap());
+    let names: Vec<String> = app
+        .state()
+        .filtered_resource_groups()
+        .iter()
+        .map(|r| r.name.clone())
+        .collect();
+    assert_eq!(names, ["rg-weu"]);
+
+    // Into the group and back: the group filter is restored.
+    press(&mut app, KeyCode::Enter).await;
+    assert!(
+        app.state().resource_query.is_empty(),
+        "resources start unfiltered"
+    );
+    press(&mut app, KeyCode::Esc).await;
+    assert_eq!(app.state().filtered_resource_groups().len(), 1);
+
+    command(&mut app, "rg all type=vm").await;
+    assert!(app
+        .state()
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("not resource groups"));
+}
+
+#[tokio::test]
+async fn aliases_work_in_type_filters_and_the_type_summary() {
+    let mut app = setup();
+    let mut loads = app.take_load_receiver().unwrap();
+    command(&mut app, "res all type=vm").await;
+    app.apply_load(loads.recv().await.unwrap());
+    assert_eq!(visible_names(&app), ["vm-1", "vm-2", "vm-3"]);
+
+    command(&mut app, "type all").await;
+    app.apply_load(loads.recv().await.unwrap());
+    press(&mut app, KeyCode::Char('/')).await;
+    for c in "key-vault".chars() {
+        press(&mut app, KeyCode::Char(c)).await;
+    }
+    assert_eq!(
+        app.state().type_summary(),
+        [("microsoft.keyvault/vaults".to_string(), 1)]
+    );
+}
+
+#[tokio::test]
+async fn tag_key_equals_value_and_keyvault_alias_from_the_command_line() {
+    let mut app = setup();
+    let mut loads = app.take_load_receiver().unwrap();
+    command(&mut app, "res all tag=env=prod").await;
+    app.apply_load(loads.recv().await.unwrap());
+    assert_eq!(visible_names(&app), ["vm-1", "disk-1", "kv-1"]);
+
+    command(&mut app, "res all type=keyvault tag=env=prod").await;
+    app.apply_load(loads.recv().await.unwrap());
+    assert_eq!(visible_names(&app), ["kv-1"]);
 }

@@ -46,6 +46,9 @@ pub struct AppState {
     /// Help screen state
     pub help_open: bool,
 
+    /// First visible line of the help screen
+    pub help_scroll: usize,
+
     /// Filter mode state
     pub filter_mode: bool,
 
@@ -89,7 +92,8 @@ pub struct AppState {
     /// (`None`: all subscriptions)
     pub scope_group: Option<String>,
 
-    /// Structured filter on the resource list (`:res type=… loc=… tag=…`)
+    /// Structured filter on the current resource or resource group list
+    /// (`:res type=… loc=… tag=…`, `:rg loc=… tag=…`)
     pub resource_query: ResourceQuery,
 
     /// Memoized filter result, so a frame doesn't rescan every row
@@ -360,12 +364,17 @@ impl AppState {
 
     /// Get filtered resource groups based on current filter
     pub fn filtered_resource_groups(&self) -> Vec<&ResourceGroup> {
-        self.filter_list(
+        let query = &self.resource_query;
+        let signature = query.to_string();
+        self.filter_list_with(
             ListKind::ResourceGroups,
             &self.resource_groups,
+            &signature,
             |rg, needle| {
-                contains_ignore_ascii_case(&rg.name, needle)
-                    || contains_ignore_ascii_case(&rg.location, needle)
+                query.matches_group(rg)
+                    && (needle.is_empty()
+                        || contains_ignore_ascii_case(&rg.name, needle)
+                        || contains_ignore_ascii_case(&rg.location, needle))
             },
         )
     }
@@ -383,7 +392,7 @@ impl AppState {
                 query.matches(r)
                     && (needle.is_empty()
                         || contains_ignore_ascii_case(&r.name, needle)
-                        || contains_ignore_ascii_case(&r.resource_type, needle)
+                        || crate::resource_type::type_contains(&r.resource_type, needle)
                         || contains_ignore_ascii_case(&r.location, needle))
             },
         )
@@ -423,7 +432,7 @@ impl AppState {
         }
         let needle = self.filter.to_ascii_lowercase();
         rows.iter()
-            .filter(|(t, _)| contains_ignore_ascii_case(t, &needle))
+            .filter(|(t, _)| crate::resource_type::type_contains(t, &needle))
             .cloned()
             .collect()
     }

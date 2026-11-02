@@ -240,9 +240,44 @@ async fn y_copies_and_o_opens_the_portal_with_the_tenant() {
         [
             format!("copy {VM_ID}"),
             format!("open https://portal.azure.com/#@tenant-1/resource{VM_ID}"),
+            // No browser (e.g. WSL without wslview): the link is copied instead,
+            // because it is too long for the status bar.
+            format!("copy https://portal.azure.com/#@tenant-1/resource{VM_ID}"),
         ]
     );
-    // The browser failed (no display): the link is in the status bar.
     let notice = app.state().notice.clone().unwrap();
-    assert!(notice.contains("Could not open a browser") && notice.contains(VM_ID));
+    assert!(
+        notice.contains("No browser could be started") && notice.contains("Portal link copied"),
+        "{notice}"
+    );
+}
+
+#[tokio::test]
+async fn c_copies_the_current_view() {
+    let (mut app, _, recorder) = setup(Ok(vm_document()));
+    let mut loads = app.take_load_receiver().unwrap();
+
+    // In the resource list: every row, tab-separated with a header.
+    press(&mut app, KeyCode::Char('c')).await;
+    // In the detail view, JSON tab: the whole document.
+    press(&mut app, KeyCode::Enter).await;
+    app.apply_load(loads.recv().await.unwrap());
+    press(&mut app, KeyCode::Char('3')).await;
+    press(&mut app, KeyCode::Char('c')).await;
+
+    let calls = recorder.0.lock().unwrap().clone();
+    assert!(
+        calls[0].starts_with("copy name\ttype\tlocation\tresource group\tsubscription\tid\nvm-1\t"),
+        "{}",
+        calls[0]
+    );
+    let json = calls[1].strip_prefix("copy ").unwrap();
+    let parsed: Value = serde_json::from_str(json).expect("valid JSON is copied");
+    assert_eq!(parsed, vm_document());
+    assert!(app
+        .state()
+        .notice
+        .as_deref()
+        .unwrap()
+        .starts_with("Copied JSON of vm-1"));
 }

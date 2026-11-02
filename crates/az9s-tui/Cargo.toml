@@ -18,9 +18,6 @@ tracing = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 
-# Utilities
-once_cell = "1.19"
-
 [dev-dependencies]
 chrono = { workspace = true }
 futures = { workspace = true }

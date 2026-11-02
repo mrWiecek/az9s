@@ -93,7 +93,8 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
       `GraphFetcher` uses it to resolve the tenant (and so the token) before
       the first request.
     - Tests use fake fetchers.
-- `detail.rs`: what the resource detail view shows, derived from the
+- `detail.rs` (with type-specific sections, e.g. a VNet's subnets and their
+  delegations): what the resource detail view shows, derived from the
   resource's full document (`LoadRequest::ResourceDetail`, one Resource
   Graph query by ID; cached in `resource_details`): Overview sections, sorted
   tags, pretty JSON, and Portal URLs.
@@ -103,6 +104,10 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   on the client in `AppState::filtered_resources`, with the `/` text filter,
   in one memoized pass; `AppState::type_summary` counts types (memoized per
   list and query).
+- `export.rs`: `view_text`, what `c` copies: a list's filtered rows as TSV
+  with a header, the tree or type summary rows, or the detail view's tab.
+- `resource_type.rs`: short aliases for resource types (`vm`, `vnet`, …),
+  shown in lists and matched by `type=` and `/` filters.
 - `scope_tree.rs`: `ScopeTree` (root, groups, subscriptions, each with its
   parent; serializable, cached as one JSON document). `rows(expanded, known
   subscriptions, filter)` flattens it into the visible `TreeRow`s: groups

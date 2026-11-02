@@ -158,6 +158,31 @@ impl<'a> StatefulWidget for SelectableList<'a> {
 ///
 /// Counts characters, not bytes, so names with multi-byte UTF-8 characters
 /// never cause a panic.
+/// A fixed-width column: `text` cut with "…" so at least one space is
+/// left before the next column, then padded to `width` characters.
+pub fn cell(text: &str, width: usize) -> String {
+    if width < 2 {
+        return " ".repeat(width);
+    }
+    let room = width - 1;
+    let shown = if text.chars().count() > room {
+        let mut cut: String = text.chars().take(room - 1).collect();
+        cut.push('…');
+        cut
+    } else {
+        text.to_string()
+    };
+    format!("{shown:<width$}")
+}
+
+/// Width of a list's flexible (name) column: what is left of `area_width`
+/// after the borders and the `fixed` columns, kept between 20 and `max`.
+pub fn name_width(area_width: u16, fixed: usize, max: usize) -> usize {
+    (area_width as usize)
+        .saturating_sub(2 + 2 + fixed) // borders, highlight marker
+        .clamp(20, max)
+}
+
 pub fn truncate_with_ellipsis(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
@@ -181,6 +206,23 @@ pub fn list_item_spans<'a>(spans: Vec<Span<'a>>) -> ListItem<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cells_always_leave_a_gap() {
+        assert_eq!(cell("short", 8), "short   ");
+        assert_eq!(cell("exactly8", 8), "exactl… ");
+        assert_eq!(cell("a-very-long-resource-name", 10), "a-very-l… ");
+        assert_eq!(cell("ąęółżźćń-długa", 6), "ąęół… ", "characters, not bytes");
+        assert_eq!(cell("x", 0), "");
+        assert_eq!(cell("xy", 1), " ");
+    }
+
+    #[test]
+    fn name_column_grows_with_the_terminal() {
+        assert_eq!(name_width(80, 32, 80), 44);
+        assert_eq!(name_width(40, 32, 80), 20, "never below 20");
+        assert_eq!(name_width(300, 32, 80), 80, "never above max");
+    }
 
     #[test]
     fn truncate_keeps_short_strings() {

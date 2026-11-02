@@ -12,6 +12,52 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-02
+
+### Added
+- **`c` copies the current view**, in every view:
+  - lists (subscriptions, resource groups, resources): every row that passes
+    the filters, not only the rows on screen, tab-separated with a header,
+    so it pastes into a spreadsheet;
+  - the resource detail view: the current tab (Overview, Tags or JSON);
+  - the management group tree and the `:type` summary: their rows.
+  The status bar says what was copied and how much.
+- **VNet subnets in the detail view.** A virtual network's Overview lists
+  each subnet with its prefixes, delegations (e.g. `delegated to
+  Microsoft.Web/serverFarms`, or `no delegation`), NSG, route table and NAT
+  gateway.
+- **`:rg` takes filters too:** `loc=` and `tag=`, e.g. `:rg all
+  loc=northeurope` or `:rg tag=owner`. `type=` there is an error that
+  points to `:res` and `:type`. Active filters show in every list's title.
+- **Type aliases in filters.** `type=vnet`, `type=vm`, `type=key-vault`
+  (or `keyvault`) work, as does a provider without `Microsoft.`
+  (`type=network`). The `/` filter in resource lists and in `:type` matches
+  aliases too (typing `vnet` in `:type` finds
+  `microsoft.network/virtualnetworks`). Before, `type=` needed the type's
+  full name or its last part.
+- **`tag=environment=prod`** works as well as `tag=environment:prod`.
+- **A rewritten, scrollable help (`?`)**: commands, the scope rules,
+  every filter with its matching rules, worked examples, and all keys.
+  `j`/`k`, `g`/`G` and `Ctrl+D`/`Ctrl+U` scroll it.
+
+### Changed
+- List columns no longer overlap: long names are cut with "…" leaving a
+  gap before the next column, and the name column widens with the terminal.
+
+### Fixed
+- **`o` failed on WSL** with an OS error and a cut-off link: az9s ran
+  `xdg-open`, which WSL usually doesn't have. On WSL it now opens the
+  Windows browser (`wslview`, then `cmd.exe /c start`, then `xdg-open`).
+  If no browser can be started anywhere, the Portal link is copied to the
+  clipboard instead, with a short message, rather than printed into the
+  status bar where it was truncated.
+- **`:rg`, `:res` and `:type` without a scope always opened all
+  subscriptions.** Without a scope they now apply to where you are: the
+  highlighted subscription (subscription list, tree), the highlighted
+  management group (tree), or the subscription or management group the
+  current list is scoped to. Only with no such context, or with `all`, do
+  they cover all subscriptions.
+
 ## [0.5.0] - 2026-11-02
 
 ### Added
@@ -283,7 +329,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/mrWiecek/az9s/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/mrWiecek/az9s/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mrWiecek/az9s/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/mrWiecek/az9s/compare/v0.3.0...v0.3.1

@@ -66,6 +66,7 @@ az9s --timings                             # launch, print a timing summary on e
 | `:` | Command mode |
 | `r` | Refresh |
 | `y` | Copy the selected item's Azure ID (works over SSH; in tmux enable `set-clipboard`) |
+| `c` | Copy the current view: all filtered rows of a list (tab-separated, pastes into a spreadsheet), or the detail view's tab (Overview, Tags, JSON) |
 | `o` | Open the selected item in the Azure Portal |
 | `Tab`, `1`-`3` | Detail view: Overview / Tags / JSON |
 | `?` | Help |
@@ -77,8 +78,8 @@ az9s --timings                             # launch, print a timing summary on e
 |---|---|
 | `:mg` | Management group tree (the start view) |
 | `:sub` | Subscriptions |
-| `:rg [all\|<sub>]` | Resource groups (all subscriptions or one) |
-| `:res [all\|<sub>] [filters]` | Resources (all subscriptions or one), e.g. `:res all type=virtualMachines loc=westeurope tag=env:prod` |
+| `:rg [all\|<sub>] [loc=… tag=…]` | Resource groups. Without a scope: where you are (the highlighted or current subscription or management group; all subscriptions if none) |
+| `:res [all\|<sub>] [filters]` | Resources, scoped like `:rg`, e.g. `:res all type=vm loc=westeurope tag=env=prod` (`type=` takes aliases like `vm`, `vnet`, `keyvault`, the type's last part, the full type, or a provider). `?` in the app has more examples |
 | `:type [all\|<sub>] [filters]` | Resource counts per type; `Enter` lists that type |
 
 ## Development
@@ -112,6 +113,7 @@ How it fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | "Management group tree unavailable" | You need read access on the tenant root management group; `:sub` and `:rg all` still work |
 | Status bar says "Resource Graph unavailable … used ARM" | Lists still load, but more slowly; check `just run-debug` logs |
 | A resource you just changed looks stale | Resource Graph can lag ARM briefly; press `r`, or run with `AZ9S_BACKEND=arm` |
+| `o` says "No browser could be started" (e.g. WSL) | The Portal link is copied instead; paste it into a browser. On WSL, installing `wslu` (`wslview`) helps, though az9s also tries `cmd.exe` |
 | Something feels slow | Run `az9s --timings` and include the table in an issue |
 
 ## Contributing

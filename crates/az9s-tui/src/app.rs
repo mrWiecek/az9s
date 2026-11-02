@@ -284,8 +284,22 @@ impl TuiApp {
             return Ok(());
         }
 
+        // A command without a scope means "where I am": decide that before
+        // the command resets the navigation.
+        let context = self.current_context();
         // Commands always start a new, unscoped navigation.
         self.state_mut().scope_group = None;
+        let mut command = command;
+        match &mut command.kind {
+            CommandKind::ResourceGroups { scope, .. }
+            | CommandKind::Resources { scope, .. }
+            | CommandKind::ResourceTypes { scope, .. }
+                if *scope == Scope::Current =>
+            {
+                *scope = context;
+            }
+            _ => {}
+        }
         match command.kind {
             CommandKind::ManagementGroups => {
                 debug!("Command: management group tree");
@@ -299,18 +313,19 @@ impl TuiApp {
                 state.list_state.reset();
                 state.clear_navigation();
             }
-            CommandKind::ResourceGroups { scope } => {
+            CommandKind::ResourceGroups { scope, query } => {
                 debug!("Command: resource groups, scope {:?}", scope);
                 if let Some(subscription_ids) = self.resolve_scope(&scope) {
                     self.state_mut().clear_navigation();
-                    self.show_resource_groups(subscription_ids, scope == Scope::All);
+                    self.show_resource_groups(subscription_ids, scope.is_cross_subscription());
+                    self.state_mut().resource_query = query;
                 }
             }
             CommandKind::Resources { scope, query } => {
                 debug!("Command: resources, scope {:?}, filter {}", scope, query);
                 if let Some(subscription_ids) = self.resolve_scope(&scope) {
                     self.state_mut().clear_navigation();
-                    self.show_resources(subscription_ids, None, scope == Scope::All);
+                    self.show_resources(subscription_ids, None, scope.is_cross_subscription());
                     self.state_mut().resource_query = query;
                 }
             }
@@ -321,7 +336,7 @@ impl TuiApp {
                 );
                 if let Some(subscription_ids) = self.resolve_scope(&scope) {
                     self.state_mut().clear_navigation();
-                    self.show_resources(subscription_ids, None, scope == Scope::All);
+                    self.show_resources(subscription_ids, None, scope.is_cross_subscription());
                     let state = self.state_mut();
                     state.resource_query = query;
                     state.view = ViewMode::ResourceTypeSummary;
@@ -343,7 +358,19 @@ impl TuiApp {
     /// subscription is unknown.
     fn resolve_scope(&mut self, scope: &Scope) -> Option<Vec<String>> {
         match scope {
-            Scope::All => Some(self.enabled_subscription_ids()),
+            Scope::All | Scope::Current => Some(self.enabled_subscription_ids()),
+            Scope::Group(group) => {
+                let ids = self.enabled_subscriptions_under(Some(group));
+                if ids.is_empty() {
+                    self.state_mut()
+                        .set_error(Some(format!("No enabled subscriptions under {group}")));
+                    return None;
+                }
+                let state = self.state_mut();
+                state.scope_group = Some(group.clone());
+                state.selected_subscription = None;
+                Some(ids)
+            }
             Scope::Subscription(name) => match self.find_subscription(name).cloned() {
                 Some(sub) => {
                     let id = sub.id.clone();
@@ -356,6 +383,41 @@ impl TuiApp {
                     None
                 }
             },
+        }
+    }
+
+    /// What a command without a scope applies to: the highlighted
+    /// subscription or management group in the list/tree, else the
+    /// management group or subscription the current view is scoped to, else
+    /// all subscriptions.
+    fn current_context(&self) -> Scope {
+        let state = self.state();
+        match state.view {
+            ViewMode::SubscriptionList => {
+                if let Some(sub) = state.selected_subscription() {
+                    return Scope::Subscription(sub.id.clone());
+                }
+            }
+            ViewMode::ManagementGroupTree => {
+                if let Some(row) = state.selected_tree_row() {
+                    return match row.kind {
+                        TreeRowKind::Subscription => Scope::Subscription(row.key),
+                        TreeRowKind::ManagementGroup => Scope::Group(row.key),
+                        TreeRowKind::Unplaced => Scope::All,
+                    };
+                }
+            }
+            _ => {}
+        }
+        if state.cross_subscription_mode {
+            return match &state.scope_group {
+                Some(group) => Scope::Group(group.clone()),
+                None => Scope::All,
+            };
+        }
+        match &state.selected_subscription {
+            Some(sub) => Scope::Subscription(sub.id.clone()),
+            None => Scope::All,
         }
     }
 
@@ -398,6 +460,7 @@ impl TuiApp {
         let state = self.state_mut();
         state.view = ViewMode::ResourceGroupList;
         state.cross_subscription_mode = all;
+        state.resource_query = Default::default();
         state.resource_groups.clear();
         state.list_state.reset();
         self.core
@@ -460,14 +523,28 @@ impl TuiApp {
 
     /// Handle keyboard input in help screen
     async fn handle_help_key(&mut self, key: KeyEvent) -> Result<bool> {
+        let state = self.state_mut();
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
                 debug!("Close help");
-                self.state_mut().toggle_help();
-                Ok(true)
+                state.toggle_help();
+                state.help_scroll = 0;
             }
-            _ => Ok(true),
+            // Scrolling; the drawing clamps the end.
+            KeyCode::Down | KeyCode::Char('j') => state.help_scroll += 1,
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.help_scroll = state.help_scroll.saturating_sub(1)
+            }
+            KeyCode::PageDown => state.help_scroll += 10,
+            KeyCode::Char('d') if ctrl => state.help_scroll += 10,
+            KeyCode::PageUp => state.help_scroll = state.help_scroll.saturating_sub(10),
+            KeyCode::Char('u') if ctrl => state.help_scroll = state.help_scroll.saturating_sub(10),
+            KeyCode::Char('g') => state.help_scroll = 0,
+            KeyCode::Char('G') => state.help_scroll = usize::MAX / 2,
+            _ => {}
         }
+        Ok(true)
     }
 
     /// Reload the current view in the background
@@ -625,6 +702,25 @@ impl TuiApp {
         self.state_mut().notice = Some(notice);
     }
 
+    /// Copy what the current view shows (`c`): every row passing the
+    /// filters, as tab-separated text, or the detail view's current tab.
+    fn copy_view(&mut self) {
+        let Some((what, text)) = az9s_core::export::view_text(self.state()) else {
+            self.state_mut().notice = Some("Nothing to copy here".into());
+            return;
+        };
+        let size = if text.len() >= 1024 {
+            format!("{} KB", text.len() / 1024)
+        } else {
+            format!("{} bytes", text.len())
+        };
+        let notice = match self.desktop.copy(&text) {
+            Ok(()) => format!("Copied {what} ({size})"),
+            Err(e) => format!("Could not copy ({e})"),
+        };
+        self.state_mut().notice = Some(notice);
+    }
+
     /// Open the selected item in the Azure Portal (`o`). The status bar
     /// shows the link either way, e.g. for SSH sessions without a browser.
     fn open_in_portal(&mut self) {
@@ -633,8 +729,13 @@ impl TuiApp {
         };
         let url = detail::portal_url(&id, self.state().portal_tenant().as_deref());
         let notice = match self.desktop.open(&url) {
-            Ok(()) => format!("Opened {url}"),
-            Err(e) => format!("Could not open a browser ({e}): {url}"),
+            Ok(()) => "Opened in the Azure Portal".to_string(),
+            // The link is too long for the status bar: put it on the
+            // clipboard instead, so it can be pasted into a browser.
+            Err(e) => match self.desktop.copy(&url) {
+                Ok(()) => format!("No browser could be started; Portal link copied ({e})"),
+                Err(_) => format!("No browser could be started ({e}): {url}"),
+            },
         };
         self.state_mut().notice = Some(notice);
     }
@@ -810,6 +911,10 @@ impl TuiApp {
             }
             KeyCode::Char('o') => {
                 self.open_in_portal();
+                return Ok(true);
+            }
+            KeyCode::Char('c') => {
+                self.copy_view();
                 return Ok(true);
             }
             _ => {}
