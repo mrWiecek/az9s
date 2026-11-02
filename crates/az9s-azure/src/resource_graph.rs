@@ -503,3 +503,22 @@ mod tests {
         assert!(rg.tags.is_empty());
     }
 }
+
+/// Real TLS handshake using the same HTTP stack as the Resource Graph client
+/// (rustls with bundled and OS root certificates, no OpenSSL). Any HTTP
+/// status counts as success; only a connection or TLS failure fails.
+/// Needs network; set `AZ9S_TLS_TEST_URL` to test another host.
+#[cfg(test)]
+mod tls_tests {
+    #[tokio::test]
+    #[ignore] // Requires network access
+    async fn tls_handshake_works_without_openssl() {
+        let url = std::env::var("AZ9S_TLS_TEST_URL")
+            .unwrap_or_else(|_| "https://management.azure.com/".to_string());
+        let response = reqwest::Client::new().get(&url).send().await;
+        match response {
+            Ok(r) => println!("{url}: HTTP {}", r.status()),
+            Err(e) => panic!("TLS/connection to {url} failed: {e:?}"),
+        }
+    }
+}

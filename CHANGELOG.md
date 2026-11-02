@@ -75,6 +75,11 @@ No version has been released yet. The first public release is planned as **v0.1.
   - Trade-off: Resource Graph can lag behind ARM by a short time after changes.
 
 ### Fixed
+- **Installing no longer requires system OpenSSL or `pkg-config`** (#4). TLS now
+  uses rustls, with the bundled Mozilla roots plus the OS certificate store, so
+  corporate TLS-inspecting proxies keep working. The unused `azure_mgmt_compute`
+  and `azure_mgmt_network` dependencies were removed. CI fails if OpenSSL
+  reappears in the dependency tree.
 - Resource types from Resource Graph come in lowercase. Short type labels and
   colours are now matched case-insensitively.
 - Opening a resource group showed every resource in its subscription. It now
