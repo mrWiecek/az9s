@@ -30,8 +30,12 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
   loc=northeurope` or `:rg tag=owner`. `type=` there is an error that
   points to `:res` and `:type`. Active filters show in every list's title.
 - **Type aliases in filters.** `type=vnet`, `type=vm`, `type=key-vault`
-  work, and the `/` filter in resource lists and in `:type` matches aliases
-  too (typing `vnet` in `:type` finds `microsoft.network/virtualnetworks`).
+  (or `keyvault`) work, as does a provider without `Microsoft.`
+  (`type=network`). The `/` filter in resource lists and in `:type` matches
+  aliases too (typing `vnet` in `:type` finds
+  `microsoft.network/virtualnetworks`). Before, `type=` needed the type's
+  full name or its last part.
+- **`tag=environment=prod`** works as well as `tag=environment:prod`.
 - **A rewritten, scrollable help (`?`)**: commands, the scope rules,
   every filter with its matching rules, worked examples, and all keys.
   `j`/`k`, `g`/`G` and `Ctrl+D`/`Ctrl+U` scroll it.

@@ -246,3 +246,16 @@ async fn aliases_work_in_type_filters_and_the_type_summary() {
         [("microsoft.keyvault/vaults".to_string(), 1)]
     );
 }
+
+#[tokio::test]
+async fn tag_key_equals_value_and_keyvault_alias_from_the_command_line() {
+    let mut app = setup();
+    let mut loads = app.take_load_receiver().unwrap();
+    command(&mut app, "res all tag=env=prod").await;
+    app.apply_load(loads.recv().await.unwrap());
+    assert_eq!(visible_names(&app), ["vm-1", "disk-1", "kv-1"]);
+
+    command(&mut app, "res all type=keyvault tag=env=prod").await;
+    app.apply_load(loads.recv().await.unwrap());
+    assert_eq!(visible_names(&app), ["kv-1"]);
+}

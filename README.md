@@ -79,7 +79,7 @@ az9s --timings                             # launch, print a timing summary on e
 | `:mg` | Management group tree (the start view) |
 | `:sub` | Subscriptions |
 | `:rg [all\|<sub>] [loc=… tag=…]` | Resource groups. Without a scope: where you are (the highlighted or current subscription or management group; all subscriptions if none) |
-| `:res [all\|<sub>] [filters]` | Resources, scoped like `:rg`, e.g. `:res all type=vm loc=westeurope tag=env:prod` (`type=` takes aliases like `vm`, `vnet`, the type's last part, the full type, or a provider). `?` in the app has more examples |
+| `:res [all\|<sub>] [filters]` | Resources, scoped like `:rg`, e.g. `:res all type=vm loc=westeurope tag=env=prod` (`type=` takes aliases like `vm`, `vnet`, `keyvault`, the type's last part, the full type, or a provider). `?` in the app has more examples |
 | `:type [all\|<sub>] [filters]` | Resource counts per type; `Enter` lists that type |
 
 ## Development
