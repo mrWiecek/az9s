@@ -24,12 +24,12 @@ futures = "0.3"
 ratatui = "0.26"
 crossterm = "0.27"
 
-# Azure SDK
-azure_core = "0.19"
-azure_identity = "0.19"
-azure_mgmt_resources = "0.19"
-azure_mgmt_compute = "0.19"
-azure_mgmt_network = "0.19"
+# Azure SDK. Default features are off so nothing links the system OpenSSL:
+# TLS comes from rustls, which builds anywhere (WSL, minimal containers)
+# without libssl-dev or pkg-config.
+azure_core = { version = "0.19", default-features = false, features = ["enable_reqwest_rustls"] }
+azure_identity = { version = "0.19", default-features = false, features = ["enable_reqwest_rustls", "development", "old_azure_cli"] }
+azure_mgmt_resources = { version = "0.19", default-features = false, features = ["enable_reqwest_rustls", "default_tag"] }
 
 # Data & serialization
 serde = { version = "1.0", features = ["derive"] }
