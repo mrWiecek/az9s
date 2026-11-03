@@ -176,12 +176,25 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
                 }
                 DetailTab::Policy => {
                     let rows = state.detail_policy_states()?;
-                    let lines = rows
-                        .iter()
-                        .map(|(name, s)| tsv(&[&s.state, name, &s.definition, &s.assignment_id]));
+                    let lines = rows.iter().map(|(name, s)| {
+                        let scope =
+                            state.scope_label(crate::policy::assignment_scope(&s.assignment_id));
+                        tsv(&[
+                            &s.state,
+                            s.policy_label(),
+                            &s.source_label(),
+                            name,
+                            &scope,
+                            &s.definition_id,
+                            &s.assignment_id,
+                        ])
+                    });
                     (
                         count(rows.len(), "policy state"),
-                        with_header("state\tassignment\tpolicy\tassignment id", lines),
+                        with_header(
+                            "state\tpolicy\tvia\tassignment\tassigned at\tdefinition id\tassignment id",
+                            lines,
+                        ),
                     )
                 }
                 DetailTab::Json => {

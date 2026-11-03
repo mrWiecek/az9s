@@ -72,6 +72,8 @@ az9s --timings                             # launch, print a timing summary on e
 | `c` | Copy the current view: all filtered rows of a list (tab-separated, pastes into a spreadsheet), or the detail view's tab (Overview, Tags, Policy, JSON) |
 | `o` | Open the selected item in the Azure Portal |
 | `Tab`, `1`-`4` | Detail view: Overview / Tags / Policy / JSON |
+| `Enter` (Tags tab) | Every resource in the tenant with the selected tag |
+| `Enter` (Policy tab) | The selected policy's definition (initiative or direct, and where it is assigned, show in the tab) |
 | `?` | Help |
 | `q` / `Ctrl+C` | Quit |
 

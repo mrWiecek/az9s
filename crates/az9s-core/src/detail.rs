@@ -100,6 +100,12 @@ pub fn overview(doc: Option<&Value>, resource: &Resource) -> Vec<Section> {
 /// Extra sections for resource types where the generic property list hides
 /// what matters (it shows arrays only as "[n items]").
 fn type_sections(doc: &Value, resource_type: &str) -> Vec<Section> {
+    let kind = resource_type.to_ascii_lowercase();
+    if kind == "microsoft.authorization/policydefinitions"
+        || kind == "microsoft.authorization/policysetdefinitions"
+    {
+        return vec![policy_definition_section(doc)];
+    }
     if resource_type.eq_ignore_ascii_case("microsoft.network/virtualnetworks") {
         let subnets = doc
             .pointer("/properties/subnets")
@@ -115,6 +121,59 @@ fn type_sections(doc: &Value, resource_type: &str) -> Vec<Section> {
         }];
     }
     vec![]
+}
+
+/// A policy definition or initiative at a glance: what it is and does.
+fn policy_definition_section(doc: &Value) -> Section {
+    let get = |path: &str| doc.pointer(path).and_then(scalar);
+    let mut rows = Vec::new();
+    for (label, path) in [
+        ("Display name", "/properties/displayName"),
+        ("Type", "/properties/policyType"),
+        ("Category", "/properties/metadata/category"),
+        ("Version", "/properties/metadata/version"),
+        ("Mode", "/properties/mode"),
+    ] {
+        if let Some(value) = get(path) {
+            rows.push((label.to_string(), value));
+        }
+    }
+    if let Some(effect) = get("/properties/policyRule/then/effect") {
+        // Usually a parameter: show its default and allowed values.
+        let param = effect
+            .strip_prefix("[parameters('")
+            .and_then(|p| p.strip_suffix("')]"))
+            .map(str::to_string);
+        let effect = match param {
+            Some(p) => {
+                let default = get(&format!("/properties/parameters/{p}/defaultValue"));
+                let allowed = doc
+                    .pointer(&format!("/properties/parameters/{p}/allowedValues"))
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(scalar).collect::<Vec<_>>().join(", "));
+                let mut text = default.unwrap_or_else(|| format!("parameter {p}"));
+                if let Some(allowed) = allowed.filter(|a| !a.is_empty()) {
+                    text.push_str(&format!(" (allowed: {allowed})"));
+                }
+                text
+            }
+            None => effect,
+        };
+        rows.push(("Effect".into(), effect));
+    }
+    if let Some(policies) = doc
+        .pointer("/properties/policyDefinitions")
+        .and_then(Value::as_array)
+    {
+        rows.push(("Policies".into(), policies.len().to_string()));
+    }
+    if let Some(description) = get("/properties/description") {
+        rows.push(("Description".into(), description));
+    }
+    Section {
+        title: "Policy definition",
+        rows,
+    }
 }
 
 /// One subnet: name → "prefix · delegated to … · NSG … · route table …".
@@ -431,6 +490,35 @@ mod tests {
         assert_eq!(
             portal_url("/subscriptions/s1", None),
             "https://portal.azure.com/#/resource/subscriptions/s1"
+        );
+    }
+
+    #[test]
+    fn policy_definitions_show_effect_and_category() {
+        let doc = serde_json::json!({
+            "name": "abc", "type": "Microsoft.Authorization/policyDefinitions",
+            "properties": {
+                "displayName": "Key vaults should have purge protection",
+                "policyType": "BuiltIn", "mode": "Indexed",
+                "metadata": {"category": "Key Vault", "version": "2.1.0"},
+                "parameters": {"effect": {"defaultValue": "Audit",
+                    "allowedValues": ["Audit", "Deny", "Disabled"]}},
+                "policyRule": {"then": {"effect": "[parameters('effect')]"}}
+            }
+        });
+        let section = super::policy_definition_section(&doc);
+        let get = |label: &str| {
+            section
+                .rows
+                .iter()
+                .find(|(l, _)| l == label)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("Type"), Some("BuiltIn"));
+        assert_eq!(get("Category"), Some("Key Vault"));
+        assert_eq!(
+            get("Effect"),
+            Some("Audit (allowed: Audit, Deny, Disabled)")
         );
     }
 }

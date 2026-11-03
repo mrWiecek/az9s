@@ -566,6 +566,24 @@ pub fn policy_compliance_query() -> String {
         .to_string()
 }
 
+/// KQL looking up the display names of policy definitions and initiatives
+/// by ID (`id` is returned lowercase).
+pub fn policy_definition_names_query(ids: &[String]) -> String {
+    let list = ids
+        .iter()
+        .map(|id| kql_string(&id.to_ascii_lowercase()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "policyresources \
+         | where type in~ ('microsoft.authorization/policydefinitions', \
+             'microsoft.authorization/policysetdefinitions') \
+         | extend id = tolower(id) \
+         | where id in ({list}) \
+         | project id, displayName = tostring(properties.displayName)"
+    )
+}
+
 /// KQL counting, per subscription (lowercase ID), the resources that policy
 /// evaluated (`resources`) and those non-compliant with at least one policy
 /// of any assignment (`nonCompliant`). Each resource counts once, however
@@ -594,6 +612,8 @@ fn policy_states_query(filter: &str) -> String {
              subscriptionId = tostring(properties.subscriptionId), \
              location = tostring(properties.resourceLocation), \
              assignmentId = tostring(properties.policyAssignmentId), \
+             definitionId = tostring(properties.policyDefinitionId), \
+             setDefinitionId = tostring(properties.policySetDefinitionId), \
              definition = coalesce(tostring(properties.policyDefinitionReferenceId), \
                  tostring(properties.policyDefinitionName)), \
              state = tostring(properties.complianceState), \
@@ -686,6 +706,19 @@ mod tests {
     use super::*;
     use crate::testing::{error, ok, serve, serve_counting, serve_sequence, Reply, StaticToken};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn definition_names_are_looked_up_by_lowercase_id() {
+        let q = policy_definition_names_query(&[
+            "/providers/Microsoft.Authorization/policyDefinitions/A".into(),
+            "/x/policySetDefinitions/it's".into(),
+        ]);
+        assert!(
+            q.contains(r"in ('/providers/microsoft.authorization/policydefinitions/a', '/x/policysetdefinitions/it\'s')"),
+            "{q}"
+        );
+        assert!(q.contains("policysetdefinitions'"), "{q}");
+    }
 
     #[test]
     fn compliance_summary_counts_each_resource_once_per_subscription() {

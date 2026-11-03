@@ -1109,6 +1109,13 @@ fn draw_resource_detail(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<(
             }
         }
     }
+    // The cursor of a tab with rows (Tags, Policy): Enter opens that row.
+    if let Some(n) = state.detail_rows().filter(|n| *n > 0) {
+        let line = detail_row_line(tab, state.detail_cursor.min(n - 1));
+        if let Some(line) = lines.get_mut(line) {
+            *line = std::mem::take(line).patch_style(theme().selection());
+        }
+    }
     let loading_hint = if doc.is_none() && state.loading {
         " · loading details…"
     } else {
@@ -1214,28 +1221,68 @@ fn policy_state_lines(state: &AppState) -> Vec<Line<'static>> {
     if rows.is_empty() {
         return muted("No policy evaluates this resource (or Azure has not evaluated it yet).");
     }
-    let width = rows
-        .iter()
-        .map(|(name, _)| name.chars().count())
-        .max()
-        .unwrap_or(0)
-        .min(50);
-    rows.into_iter()
-        .map(|(name, s)| {
-            let style = if s.is_non_compliant() {
-                Style::default().fg(t.error).add_modifier(Modifier::BOLD)
-            } else if s.state.eq_ignore_ascii_case("Compliant") {
-                Style::default().fg(t.ok)
-            } else {
-                Style::default().fg(t.muted)
-            };
-            Line::from(vec![
-                Span::styled(format!("{:<13} ", s.state), style),
-                Span::styled(cell(&name, width + 2), Style::default().fg(t.highlight)),
-                Span::styled(s.definition, Style::default().fg(t.text)),
-            ])
-        })
-        .collect()
+    // Column widths: as wide as the longest value, within limits.
+    let widest = |f: &dyn Fn(&(String, az9s_core::policy::PolicyState)) -> usize,
+                  header: &str,
+                  max: usize| {
+        rows.iter()
+            .map(f)
+            .max()
+            .unwrap_or(0)
+            .max(header.len())
+            .min(max)
+            + 2
+    };
+    let policy_w = widest(&|(_, s)| s.policy_label().chars().count(), "Policy", 50);
+    let via_w = widest(&|(_, s)| s.source_label().chars().count(), "Via", 40);
+    let assignment_w = widest(&|(name, _)| name.chars().count(), "Assignment", 36);
+    let mut lines = vec![Line::from(Span::styled(
+        format!(
+            "{:<14}{}{}{}Assigned at",
+            "State",
+            cell("Policy", policy_w),
+            cell("Via", via_w),
+            cell("Assignment", assignment_w)
+        ),
+        Style::default().fg(t.muted).add_modifier(Modifier::BOLD),
+    ))];
+    lines.extend(rows.into_iter().map(|(name, s)| {
+        let style = if s.is_non_compliant() {
+            Style::default().fg(t.error).add_modifier(Modifier::BOLD)
+        } else if s.state.eq_ignore_ascii_case("Compliant") {
+            Style::default().fg(t.ok)
+        } else {
+            Style::default().fg(t.muted)
+        };
+        let scope = state.scope_label(az9s_core::policy::assignment_scope(&s.assignment_id));
+        Line::from(vec![
+            Span::styled(format!("{:<13} ", s.state), style),
+            Span::styled(
+                cell(s.policy_label(), policy_w),
+                Style::default().fg(t.text),
+            ),
+            Span::styled(
+                cell(&s.source_label(), via_w),
+                Style::default().fg(if s.via_initiative() {
+                    t.accent
+                } else {
+                    t.muted
+                }),
+            ),
+            Span::styled(cell(&name, assignment_w), Style::default().fg(t.highlight)),
+            Span::styled(scope, Style::default().fg(t.muted)),
+        ])
+    }));
+    lines
+}
+
+/// The line of the detail view's content that shows row `row` of a tab with
+/// rows (the Policy tab starts with a header line).
+pub fn detail_row_line(tab: DetailTab, row: usize) -> usize {
+    match tab {
+        DetailTab::Policy => row + 1,
+        _ => row,
+    }
 }
 
 /// The Overview tab: a heading per section, then aligned label/value rows.
@@ -1606,7 +1653,8 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
             ],
             ViewMode::ResourceDetail => vec![
                 ("Tab/1-4", "Tabs"),
-                ("↑↓/jk", "Scroll"),
+                ("↑↓/jk", "Scroll/Select"),
+                ("Enter", "Open tag/policy"),
                 ("/ n N", "Search"),
                 ("c", "Copy"),
                 ("y", "Copy ID"),

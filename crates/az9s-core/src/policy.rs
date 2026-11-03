@@ -169,7 +169,7 @@ impl ComplianceSummary {
 }
 
 /// One policy evaluation: a resource against one policy of an assignment.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyState {
     pub resource_id: String,
     pub resource_type: String,
@@ -180,6 +180,18 @@ pub struct PolicyState {
     /// The policy within the assignment (its reference ID in an initiative,
     /// or the definition's name).
     pub definition: String,
+    /// The policy definition's ARM ID
+    #[serde(default)]
+    pub definition_id: String,
+    /// The initiative's ARM ID, when the policy is part of one
+    #[serde(default)]
+    pub set_definition_id: String,
+    /// The policy definition's display name, when looked up
+    #[serde(default)]
+    pub definition_name: String,
+    /// The initiative's display name, when looked up
+    #[serde(default)]
+    pub initiative_name: String,
     /// "Compliant", "NonCompliant", "Exempt", "Unknown", …
     pub state: String,
     pub timestamp: String,
@@ -205,9 +217,41 @@ impl PolicyState {
             location: text("location"),
             assignment_id: text("assignmentId"),
             definition: text("definition"),
+            definition_id: text("definitionId"),
+            set_definition_id: text("setDefinitionId"),
+            definition_name: String::new(),
+            initiative_name: String::new(),
             state: text("state"),
             timestamp: text("timestamp"),
         })
+    }
+
+    /// The policy came with an initiative rather than assigned on its own.
+    pub fn via_initiative(&self) -> bool {
+        !self.set_definition_id.is_empty()
+    }
+
+    /// The policy's name to show: its display name when known, else its
+    /// reference ID or definition name.
+    pub fn policy_label(&self) -> &str {
+        [&self.definition_name, &self.definition]
+            .into_iter()
+            .find(|s| !s.is_empty())
+            .map(String::as_str)
+            .unwrap_or_else(|| last_segment(&self.definition_id))
+    }
+
+    /// "initiative <name>" or "direct".
+    pub fn source_label(&self) -> String {
+        if !self.via_initiative() {
+            return "direct".into();
+        }
+        let name = if self.initiative_name.is_empty() {
+            last_segment(&self.set_definition_id)
+        } else {
+            &self.initiative_name
+        };
+        format!("initiative {name}")
     }
 
     pub fn is_non_compliant(&self) -> bool {
@@ -220,6 +264,21 @@ impl PolicyState {
             .rsplit('/')
             .next()
             .unwrap_or(&self.resource_id)
+    }
+}
+
+fn last_segment(id: &str) -> &str {
+    id.rsplit('/').next().unwrap_or(id)
+}
+
+/// The scope (ARM ID) an assignment is made at: its ID up to
+/// `/providers/Microsoft.Authorization/policyAssignments/`.
+pub fn assignment_scope(assignment_id: &str) -> &str {
+    const MARKER: &str = "/providers/microsoft.authorization/policyassignments/";
+    match assignment_id.to_ascii_lowercase().find(MARKER) {
+        Some(0) => "/",
+        Some(i) => &assignment_id[..i],
+        None => assignment_id,
     }
 }
 
@@ -493,6 +552,39 @@ mod tests {
     }
 
     #[test]
+    fn assignment_scope_and_labels() {
+        assert_eq!(
+            assignment_scope(
+                "/subscriptions/S/providers/Microsoft.Authorization/policyAssignments/x"
+            ),
+            "/subscriptions/S"
+        );
+        assert_eq!(
+            assignment_scope("/providers/Microsoft.Authorization/policyAssignments/x"),
+            "/"
+        );
+        let mut s = PolicyState {
+            definition: "ref-1".into(),
+            definition_id: "/p/policyDefinitions/guid".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            (s.policy_label(), s.source_label().as_str()),
+            ("ref-1", "direct")
+        );
+        s.definition.clear();
+        assert_eq!(
+            s.policy_label(),
+            "guid",
+            "the ID's last part as a last resort"
+        );
+        s.set_definition_id = "/p/policySetDefinitions/mcsb".into();
+        assert_eq!(s.source_label(), "initiative mcsb");
+        s.initiative_name = "Security Benchmark".into();
+        assert_eq!(s.source_label(), "initiative Security Benchmark");
+    }
+
+    #[test]
     fn compliance_summary_sums_subscriptions() {
         let rows = vec![
             serde_json::json!({"subscription": "S1", "resources": 100, "nonCompliant": 10}),
@@ -531,7 +623,7 @@ mod tests {
             assignment_id: "/a".into(),
             definition: def.into(),
             state: st.into(),
-            timestamp: String::new(),
+            ..Default::default()
         };
         let rows = group_by_resource(&[
             state("/x/storageAccounts/zeta", "https-only", "NonCompliant"),

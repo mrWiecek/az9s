@@ -537,6 +537,8 @@ impl Fetcher for GraphFetcher {
             // look for them across the tenant.
             let policy = resource_graph::is_policy_id(resource_id) || subscription_id.is_empty();
             let subscription_id = subscription_id.clone();
+            let arm = self.management_groups.clone();
+            let id = resource_id.clone();
             return async move {
                 let _t = timing::timer("azure.resource_detail");
                 let scope = if policy {
@@ -561,6 +563,16 @@ impl Fetcher for GraphFetcher {
                                           behind ARM for a few minutes)"
                         .to_string()),
                     (Err(e), _) => Err(e.to_string()),
+                };
+                // Built-in policy definitions may be missing from Resource
+                // Graph; ARM serves every definition by ID.
+                let data = match (data, arm) {
+                    (Err(e), Some(arm)) if is_definition_id(&id) => arm
+                        .policy_object(&id)
+                        .await
+                        .map(LoadedData::ResourceDetail)
+                        .map_err(|arm_error| format!("{e}; ARM: {arm_error}")),
+                    (data, _) => data,
                 };
                 FetchOutcome {
                     data,
@@ -674,6 +686,7 @@ impl Fetcher for GraphFetcher {
             } => {
                 let graph = self.graph.clone();
                 let cell = self.home_tenant.clone();
+                let arm = self.management_groups.clone();
                 let query = resource_graph::resource_policy_states_query(resource_id);
                 let resource_id = resource_id.clone();
                 let subscription_id = subscription_id.clone();
@@ -691,10 +704,12 @@ impl Fetcher for GraphFetcher {
                         let rows = query_all(&graph, &query, &scope)
                             .await
                             .map_err(|e| e.to_string())?;
-                        Ok::<_, String>(LoadedData::ResourcePolicy(
-                            resource_id,
-                            rows.iter().filter_map(PolicyState::from_row).collect(),
-                        ))
+                        let mut states: Vec<PolicyState> =
+                            rows.iter().filter_map(PolicyState::from_row).collect();
+                        // Names are a nicety: the states show without them.
+                        let tenant = Self::resolve_tenant(&graph, &cell).await;
+                        name_definitions(&graph, tenant, arm, &mut states).await;
+                        Ok::<_, String>(LoadedData::ResourcePolicy(resource_id, states))
                     }
                     .await;
                     FetchOutcome {
@@ -868,6 +883,87 @@ fn empty(kind: LoadKind) -> LoadedData {
         }
         LoadKind::PolicyStates => LoadedData::PolicyStates(vec![]),
         LoadKind::ResourcePolicy => LoadedData::ResourcePolicy(String::new(), vec![]),
+    }
+}
+
+/// Most definitions whose names are fetched one by one from ARM when
+/// Resource Graph doesn't know them.
+const MAX_ARM_NAME_LOOKUPS: usize = 60;
+
+fn is_definition_id(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    id.contains("/providers/microsoft.authorization/policydefinitions/")
+        || id.contains("/providers/microsoft.authorization/policysetdefinitions/")
+}
+
+/// Fill in the display names of the states' policy definitions and
+/// initiatives: from Resource Graph across the tenant, then from ARM for
+/// those it doesn't list (built-ins, possibly). Failures leave names empty.
+async fn name_definitions(
+    graph: &ResourceGraphClient,
+    tenant: Option<String>,
+    arm: Option<Arc<ManagementGroupClient>>,
+    states: &mut [PolicyState],
+) {
+    // Lowercase ID → the ID as Azure reported it.
+    let originals: HashMap<String, String> = states
+        .iter()
+        .flat_map(|s| [&s.definition_id, &s.set_definition_id])
+        .filter(|id| !id.is_empty())
+        .map(|id| (id.to_ascii_lowercase(), id.clone()))
+        .collect();
+    let mut ids: Vec<String> = originals.keys().cloned().collect();
+    ids.sort();
+    if ids.is_empty() {
+        return;
+    }
+    let mut names: HashMap<String, String> = HashMap::new();
+    if let Some(tenant) = tenant {
+        let query = resource_graph::policy_definition_names_query(&ids);
+        match query_all(graph, &query, &GraphScope::ManagementGroup(tenant)).await {
+            Ok(rows) => names.extend(rows.iter().filter_map(|row| {
+                let id = row.get("id")?.as_str()?.to_ascii_lowercase();
+                let name = row.get("displayName")?.as_str()?.to_string();
+                (!name.is_empty()).then_some((id, name))
+            })),
+            Err(e) => warn!("Looking up policy definition names failed: {}", e),
+        }
+    }
+    if let Some(arm) = arm {
+        let missing: Vec<String> = ids
+            .iter()
+            .filter(|id| !names.contains_key(*id))
+            .take(MAX_ARM_NAME_LOOKUPS)
+            .cloned()
+            .collect();
+        let originals = &originals;
+        let found: Vec<(String, String)> = stream::iter(missing)
+            .map(|id| {
+                let arm = arm.clone();
+                async move {
+                    let doc = arm.policy_object(&originals[&id]).await.ok()?;
+                    let name = doc
+                        .pointer("/properties/displayName")?
+                        .as_str()?
+                        .to_string();
+                    Some((id, name))
+                }
+            })
+            .buffer_unordered(8)
+            .filter_map(|found| async move { found })
+            .collect()
+            .await;
+        names.extend(found);
+    }
+    for s in states {
+        let name = |id: &str| {
+            names
+                .get(&id.to_ascii_lowercase())
+                .cloned()
+                .unwrap_or_default()
+        };
+        s.definition_name = name(&s.definition_id);
+        s.initiative_name = name(&s.set_definition_id);
     }
 }
 

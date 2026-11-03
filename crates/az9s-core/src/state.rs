@@ -34,6 +34,10 @@ pub struct AppState {
     /// First visible line of the detail view's content
     pub detail_scroll: usize,
 
+    /// The selected row of the detail view's Tags or Policy tab (`Enter`
+    /// opens it)
+    pub detail_cursor: usize,
+
     /// Committed search in the detail view (`/pattern` + Enter); `n`/`N` use it
     pub detail_search: String,
 
@@ -692,6 +696,41 @@ impl AppState {
         Some(rows)
     }
 
+    /// Whether the detail view's current tab has selectable rows (Tags,
+    /// Policy), and how many.
+    pub fn detail_rows(&self) -> Option<usize> {
+        let resource = self.selected_resource_detail.as_ref()?;
+        match self.detail_tab {
+            DetailTab::Tags => {
+                Some(crate::detail::tags(self.resource_document.as_ref(), resource).len())
+            }
+            DetailTab::Policy => Some(self.detail_policy_states().map_or(0, |r| r.len())),
+            DetailTab::Overview | DetailTab::Json => None,
+        }
+    }
+
+    /// The tag under the cursor in the detail view's Tags tab.
+    pub fn selected_detail_tag(&self) -> Option<(String, String)> {
+        if self.detail_tab != DetailTab::Tags {
+            return None;
+        }
+        let resource = self.selected_resource_detail.as_ref()?;
+        crate::detail::tags(self.resource_document.as_ref(), resource)
+            .into_iter()
+            .nth(self.detail_cursor)
+    }
+
+    /// The policy state under the cursor in the detail view's Policy tab.
+    pub fn selected_detail_policy(&self) -> Option<crate::policy::PolicyState> {
+        if self.detail_tab != DetailTab::Policy {
+            return None;
+        }
+        self.detail_policy_states()?
+            .into_iter()
+            .nth(self.detail_cursor)
+            .map(|(_, s)| s)
+    }
+
     /// An assignment's display name when loaded, else the last part of its ID.
     pub fn assignment_name(&self, id: &str) -> String {
         self.policy_assignments
@@ -727,7 +766,15 @@ impl AppState {
                 .iter()
                 .find(|s| s.id.eq_ignore_ascii_case(id))
             {
-                return s.name.clone();
+                // A resource group: "subscription / group" (original case).
+                let rg_start = "/subscriptions/".len() + id.len() + "/resourcegroups/".len();
+                return match arm_id
+                    .get(rg_start..)
+                    .filter(|_| sub[id.len()..].starts_with("/resourcegroups/"))
+                {
+                    Some(rg) => format!("{} / {}", s.name, rg.split('/').next().unwrap_or(rg)),
+                    None => s.name.clone(),
+                };
             }
         }
         arm_id.to_string()

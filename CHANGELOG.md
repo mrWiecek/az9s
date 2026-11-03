@@ -22,6 +22,19 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
   management group) and how many assignments have non-compliant resources.
   Cached like the rest of the view, so it shows at once and refreshes in
   the background.
+- **Open a tag from a resource.** In the detail view's Tags tab, `j`/`k`
+  select a tag and `Enter` lists every resource in the tenant with that
+  tag (`tag=key=value` across all subscriptions). `Esc` goes back to the
+  resource, then to the list you came from, as it was.
+- **Policy tab: where each policy comes from, and its definition.** Each
+  row now shows the policy's name, whether it came with an initiative
+  (and which) or was assigned directly, the assignment, and where it is
+  assigned (management group, subscription or resource group). `Enter`
+  opens the policy definition: type, category, version, mode, effect (with
+  its allowed values), description, and the full JSON. Built-in
+  definitions that Resource Graph doesn't list are read from ARM.
+- `c` in the Policy tab copies the new columns, with definition and
+  assignment IDs.
 
 ## [0.13.0] - 2026-11-03
 

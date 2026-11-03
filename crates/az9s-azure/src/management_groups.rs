@@ -26,6 +26,7 @@ pub struct TenantInfo {
 }
 
 const TENANTS_API_VERSION: &str = "2022-12-01";
+const POLICY_API_VERSION: &str = "2023-04-01";
 
 /// What a node in the hierarchy is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +133,23 @@ impl ManagementGroupClient {
             }
         }
         Ok(tenants)
+    }
+
+    /// A policy definition or initiative (set definition) by its ARM ID,
+    /// built-in or custom: `GET {endpoint}{id}`. Resource Graph may not
+    /// list built-in definitions, which ARM always serves.
+    pub async fn policy_object(&self, id: &str) -> Result<Value> {
+        let _t = timing::timer("azure.policy_definition");
+        let lower = id.to_ascii_lowercase();
+        if !lower.contains("/providers/microsoft.authorization/policydefinitions/")
+            && !lower.contains("/providers/microsoft.authorization/policysetdefinitions/")
+        {
+            return Err(AzureError::InvalidConfig(format!(
+                "not a policy definition ID: {id}"
+            )));
+        }
+        let url = format!("{}{}?api-version={}", self.endpoint, id, POLICY_API_VERSION);
+        self.get(&url).await
     }
 
     async fn get(&self, url: &str) -> Result<Value> {
@@ -259,6 +277,26 @@ mod tests {
 
     fn client(endpoint: &str) -> ManagementGroupClient {
         ManagementGroupClient::with_endpoint(endpoint, Arc::new(StaticToken("t".into())))
+    }
+
+    #[tokio::test]
+    async fn policy_definitions_are_read_from_arm_by_id() {
+        let id = "/providers/Microsoft.Authorization/policyDefinitions/abc";
+        let (endpoint, _) = serve_paths(move |path, _| {
+            assert!(
+                path.starts_with(&format!("{id}?api-version=2023-04-01")),
+                "{path}"
+            );
+            ok(json!({"id": id, "properties": {"displayName": "Require a tag"}}))
+        })
+        .await;
+        let client = client(&endpoint);
+        let doc = client.policy_object(id).await.unwrap();
+        assert_eq!(doc["properties"]["displayName"], "Require a tag");
+        assert!(
+            client.policy_object("/subscriptions/s").await.is_err(),
+            "only policy definitions and initiatives"
+        );
     }
 
     #[tokio::test]

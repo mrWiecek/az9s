@@ -33,9 +33,11 @@ fn state(resource_id: &str, assignment: &str, definition: &str, compliance: &str
         assignment_id: assignment.into(),
         definition: definition.into(),
         state: compliance.into(),
-        timestamp: String::new(),
+        ..Default::default()
     }
 }
+
+const PURGE_DEF: &str = "/providers/Microsoft.Authorization/policyDefinitions/purge";
 
 fn assignment(name: &str, scope: &str, initiative: bool) -> PolicyAssignment {
     PolicyAssignment {
@@ -96,8 +98,21 @@ impl Fetcher for Azure {
                 Ok(LoadedData::ResourcePolicy(
                     resource_id.clone(),
                     vec![
-                        state(&resource_id, &tags, "require-tag", "Compliant"),
-                        state(&resource_id, &baseline, "kv-purge-protection", "NonCompliant"),
+                        PolicyState {
+                            definition_id:
+                                "/providers/Microsoft.Authorization/policyDefinitions/tag".into(),
+                            definition_name: "Require a tag on resources".into(),
+                            ..state(&resource_id, &tags, "require-tag", "Compliant")
+                        },
+                        PolicyState {
+                            definition_id: PURGE_DEF.into(),
+                            definition_name: "Key vaults should have purge protection".into(),
+                            set_definition_id:
+                                "/providers/Microsoft.Authorization/policySetDefinitions/mcsb"
+                                    .into(),
+                            initiative_name: "Security Benchmark".into(),
+                            ..state(&resource_id, &baseline, "kv-purge-protection", "NonCompliant")
+                        },
                     ],
                 ))
             }
@@ -296,11 +311,42 @@ async fn drill_down_from_assignment_to_non_compliant_resource_and_back() {
         "non-compliant first"
     );
     let text = screen(&mut app);
-    assert!(
-        text.contains("NonCompliant  Require security-baseline"),
-        "{text}"
+    for expected in [
+        "State         Policy",
+        "NonCompliant  Key vaults should have purge protection  initiative Security Benchmark  \
+         Require security-baseline  Platform",
+        "Compliant     Require a tag on resources               direct                         \
+         Require tags               Tenant Root Group",
+    ] {
+        assert!(text.contains(expected), "{expected}\n{text}");
+    }
+
+    // Enter on a policy: its definition (from the tenant), Esc back to the
+    // resource's Policy tab on the same row.
+    press(&mut app, KeyCode::Enter).await;
+    let definition = app.state().selected_resource_detail.clone().unwrap();
+    assert_eq!(definition.id, PURGE_DEF);
+    assert_eq!(definition.name, "Key vaults should have purge protection");
+    assert_eq!(
+        definition.subscription_id, "",
+        "looked up across the tenant"
     );
-    assert!(text.contains("Compliant     Require tags"), "{text}");
+    app.apply_load(loads.recv().await.unwrap()); // its document (not in this fake)
+    press(&mut app, KeyCode::Esc).await;
+    assert_eq!(
+        app.state().selected_resource_detail.as_ref().unwrap().id,
+        KV
+    );
+    assert_eq!(app.state().detail_tab, DetailTab::Policy);
+    assert_eq!(
+        app.state().selected_detail_policy().unwrap().definition_id,
+        PURGE_DEF
+    );
+    app.apply_load(loads.recv().await.unwrap()); // the resource's document again
+    press(&mut app, KeyCode::Char('j')).await;
+    assert_eq!(app.state().detail_cursor, 1, "j moves the row cursor");
+    press(&mut app, KeyCode::Char('j')).await;
+    assert_eq!(app.state().detail_cursor, 1, "stops at the last row");
 
     // Switching tabs back and forth does not load again.
     let before = azure.0.lock().unwrap().len();
