@@ -12,6 +12,7 @@ az9s-core = { path = "../az9s-core" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 
 # TUI

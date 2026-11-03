@@ -60,6 +60,27 @@ impl Fetcher for FakeAzure {
             LoadRequest::ResourceDetail { .. } => {
                 self.document.clone().map(LoadedData::ResourceDetail)
             }
+            // A resource group: the VM. Everything: two more resources.
+            LoadRequest::Resources { resource_group, .. } => {
+                let tagged = |name: &str, env: &str| Resource {
+                    id: format!("/subscriptions/sub-1/resourceGroups/rg-web/providers/x/{name}"),
+                    name: name.into(),
+                    resource_group: "rg-web".into(),
+                    tags: HashMap::from([("env".to_string(), env.to_string())]),
+                    ..vm()
+                };
+                Ok(LoadedData::Resources(match resource_group {
+                    Some(_) => vec![vm()],
+                    None => vec![
+                        Resource {
+                            tags: HashMap::from([("env".to_string(), "prod".to_string())]),
+                            ..vm()
+                        },
+                        tagged("web-1", "prod"),
+                        tagged("db-1", "dev"),
+                    ],
+                }))
+            }
             _ => Err("unexpected request".into()),
         };
         async move {
@@ -379,4 +400,72 @@ async fn esc_while_typing_cancels_and_restores_the_view() {
         .as_deref()
         .unwrap()
         .contains("match 1 of 1"));
+}
+
+#[tokio::test]
+async fn enter_on_a_tag_lists_the_tenant_resources_with_it_and_esc_restores_the_list() {
+    let (mut app, azure, _) = setup(Ok(vm_document()));
+    let mut loads = app.take_load_receiver().unwrap();
+    {
+        let state = app.state_mut();
+        state.resources.clear();
+        state.resource_groups = vec![az9s_core::models::ResourceGroup {
+            id: "/subscriptions/sub-1/resourceGroups/rg-app".into(),
+            name: "rg-app".into(),
+            location: "westeurope".into(),
+            subscription_id: "sub-1".into(),
+            tags: HashMap::new(),
+        }];
+        state.view = ViewMode::ResourceGroupList;
+    }
+    press(&mut app, KeyCode::Enter).await; // the group's resources
+    app.apply_load(loads.recv().await.unwrap());
+    assert_eq!(app.state().filtered_resources().len(), 1);
+    press(&mut app, KeyCode::Enter).await; // the VM's detail
+    app.apply_load(loads.recv().await.unwrap());
+    press(&mut app, KeyCode::Char('2')).await; // Tags: env=prod, owner=platform
+
+    // Enter on env=prod: every resource in the tenant tagged env=prod.
+    press(&mut app, KeyCode::Enter).await;
+    assert_eq!(app.state().view, ViewMode::ResourceList);
+    assert!(app.state().cross_subscription_mode);
+    app.apply_load(loads.recv().await.unwrap());
+    let names: Vec<String> = app
+        .state()
+        .filtered_resources()
+        .iter()
+        .map(|r| r.name.clone())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(names.contains(&"web-1".to_string()) && names.contains(&"vm-1".to_string()));
+    assert!(matches!(
+        azure.requests.lock().unwrap().last(),
+        Some(LoadRequest::Resources {
+            resource_group: None,
+            ..
+        })
+    ));
+
+    // Esc: the detail again; Esc: the resource group's list, loaded again.
+    press(&mut app, KeyCode::Esc).await;
+    assert_eq!(app.state().view, ViewMode::ResourceDetail);
+    assert_eq!(app.state().detail_tab, DetailTab::Tags);
+    press(&mut app, KeyCode::Esc).await;
+    assert_eq!(app.state().view, ViewMode::ResourceList);
+    assert_eq!(
+        app.state().current_resource_group.as_deref(),
+        Some("rg-app")
+    );
+    app.apply_load(loads.recv().await.unwrap());
+    let names: Vec<String> = app
+        .state()
+        .filtered_resources()
+        .iter()
+        .map(|r| r.name.clone())
+        .collect();
+    assert_eq!(names, ["vm-1"], "the group's list, not the tag's");
+    assert!(
+        app.state().resource_query.is_empty(),
+        "the tag filter is gone"
+    );
 }

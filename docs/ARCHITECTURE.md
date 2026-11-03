@@ -127,7 +127,16 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   `App::open_non_compliant` loads `LoadRequest::PolicyStates` (one
   assignment's non-compliant states in the policy scope), shown one row per
   resource by `group_by_resource`; `App::load_resource_policy` loads
-  `LoadRequest::ResourcePolicy` when the detail view's Policy tab opens.
+  `LoadRequest::ResourcePolicy` when the detail view's Policy tab opens,
+  then names the definitions and initiatives (`name_definitions`: one
+  Resource Graph lookup across the tenant, ARM `GET {id}` for those it
+  doesn't list). Policy definitions opened from that tab fall back to ARM
+  the same way (`ManagementGroupClient::policy_object`).
+- Detail tabs with rows (Tags, Policy) keep a cursor (`detail_cursor`);
+  `Enter` opens the row. Navigation contexts can carry `RESOURCES` (the
+  resource list request a view showed, reloaded on Esc after a tag's
+  tenant-wide list replaced it) and `DETAIL` (the resource, tab and row to
+  reopen on Esc from a policy definition).
 - `config.rs`: the optional config file (`Config::path`, `Config::load`,
   `TEMPLATE` for `--init-config`). `App::start` applies it: the start view,
   and `AppState::config` for the default subscription, auto-refresh

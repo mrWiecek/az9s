@@ -1,6 +1,6 @@
 use crate::desktop::{Desktop, SystemDesktop};
 use crate::event::Event;
-use crate::ui::search;
+use crate::ui::{self, search};
 use crate::{Command, CommandKind, Scope};
 use anyhow::Result;
 use az9s_core::complete;
@@ -22,6 +22,12 @@ const SCOPE_GROUP: &str = "scope_group";
 const QUERY: &str = "query";
 /// Navigation metadata key: the row that was selected, restored on going back.
 const SELECTED: &str = "selected";
+/// Navigation metadata key: the resource list request (JSON) a view showed,
+/// reloaded on going back when the list has since been replaced.
+const RESOURCES: &str = "resources";
+/// Navigation metadata key: the resource a detail view showed (JSON), with
+/// its tab and cursor, reopened on going back from another detail view.
+const DETAIL: &str = "detail";
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use tracing::{debug, info, warn};
 
@@ -916,6 +922,43 @@ impl TuiApp {
                 .get(QUERY)
                 .and_then(|q| ResourceQuery::parse(q.split_whitespace()).ok())
                 .unwrap_or_default();
+            // The list was replaced since (a tag's resources from a detail
+            // view): load what it showed, from the cache at once.
+            let reload = ctx
+                .metadata
+                .get(RESOURCES)
+                .and_then(|r| serde_json::from_str::<(Vec<String>, Option<String>)>(r).ok())
+                .map(
+                    |(subscription_ids, resource_group)| LoadRequest::Resources {
+                        subscription_ids,
+                        resource_group,
+                    },
+                )
+                .filter(|r| self.core.resources_request() != Some(r));
+            if let Some(request) = reload {
+                if let LoadRequest::Resources { resource_group, .. } = &request {
+                    let state = self.state_mut();
+                    state.current_resource_group = resource_group.clone();
+                    state.resources.clear();
+                }
+                self.core.request(request);
+            }
+            // Back from another detail view (a policy definition): reopen
+            // the resource, on the tab and row it was left at.
+            let detail = ctx.metadata.get(DETAIL).and_then(|d| {
+                serde_json::from_str::<(az9s_core::models::Resource, usize, usize)>(d).ok()
+            });
+            if let Some((resource, tab, cursor)) = detail {
+                self.core.open_resource_detail(resource);
+                let state = self.state_mut();
+                state.detail_tab = DetailTab::ALL.get(tab).copied().unwrap_or_default();
+                state.detail_cursor = cursor;
+                state.detail_scroll_to = Some(ui::detail_row_line(state.detail_tab, cursor));
+                if state.detail_tab == DetailTab::Policy {
+                    self.core.load_resource_policy(false);
+                }
+            }
+            let state = self.state_mut();
             if let Some(id) = ctx.metadata.get(SELECTED) {
                 state.select_id(id);
             }
@@ -926,7 +969,9 @@ impl TuiApp {
     /// Navigate down in the current list
     fn navigate_down(&mut self) {
         if self.state().view == ViewMode::ResourceDetail {
-            self.scroll_detail(1);
+            if !self.move_detail_cursor(|c, _| c + 1) {
+                self.scroll_detail(1);
+            }
             return;
         }
         let state = self.state_mut();
@@ -939,7 +984,9 @@ impl TuiApp {
     /// Navigate up in the current list
     fn navigate_up(&mut self) {
         if self.state().view == ViewMode::ResourceDetail {
-            self.scroll_detail(-1);
+            if !self.move_detail_cursor(|c, _| c.saturating_sub(1)) {
+                self.scroll_detail(-1);
+            }
             return;
         }
         let state = self.state_mut();
@@ -951,7 +998,9 @@ impl TuiApp {
     /// Navigate to first item
     fn navigate_first(&mut self) {
         if self.state().view == ViewMode::ResourceDetail {
-            self.state_mut().detail_scroll = 0;
+            if !self.move_detail_cursor(|_, _| 0) {
+                self.state_mut().detail_scroll = 0;
+            }
             return;
         }
         let state = self.state_mut();
@@ -963,7 +1012,9 @@ impl TuiApp {
     /// Navigate to last item
     fn navigate_last(&mut self) {
         if self.state().view == ViewMode::ResourceDetail {
-            self.state_mut().detail_scroll = usize::MAX;
+            if !self.move_detail_cursor(|_, n| n) {
+                self.state_mut().detail_scroll = usize::MAX;
+            }
             return;
         }
         let state = self.state_mut();
@@ -1002,6 +1053,96 @@ impl TuiApp {
     }
 
     /// Scroll the detail view by `lines` (the drawing clamps the end).
+    /// Move the cursor of a detail tab with rows (Tags, Policy) and keep it
+    /// on screen. `false` when the tab has no rows (the caller scrolls).
+    fn move_detail_cursor(&mut self, to: impl Fn(usize, usize) -> usize) -> bool {
+        let state = self.state_mut();
+        let Some(n) = state.detail_rows().filter(|n| *n > 0) else {
+            return false;
+        };
+        state.detail_cursor = to(state.detail_cursor, n).min(n - 1);
+        state.detail_scroll_to = Some(ui::detail_row_line(state.detail_tab, state.detail_cursor));
+        true
+    }
+
+    /// `Enter` in the detail view: the tag's resources across the tenant, or
+    /// the policy's definition.
+    fn open_detail_row(&mut self) {
+        if let Some((key, value)) = self.state().selected_detail_tag() {
+            self.open_tag_resources(key, value);
+        } else if let Some(policy) = self.state().selected_detail_policy() {
+            self.open_policy_definition(policy);
+        }
+    }
+
+    /// Every resource in the tenant with `key=value` (from a detail view's
+    /// Tags tab). The lists further back show other resources: they are
+    /// reloaded on the way back.
+    fn open_tag_resources(&mut self, key: String, value: String) {
+        if let Some(LoadRequest::Resources {
+            subscription_ids,
+            resource_group,
+        }) = self.core.resources_request().cloned()
+        {
+            if let Ok(encoded) = serde_json::to_string(&(subscription_ids, resource_group)) {
+                for ctx in self.state_mut().navigation_stack.iter_mut() {
+                    let shows_resources = matches!(
+                        ctx.view,
+                        ViewMode::ResourceList
+                            | ViewMode::ResourceTypeSummary
+                            | ViewMode::TagSummary
+                    );
+                    if shows_resources && !ctx.metadata.contains_key(RESOURCES) {
+                        ctx.metadata.insert(RESOURCES.into(), encoded.clone());
+                    }
+                }
+            }
+        }
+        self.push_current_context(None);
+        let ids = self.enabled_subscription_ids();
+        self.show_resources(ids, None, true);
+        let state = self.state_mut();
+        state.resource_query.tags = vec![(key.clone(), Some(value.clone()))];
+        state.notice = Some(format!(
+            "Resources tagged {key}={value} in every subscription"
+        ));
+    }
+
+    /// The definition of a policy from the detail view's Policy tab.
+    fn open_policy_definition(&mut self, policy: az9s_core::policy::PolicyState) {
+        if policy.definition_id.is_empty() {
+            self.state_mut().notice = Some("Azure did not report this policy's definition".into());
+            return;
+        }
+        let state = self.state();
+        let back = state.selected_resource_detail.as_ref().and_then(|r| {
+            serde_json::to_string(&(r, state.detail_tab.index(), state.detail_cursor)).ok()
+        });
+        self.push_current_context(None);
+        if let (Some(back), Some(ctx)) = (back, self.state_mut().navigation_stack.last_mut()) {
+            ctx.metadata.insert(DETAIL.into(), back);
+        }
+        let set = policy
+            .definition_id
+            .to_ascii_lowercase()
+            .contains("/policysetdefinitions/");
+        self.core.open_resource_detail(az9s_core::models::Resource {
+            name: policy.policy_label().to_string(),
+            id: policy.definition_id,
+            resource_type: if set {
+                "Microsoft.Authorization/policySetDefinitions"
+            } else {
+                "Microsoft.Authorization/policyDefinitions"
+            }
+            .into(),
+            location: String::new(),
+            resource_group: String::new(),
+            // Definitions live at the tenant or a management group.
+            subscription_id: String::new(),
+            tags: Default::default(),
+        });
+    }
+
     fn scroll_detail(&mut self, lines: isize) {
         let state = self.state_mut();
         state.detail_scroll = state.detail_scroll.saturating_add_signed(lines);
@@ -1228,7 +1369,10 @@ impl TuiApp {
             }
             ViewMode::ResourceGroupList => self.handle_resource_group_select().await,
             ViewMode::ResourceList => self.handle_resource_select().await,
-            ViewMode::ResourceDetail => Ok(true),
+            ViewMode::ResourceDetail => {
+                self.open_detail_row();
+                Ok(true)
+            }
             ViewMode::Logs => Ok(true),
         }
     }
@@ -1422,6 +1566,7 @@ impl TuiApp {
                 let state = self.state_mut();
                 state.detail_tab = next;
                 state.detail_scroll = 0;
+                state.detail_cursor = 0;
                 state.detail_match = None;
                 if next == DetailTab::Policy {
                     self.core.load_resource_policy(false);

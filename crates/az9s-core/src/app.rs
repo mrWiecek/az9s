@@ -34,6 +34,8 @@ pub struct App {
     loader: Loader,
     /// The in-flight request of each kind
     pending: HashMap<LoadKind, Pending>,
+    /// The latest request for the resource list: what `resources` holds
+    resources_request: Option<LoadRequest>,
     /// Builds the fetcher for a tenant (`None`: the CLI's default login),
     /// for `:ctx`. Absent offline and in tests that don't switch.
     fetcher_factory: Option<FetcherFactory>,
@@ -156,6 +158,7 @@ impl App {
             cache,
             loader: Loader::new(fetcher),
             pending: HashMap::new(),
+            resources_request: None,
             fetcher_factory: None,
         }
     }
@@ -323,10 +326,16 @@ impl App {
         state.freshness.remove(&ViewMode::ResourceDetail);
         state.detail_tab = Default::default();
         state.detail_scroll = 0;
+        state.detail_cursor = 0;
         state.clear_detail_search();
         state.view = ViewMode::ResourceDetail;
         state.list_state.reset();
         self.request(request);
+    }
+
+    /// The latest request for the resource list (what the list shows).
+    pub fn resources_request(&self) -> Option<&LoadRequest> {
+        self.resources_request.as_ref()
     }
 
     /// Reload the open resource's document.
@@ -497,6 +506,9 @@ impl App {
     pub fn request(&mut self, request: LoadRequest) {
         self.state.notice = None;
         let kind = request.kind();
+        if kind == LoadKind::Resources {
+            self.resources_request = Some(request.clone());
+        }
         if self.list_len(kind) == 0 {
             self.show_cached(&request);
         }

@@ -12,6 +12,23 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-03
+
+### Added
+- **Open a tag from a resource.** In the detail view's Tags tab, `j`/`k`
+  select a tag and `Enter` lists every resource in the tenant with that
+  tag (`tag=key=value` across all subscriptions). `Esc` goes back to the
+  resource, then to the list you came from, as it was.
+- **Policy tab: where each policy comes from, and its definition.** Each
+  row now shows the policy's name, whether it came with an initiative
+  (and which) or was assigned directly, the assignment, and where it is
+  assigned (management group, subscription or resource group). `Enter`
+  opens the policy definition: type, category, version, mode, effect (with
+  its allowed values), description, and the full JSON. Built-in
+  definitions that Resource Graph doesn't list are read from ARM.
+- `c` in the Policy tab copies the new columns, with definition and
+  assignment IDs.
+
 ## [0.14.0] - 2026-11-03
 
 ### Added
@@ -476,7 +493,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/mrWiecek/az9s/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/mrWiecek/az9s/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/mrWiecek/az9s/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/mrWiecek/az9s/compare/v0.12.0...v0.12.1

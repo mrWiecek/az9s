@@ -453,3 +453,58 @@ async fn policy_view_shows_inherited_assignments_with_compliance() {
         .unwrap()
         .is_some());
 }
+
+#[tokio::test]
+async fn resource_policy_states_get_definition_names_from_graph_then_arm() {
+    use serde_json::json;
+    const DEF_A: &str = "/providers/Microsoft.Authorization/policyDefinitions/a";
+    const DEF_B: &str = "/providers/Microsoft.Authorization/policyDefinitions/b";
+    const SET: &str = "/providers/Microsoft.Authorization/policySetDefinitions/set";
+    let resource = "/subscriptions/sub-1/resourceGroups/rg/providers/x/y/kv";
+    let (url, _) = serve_paths(move |path, body| {
+        let query = body["query"].as_str().unwrap_or_default();
+        if path.starts_with(DEF_B) {
+            // ARM: the definition Resource Graph didn't list (a built-in).
+            ok(json!({"id": DEF_B, "properties": {"displayName": "Built-in B"}}))
+        } else if query.contains("displayName = tostring(properties.displayName)") {
+            ok(json!({"totalRecords": 2, "count": 2, "data": [
+                {"id": DEF_A.to_lowercase(), "displayName": "Custom A"},
+                {"id": SET.to_lowercase(), "displayName": "My initiative"}
+            ]}))
+        } else if query.contains("policystates") {
+            ok(json!({"totalRecords": 2, "count": 2, "data": [
+                {"resourceId": resource, "assignmentId": "/a1", "definition": "ref-a",
+                 "definitionId": DEF_A, "setDefinitionId": SET, "state": "NonCompliant"},
+                {"resourceId": resource, "assignmentId": "/a2", "definition": "b",
+                 "definitionId": DEF_B, "setDefinitionId": "", "state": "Compliant"}
+            ]}))
+        } else {
+            error(400, "unexpected request")
+        }
+    })
+    .await;
+    let mut app = app(&url, Cache::new(Path::new(":memory:")).unwrap());
+    app.state_mut().selected_resource_detail = Some(az9s_core::models::Resource {
+        id: resource.into(),
+        name: "kv".into(),
+        resource_type: "x/y".into(),
+        location: String::new(),
+        resource_group: "rg".into(),
+        subscription_id: "sub-1".into(),
+        tags: Default::default(),
+    });
+    app.load_resource_policy(false);
+    settle(&mut app).await;
+
+    let rows = app.state().detail_policy_states().unwrap();
+    let a = &rows[0].1;
+    assert_eq!(
+        (a.policy_label(), a.source_label().as_str()),
+        ("Custom A", "initiative My initiative")
+    );
+    let b = &rows[1].1;
+    assert_eq!(
+        (b.policy_label(), b.source_label().as_str()),
+        ("Built-in B", "direct")
+    );
+}
