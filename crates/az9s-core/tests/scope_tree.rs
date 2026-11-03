@@ -135,7 +135,21 @@ async fn without_access_or_cache_it_falls_back_to_subscriptions() {
     assert!(app.state().error.is_none(), "no error popup on startup");
     let notice = app.state().notice.clone().unwrap();
     assert!(
-        notice.contains("Management group tree unavailable") && notice.contains("403"),
+        notice.starts_with("No read access to management groups: showing subscriptions"),
+        "a plain explanation, not Azure's long 403 text: {notice}"
+    );
+}
+
+#[tokio::test]
+async fn other_tree_failures_still_say_why() {
+    let (url, _) = serve_paths(|_, _| error(500, "Internal error")).await;
+    let mut app = app(&url, Cache::new(Path::new(":memory:")).unwrap());
+    app.open_scope_tree();
+    settle(&mut app).await;
+    assert_eq!(app.state().view, ViewMode::SubscriptionList);
+    let notice = app.state().notice.clone().unwrap();
+    assert!(
+        notice.contains("Management group tree unavailable") && notice.contains("500"),
         "{notice}"
     );
 }

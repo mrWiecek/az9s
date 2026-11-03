@@ -136,6 +136,8 @@ with the defaults and the status bar names the line and the problem.
 | Symptom | Try |
 |---|---|
 | "Not connected to Azure" | Run `az login`, then press `r` |
+| "the Azure CLI (az) was not found" | Install the Azure CLI and check `az --version` runs in the same terminal. On Windows, update to az9s 0.12.1 or later (earlier versions couldn't start `az.cmd`) |
+| "No read access to management groups" | Expected without Reader on management groups: az9s starts on the subscription list, and `:sub`, `:rg`, `:res` work. Set `start = "sub"` in the config to skip the tree |
 | "Management group tree unavailable" | You need read access on the tenant root management group; `:sub` and `:rg all` still work |
 | Status bar says "Resource Graph unavailable … used ARM" | Lists still load, but more slowly; check `just run-debug` logs |
 | A resource you just changed looks stale | Resource Graph can lag ARM briefly; press `r`, or run with `AZ9S_BACKEND=arm` |

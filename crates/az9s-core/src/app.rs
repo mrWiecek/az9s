@@ -287,9 +287,16 @@ impl App {
             self.state.view = ViewMode::SubscriptionList;
             self.state.list_state.reset();
         }
-        self.state.notice = Some(format!(
-            "Management group tree unavailable ({reason}); showing subscriptions"
-        ));
+        // Azure's 403 message is long (it names the user and the scope); for a
+        // user without management group access, say so plainly instead.
+        let forbidden = reason.starts_with("HTTP 403") || reason.contains("AuthorizationFailed");
+        self.state.notice = Some(if forbidden {
+            "No read access to management groups: showing subscriptions \
+             (:sub, :rg, :res work; :mg and :policy all need management group access)"
+                .to_string()
+        } else {
+            format!("Management group tree unavailable ({reason}); showing subscriptions")
+        });
     }
 
     /// Show cached subscriptions immediately (before Azure answers).

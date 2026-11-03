@@ -12,6 +12,20 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-03
+
+### Fixed
+- **On Windows, az9s could not find the Azure CLI** ("program not found"),
+  so the subscription list never loaded, although `az` worked in the same
+  PowerShell window. On Windows `az` is a batch file (`az.cmd`), which
+  programs can't start by bare name; az9s now runs it through `cmd /C`, as
+  the Azure SDK does for tokens. This also affected `:ctx` tenant tokens.
+  If the CLI really is missing, the error now says so plainly.
+- **Without read access to management groups**, the status bar showed
+  Azure's long "forbidden" message, cut off. It now says "No read access to
+  management groups: showing subscriptions", and which commands still work.
+  az9s starts on the subscription list as before.
+
 ## [0.12.0] - 2026-11-03
 
 ### Added
@@ -438,7 +452,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/mrWiecek/az9s/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/mrWiecek/az9s/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/mrWiecek/az9s/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/mrWiecek/az9s/compare/v0.9.0...v0.10.0

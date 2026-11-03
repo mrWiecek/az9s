@@ -2,7 +2,6 @@ use crate::{auth::AuthProvider, models::*, AzureError, Result};
 use azure_mgmt_resources::Client as ResourcesClient;
 use serde::Deserialize;
 use std::sync::Arc;
-use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 /// Azure API client
@@ -20,11 +19,11 @@ impl AzureClient {
     pub async fn list_subscriptions(&self) -> Result<Vec<AzureSubscription>> {
         info!("Fetching subscriptions from Azure CLI");
 
-        let output = Command::new("az")
-            .args(["account", "list", "--all", "--output", "json"])
-            .output()
-            .await
-            .map_err(|e| AzureError::ApiError(format!("Failed to run Azure CLI: {}", e)))?;
+        let output =
+            crate::cli::az_command("az", &["account", "list", "--all", "--output", "json"])
+                .output()
+                .await
+                .map_err(|e| AzureError::ApiError(crate::cli::start_error(&e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
