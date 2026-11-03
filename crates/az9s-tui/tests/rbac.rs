@@ -72,6 +72,24 @@ impl Fetcher for Azure {
                     true,
                 ),
             ])),
+            // Two of the principals have names; the rest stay IDs.
+            LoadRequest::Principals { ids } => Ok(LoadedData::Principals(
+                ids.iter()
+                    .filter_map(|id| {
+                        let (name, kind, detail) = match id.as_str() {
+                            "principal-1" => ("Ada Lovelace", "user", "ada@contoso.com"),
+                            "principal-3" => ("deploy-pipeline", "servicePrincipal", "app-1"),
+                            _ => return None,
+                        };
+                        Some(az9s_core::rbac::Principal {
+                            id: id.clone(),
+                            display_name: name.into(),
+                            kind: kind.into(),
+                            detail: detail.into(),
+                        })
+                    })
+                    .collect(),
+            )),
             _ => Err("not in this test".into()),
         };
         async move {
@@ -160,8 +178,10 @@ async fn role_assignments_where_you_are_then_the_role_they_grant() {
     // `:ra sub-s1`: inherited from the root and Platform, here, and below.
     command(&mut app, "ra sub-s1").await;
     assert_eq!(app.state().view, ViewMode::RoleAssignments);
-    app.apply_load(loads.recv().await.unwrap());
-    app.apply_load(loads.recv().await.unwrap());
+    // Assignments, definitions, then the principals' names.
+    for _ in 0..3 {
+        app.apply_load(loads.recv().await.unwrap());
+    }
     let rows = app.state().role_assignment_rows();
     let summary: Vec<(&str, &str, &str)> = rows
         .iter()
@@ -189,10 +209,16 @@ async fn role_assignments_where_you_are_then_the_role_they_grant() {
         "C App Deployer",
         "B Owner",
         "ServicePrincipal",
-        "principal-3",
+        "deploy-pipeline (app-1)",
+        "Ada Lovelace (ada@contoso.com)",
+        "principal-2",
     ] {
         assert!(text.contains(expected), "{expected}\n{text}");
     }
+
+    // `/` finds principals by name or sign-in name too.
+    app.state_mut().filter = "ada@".into();
+    assert_eq!(app.state().role_assignment_rows().len(), 1);
 
     // `/custom`: only custom roles' assignments.
     app.state_mut().filter = "custom".into();

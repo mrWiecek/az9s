@@ -64,6 +64,10 @@ pub enum LoadRequest {
     RoleDefinitions {
         subscription_ids: Vec<String>,
     },
+    /// Names of these principal IDs, from Microsoft Graph.
+    Principals {
+        ids: Vec<String>,
+    },
     /// Resources evaluated / non-compliant per subscription, tenant-wide:
     /// the compliance roll-up of the management group tree and `:compliance`.
     ComplianceRollup,
@@ -101,6 +105,7 @@ pub enum LoadKind {
     PolicyExemptions,
     RoleAssignments,
     RoleDefinitions,
+    Principals,
     ComplianceRollup,
     PolicyCompliance,
     ComplianceSummary,
@@ -121,6 +126,7 @@ impl LoadKind {
             LoadKind::PolicyExemptions => "policy exemptions",
             LoadKind::RoleAssignments => "role assignments",
             LoadKind::RoleDefinitions => "role definitions",
+            LoadKind::Principals => "principal names",
             LoadKind::ComplianceRollup => "compliance per subscription",
             LoadKind::PolicyCompliance => "policy compliance",
             LoadKind::ComplianceSummary => "compliance summary",
@@ -143,6 +149,7 @@ impl LoadRequest {
             LoadRequest::PolicyExemptions => LoadKind::PolicyExemptions,
             LoadRequest::RoleAssignments { .. } => LoadKind::RoleAssignments,
             LoadRequest::RoleDefinitions { .. } => LoadKind::RoleDefinitions,
+            LoadRequest::Principals { .. } => LoadKind::Principals,
             LoadRequest::ComplianceRollup => LoadKind::ComplianceRollup,
             LoadRequest::PolicyCompliance { .. } => LoadKind::PolicyCompliance,
             LoadRequest::ComplianceSummary { .. } => LoadKind::ComplianceSummary,
@@ -165,6 +172,7 @@ pub enum LoadedData {
     PolicyExemptions(Vec<PolicyExemption>),
     RoleAssignments(Vec<crate::rbac::RoleAssignment>),
     RoleDefinitions(Vec<crate::rbac::RoleDefinition>),
+    Principals(Vec<az9s_azure::directory::Principal>),
     /// Per subscription (lowercase ID), tenant-wide
     ComplianceRollup(HashMap<String, Compliance>),
     PolicyCompliance(PolicyScope, HashMap<String, Compliance>),
@@ -455,15 +463,15 @@ impl Fetcher for AzureFetcher {
                     failed_subscriptions: Vec::new(),
                     notice: None,
                 },
-                LoadRequest::RoleAssignments { .. } | LoadRequest::RoleDefinitions { .. } => {
-                    FetchOutcome {
-                        data: Err("role assignments need Resource Graph \
+                LoadRequest::RoleAssignments { .. }
+                | LoadRequest::RoleDefinitions { .. }
+                | LoadRequest::Principals { .. } => FetchOutcome {
+                    data: Err("role assignments need Resource Graph \
                                    (not available with AZ9S_BACKEND=arm)"
-                            .into()),
-                        failed_subscriptions: Vec::new(),
-                        notice: None,
-                    }
-                }
+                        .into()),
+                    failed_subscriptions: Vec::new(),
+                    notice: None,
+                },
                 LoadRequest::PolicyAssignments
                 | LoadRequest::PolicyExemptions
                 | LoadRequest::ComplianceRollup
@@ -502,6 +510,8 @@ pub struct GraphFetcher {
     home_tenant: Arc<tokio::sync::OnceCell<Option<String>>>,
     /// Loads the management group tree, if configured.
     management_groups: Option<Arc<ManagementGroupClient>>,
+    /// Names principals (Microsoft Graph), if configured.
+    directory: Option<Arc<az9s_azure::directory::DirectoryClient>>,
 }
 
 impl GraphFetcher {
@@ -511,7 +521,14 @@ impl GraphFetcher {
             arm,
             home_tenant: Arc::new(tokio::sync::OnceCell::new()),
             management_groups: None,
+            directory: None,
         }
+    }
+
+    /// Also serve [`LoadRequest::Principals`] through this client.
+    pub fn with_directory(mut self, client: Arc<az9s_azure::directory::DirectoryClient>) -> Self {
+        self.directory = Some(client);
+        self
     }
 
     /// Also serve [`LoadRequest::ScopeTree`] through this client.
@@ -625,6 +642,27 @@ impl Fetcher for GraphFetcher {
             .boxed();
         }
         match &request {
+            LoadRequest::Principals { ids } => {
+                let directory = self.directory.clone();
+                let ids = ids.clone();
+                return async move {
+                    let data = match directory {
+                        Some(directory) => directory
+                            .principals(&ids)
+                            .await
+                            .map(LoadedData::Principals)
+                            .map_err(|e| e.to_string()),
+                        // No directory client (tests, offline): no names.
+                        None => Ok(LoadedData::Principals(vec![])),
+                    };
+                    FetchOutcome {
+                        data,
+                        failed_subscriptions: vec![],
+                        notice: None,
+                    }
+                }
+                .boxed();
+            }
             LoadRequest::RoleAssignments { subscription_ids }
             | LoadRequest::RoleDefinitions { subscription_ids } => {
                 let graph = self.graph.clone();
@@ -934,6 +972,7 @@ impl Fetcher for GraphFetcher {
                 | LoadRequest::PolicyExemptions
                 | LoadRequest::RoleAssignments { .. }
                 | LoadRequest::RoleDefinitions { .. }
+                | LoadRequest::Principals { .. }
                 | LoadRequest::ComplianceRollup
                 | LoadRequest::PolicyCompliance { .. }
                 | LoadRequest::ComplianceSummary { .. }
@@ -1024,6 +1063,7 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::PolicyExemptions => LoadedData::PolicyExemptions(vec![]),
         LoadKind::RoleAssignments => LoadedData::RoleAssignments(vec![]),
         LoadKind::RoleDefinitions => LoadedData::RoleDefinitions(vec![]),
+        LoadKind::Principals => LoadedData::Principals(vec![]),
         LoadKind::ComplianceRollup => LoadedData::ComplianceRollup(HashMap::new()),
         LoadKind::PolicyCompliance => {
             LoadedData::PolicyCompliance(PolicyScope::Group(String::new()), HashMap::new())

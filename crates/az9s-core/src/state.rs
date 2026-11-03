@@ -101,6 +101,9 @@ pub struct AppState {
     /// Every role definition (built-in and custom), once loaded
     pub role_definitions: Vec<crate::rbac::RoleDefinition>,
 
+    /// Principals named so far (Microsoft Graph), by lowercase ID
+    pub principals: HashMap<String, az9s_azure::directory::Principal>,
+
     /// The scope `:ra` shows (`None`: the whole tenant)
     pub ra_scope: Option<crate::policy::PolicyScope>,
 
@@ -253,6 +256,10 @@ pub struct RoleAssignmentRow {
     pub assignment: crate::rbac::RoleAssignment,
     /// The role's name (its GUID while definitions load)
     pub role_name: String,
+    /// The principal's display name (its ID until named)
+    pub principal_name: String,
+    /// A user's sign-in name or an application's app ID, when named
+    pub principal_detail: String,
     /// Custom role (`None`: definition not loaded)
     pub custom: Option<bool>,
     pub reach: crate::rbac::Reach,
@@ -875,7 +882,12 @@ impl AppState {
             } else {
                 self.scope_label(&a.scope)
             };
+            let principal = self.principals.get(&a.principal_id.to_ascii_lowercase());
             RoleAssignmentRow {
+                principal_name: principal
+                    .map(|p| p.display_name.clone())
+                    .unwrap_or_else(|| a.principal_id.clone()),
+                principal_detail: principal.map(|p| p.detail.clone()).unwrap_or_default(),
                 role_name: role
                     .map(|r| r.role_name.clone())
                     .unwrap_or_else(|| a.role_guid()),
@@ -925,6 +937,8 @@ impl AppState {
                     r.role_name.as_str(),
                     kind,
                     &r.assignment.principal_id,
+                    &r.principal_name,
+                    &r.principal_detail,
                     &r.assignment.principal_type,
                     &r.scope_label,
                     &r.origin_label,

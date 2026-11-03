@@ -128,6 +128,17 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   `policy_summary` falls back to it until the scope's own summary arrives.
   It is a separate load kind so it never cancels, or is cancelled by, the
   policy view's summary.
+- `rbac.rs`: `RoleAssignment`, `RoleDefinition` (built-in or custom, its
+  permissions) from Resource Graph `authorizationresources`
+  (`LoadRequest::RoleAssignments` / `RoleDefinitions`, tenant-wide, cached
+  per tenant; without tenant-root access they query the user's
+  subscriptions instead, with a notice). `assignments_at` says how each
+  assignment reaches a scope (`Reach::Inherited`/`Here`/`Below`).
+  Assignments name roles by an ID at their own scope, so roles are matched
+  by GUID. Principal names: `LoadRequest::Principals` asks Microsoft Graph
+  (`az9s_azure::directory::DirectoryClient`, `directoryObjects/getByIds`,
+  a Graph-audience token from the same login) for the IDs not yet named;
+  names accumulate in `AppState::principals` and are cached per tenant.
 - Exemptions: `LoadRequest::PolicyExemptions` (tenant-wide, cached as
   `policy_exemptions:<tenant>`) into `PolicyExemption`. `:exemption` lists
   those `within` a scope (`AppState::exemption_rows`, by `Expiry`); the

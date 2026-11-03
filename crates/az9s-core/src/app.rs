@@ -139,9 +139,24 @@ impl App {
             ))),
         };
         let management_groups = Arc::new(ManagementGroupClient::new(tokens.clone()));
+        // Principal names come from Microsoft Graph: same login, its audience.
+        let graph_tokens: Arc<dyn TokenSource> = match tenant {
+            Some(tenant) => Arc::new(CachingTokenSource::new(CliTenantTokenSource::for_resource(
+                tenant,
+                az9s_azure::directory::GRAPH_RESOURCE,
+            ))),
+            None => Arc::new(CachingTokenSource::new(
+                az9s_azure::resource_graph::ScopedCredentialTokenSource {
+                    credential: auth.credential(),
+                    scope: format!("{}.default", az9s_azure::directory::GRAPH_RESOURCE),
+                },
+            )),
+        };
+        let directory = Arc::new(az9s_azure::directory::DirectoryClient::new(graph_tokens));
         Arc::new(
             GraphFetcher::new(Arc::new(ResourceGraphClient::new(tokens)), arm)
-                .with_management_groups(management_groups),
+                .with_management_groups(management_groups)
+                .with_directory(directory),
         )
     }
 
@@ -251,6 +266,26 @@ impl App {
         }
     }
 
+    /// Name the principals of the loaded role assignments that have no name
+    /// yet (Microsoft Graph), unless a lookup is running.
+    pub fn load_principal_names(&mut self) {
+        if self.pending.contains_key(&LoadKind::Principals) {
+            return;
+        }
+        let mut ids: Vec<String> = self
+            .state
+            .role_assignments
+            .iter()
+            .map(|a| a.principal_id.to_ascii_lowercase())
+            .filter(|id| !id.is_empty() && !self.state.principals.contains_key(id))
+            .collect();
+        ids.sort();
+        ids.dedup();
+        if !ids.is_empty() {
+            self.request(LoadRequest::Principals { ids });
+        }
+    }
+
     /// `:ra`: the role assignments that matter at `scope` (`None`: every one
     /// in the tenant), optionally only those of one role (its GUID).
     pub fn open_role_assignments(
@@ -264,6 +299,7 @@ impl App {
         state.view = ViewMode::RoleAssignments;
         state.list_state.reset();
         self.load_rbac();
+        self.load_principal_names();
     }
 
     /// `:role`: every role definition, custom first.
@@ -498,6 +534,14 @@ impl App {
             | LoadRequest::Tenants
             | LoadRequest::PolicyStates { .. }
             | LoadRequest::ResourcePolicy { .. } => return,
+            LoadRequest::Principals { .. } => {
+                repo.document(&self.tenant_key("principals")).map(|doc| {
+                    match doc.and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at))) {
+                        Some((items, at)) => (LoadedData::Principals(items), Some(at)),
+                        None => (LoadedData::Principals(vec![]), None),
+                    }
+                })
+            }
             LoadRequest::RoleAssignments { .. } => repo
                 .document(&self.tenant_key("role_assignments"))
                 .map(|doc| {
@@ -628,6 +672,7 @@ impl App {
             LoadKind::PolicyExemptions => self.state.policy_exemptions.len(),
             LoadKind::RoleAssignments => self.state.role_assignments.len(),
             LoadKind::RoleDefinitions => self.state.role_definitions.len(),
+            LoadKind::Principals => self.state.principals.len(),
             LoadKind::ComplianceRollup => usize::from(self.state.compliance_rollup.is_some()),
             LoadKind::PolicyCompliance => usize::from(self.state.policy_compliance.is_some()),
             LoadKind::ComplianceSummary => usize::from(self.state.compliance_summary.is_some()),
@@ -742,6 +787,10 @@ impl App {
                 }
                 self.write_scope(&pending.request, &outcome.failed_subscriptions);
                 self.mark(kind, DataSource::Azure, None);
+                if kind == LoadKind::RoleAssignments {
+                    // New principals may have appeared: name them.
+                    self.load_principal_names();
+                }
                 let failed = outcome.failed_subscriptions.len();
                 if failed > 0 {
                     self.state.notice = Some(format!(
@@ -757,6 +806,11 @@ impl App {
                 // enough. Otherwise the list is empty or incomplete: error.
                 if kind == LoadKind::ScopeTree && !pending.staged {
                     self.fall_back_to_subscriptions(&e);
+                } else if kind == LoadKind::Principals {
+                    // The assignments still show the principal IDs.
+                    self.state.notice = Some(format!(
+                        "Principal names unavailable (Microsoft Graph): {e}"
+                    ));
                 } else if kind == LoadKind::RoleDefinitions
                     && self.state.view != ViewMode::RoleDefinitions
                 {
@@ -824,6 +878,11 @@ impl App {
             LoadedData::PolicyExemptions(items) => self.state.policy_exemptions = items,
             LoadedData::RoleAssignments(items) => self.state.role_assignments = items,
             LoadedData::RoleDefinitions(items) => self.state.role_definitions = items,
+            // Names add up: each lookup asks only for the missing ones.
+            LoadedData::Principals(items) => self
+                .state
+                .principals
+                .extend(items.into_iter().map(|p| (p.id.to_ascii_lowercase(), p))),
             LoadedData::ComplianceRollup(counts) => self.state.compliance_rollup = Some(counts),
             LoadedData::PolicyCompliance(scope, counts) => {
                 self.state.policy_compliance = Some((scope, counts))
@@ -870,6 +929,17 @@ impl App {
             LoadRequest::Tenants
             | LoadRequest::PolicyStates { .. }
             | LoadRequest::ResourcePolicy { .. } => return,
+            LoadRequest::Principals { .. } => {
+                let all: Vec<&az9s_azure::directory::Principal> =
+                    self.state.principals.values().collect();
+                match serde_json::to_string(&all) {
+                    Ok(value) => WriteJob::Document {
+                        key: self.tenant_key("principals"),
+                        value,
+                    },
+                    Err(_) => return,
+                }
+            }
             LoadRequest::RoleAssignments { .. } => {
                 match serde_json::to_string(&self.state.role_assignments) {
                     Ok(value) => WriteJob::Document {
@@ -1015,6 +1085,7 @@ fn view_of(kind: LoadKind) -> ViewMode {
         LoadKind::PolicyExemptions => ViewMode::ExemptionList,
         LoadKind::RoleAssignments => ViewMode::RoleAssignments,
         LoadKind::RoleDefinitions => ViewMode::RoleDefinitions,
+        LoadKind::Principals => ViewMode::RoleAssignments,
     }
 }
 

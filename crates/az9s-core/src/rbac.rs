@@ -11,6 +11,9 @@ use crate::scope_tree::ScopeTree;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// A principal's name from the directory (Microsoft Graph).
+pub use az9s_azure::directory::Principal;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoleAssignment {
     pub id: String,

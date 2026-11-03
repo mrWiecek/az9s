@@ -43,13 +43,24 @@ pub struct CliTenantTokenSource {
     pub tenant: String,
     /// The CLI to run (tests point this at a fake).
     pub program: String,
+    /// The token's audience (ARM unless set, e.g. Microsoft Graph).
+    pub resource: String,
 }
+
+/// The token audience for Azure Resource Manager.
+pub const ARM_RESOURCE: &str = "https://management.azure.com/";
 
 impl CliTenantTokenSource {
     pub fn new(tenant: impl Into<String>) -> Self {
+        Self::for_resource(tenant, ARM_RESOURCE)
+    }
+
+    /// Tokens for another audience, e.g. Microsoft Graph.
+    pub fn for_resource(tenant: impl Into<String>, resource: impl Into<String>) -> Self {
         Self {
             tenant: tenant.into(),
             program: "az".into(),
+            resource: resource.into(),
         }
     }
 }
@@ -64,7 +75,7 @@ impl TokenSource for CliTenantTokenSource {
                     "account",
                     "get-access-token",
                     "--resource",
-                    "https://management.azure.com/",
+                    &self.resource,
                     "--tenant",
                     &self.tenant,
                     "--query",
@@ -110,6 +121,27 @@ impl TokenSource for CredentialTokenSource {
             let token = self
                 .0
                 .get_token(&[ARM_SCOPE])
+                .await
+                .map_err(|e| AzureError::AuthenticationFailed(e.to_string()))?;
+            Ok(token.token.secret().to_string())
+        }
+        .boxed()
+    }
+}
+
+/// Tokens from an Azure SDK credential for another audience, e.g.
+/// Microsoft Graph (`https://graph.microsoft.com/.default`).
+pub struct ScopedCredentialTokenSource {
+    pub credential: Arc<dyn TokenCredential>,
+    pub scope: String,
+}
+
+impl TokenSource for ScopedCredentialTokenSource {
+    fn token(&self) -> BoxFuture<'_, Result<String>> {
+        async move {
+            let token = self
+                .credential
+                .get_token(&[self.scope.as_str()])
                 .await
                 .map_err(|e| AzureError::AuthenticationFailed(e.to_string()))?;
             Ok(token.token.secret().to_string())
@@ -849,6 +881,7 @@ mod tests {
         let source = CliTenantTokenSource {
             tenant: "t-2".into(),
             program: fake_cli(dir.path(), true),
+            resource: ARM_RESOURCE.into(),
         };
         let token = source.token().await.unwrap();
         assert!(token.contains("--tenant t-2"), "{token}");
@@ -857,6 +890,7 @@ mod tests {
         let failing = CliTenantTokenSource {
             tenant: "t-2".into(),
             program: fake_cli(dir.path(), false),
+            resource: ARM_RESOURCE.into(),
         };
         let e = failing.token().await.unwrap_err().to_string();
         assert!(

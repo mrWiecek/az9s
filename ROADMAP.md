@@ -202,12 +202,20 @@ Work items, in order:
       subscription in the tree shows its compliance (groups add up their
       subscriptions); `:compliance [all|<mg>]` ranks subscriptions by
       non-compliant resources (v0.16.0).
-- [ ] The same per resource group (within a subscription).
+- [ ] ~~The same per resource group~~: not needed, subscription level is
+      enough (decided after v0.16.0).
 - [x] List exemptions (with expiry), read-only: `:exemption [all|<mg>|<sub>]`,
       soonest to expire first; a resource's Exempt policies name their
       exemption (v0.17.0).
 - [ ] Remediation tasks, read-only (status and resources succeeded/failed per
-      assignment; not in Resource Graph, so ARM per scope).
+      assignment; not in Resource Graph, so ARM per scope). Parked: policy views
+      are good enough for now.
+- [x] **Access (RBAC):** `:ra [all|<mg>|<sub>]` role assignments that matter at
+      a scope (inherited, here, below) with principal names from Microsoft
+      Graph; `:role` role definitions, custom vs built-in, with assignment
+      counts; drill-downs role ↔ assignments ↔ permissions (v0.18.0).
+- [ ] Access next: a principal's access across the tenant (everything one user
+      or group can do), PIM eligible assignments, deny assignments.
 - Policy *actions* (trigger a compliance scan, create or extend exemptions, start
   remediation) come in M4 on top of the action framework.
 

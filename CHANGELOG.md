@@ -12,6 +12,34 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-03
+
+### Added
+- **`:ra [all|<mg>|<sub>]`: role assignments** (aliases `:roleassignment`,
+  `:role-assignment`) that matter where you are: inherited from the tenant
+  root and management groups above (top first), made at the scope, and
+  below it (resource groups, resources), marked in the title ("2 inherited,
+  1 here, 1 below"). Each row shows the role (`C` custom, `B` built-in),
+  the principal's name with sign-in name or app ID, its type (user, group,
+  service principal) and where it is assigned. `Enter` opens the role's
+  permissions; `d` the assignment; `/` finds roles, principals, types and
+  scopes (e.g. `/custom`).
+- **`:role`: role definitions** (aliases `:roledefinition`,
+  `:role-definition`), custom first, with how many assignments each has
+  ("unused" for none) and the counts in the title. `Enter` lists everyone
+  with the role across the tenant; `d` opens its permissions: actions,
+  not-actions, data actions and assignable scopes, one per line.
+- **Principal names from Microsoft Graph**, using the same Azure CLI login.
+  Looked up for the IDs not yet known, cached per tenant. Without directory
+  read access (e.g. as a guest) a notice says so and IDs are shown.
+- Without access at the tenant root, role assignments and definitions come
+  from your subscriptions instead, with a notice (management group
+  assignments may be missing).
+
+### Fixed
+- Going back (`Esc`) to `:policy`, the non-compliant list, `:compliance` or
+  `:exemption` now keeps the row you were on instead of jumping to the top.
+
 ## [0.17.0] - 2026-11-03
 
 ### Added
@@ -524,7 +552,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/mrWiecek/az9s/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/mrWiecek/az9s/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/mrWiecek/az9s/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/mrWiecek/az9s/compare/v0.14.0...v0.15.0

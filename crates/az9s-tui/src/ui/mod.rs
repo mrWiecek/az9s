@@ -630,7 +630,14 @@ fn draw_role_assignments(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<
                     Style::default().fg(t.accent),
                 ),
                 Span::styled(
-                    cell(&a.principal_id, principal_w),
+                    cell(
+                        &if r.principal_detail.is_empty() {
+                            r.principal_name.clone()
+                        } else {
+                            format!("{} ({})", r.principal_name, r.principal_detail)
+                        },
+                        principal_w,
+                    ),
                     Style::default().fg(t.text),
                 ),
                 Span::styled(cell(&r.scope_label, scope_w), Style::default().fg(t.muted)),

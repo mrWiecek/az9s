@@ -64,6 +64,7 @@ impl Fetcher for SlowAzure {
                 LoadRequest::Tenants => LoadedData::Tenants(vec![]),
                 LoadRequest::PolicyAssignments => LoadedData::PolicyAssignments(vec![]),
                 LoadRequest::RoleAssignments { .. } => LoadedData::RoleAssignments(vec![]),
+                LoadRequest::Principals { .. } => LoadedData::Principals(vec![]),
                 LoadRequest::RoleDefinitions { .. } => LoadedData::RoleDefinitions(vec![]),
                 LoadRequest::PolicyExemptions => LoadedData::PolicyExemptions(vec![]),
                 LoadRequest::ComplianceRollup => LoadedData::ComplianceRollup(Default::default()),

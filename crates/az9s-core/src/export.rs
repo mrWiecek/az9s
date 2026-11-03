@@ -123,6 +123,8 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
                 tsv(&[
                     &r.role_name,
                     kind,
+                    &r.principal_name,
+                    &r.principal_detail,
                     &a.principal_type,
                     &a.principal_id,
                     &r.scope_label,
@@ -134,7 +136,7 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
             (
                 count(rows.len(), "role assignment"),
                 with_header(
-                    "role\tkind\tprincipal type\tprincipal id\tscope\treach\tscope id\tid",
+                    "role\tkind\tprincipal\tsign-in or app id\tprincipal type\tprincipal id\tscope\treach\tscope id\tid",
                     lines,
                 ),
             )
