@@ -97,6 +97,72 @@ impl DirectoryClient {
     }
 }
 
+impl DirectoryClient {
+    /// The groups `principal_id` is a member of, directly or through other
+    /// groups: `GET {endpoint}/v1.0/directoryObjects/{id}/transitiveMemberOf`,
+    /// paged by `@odata.nextLink`.
+    pub async fn groups_of(&self, principal_id: &str) -> Result<Vec<Principal>> {
+        let _t = timing::timer("azure.principal_groups");
+        let mut url = format!(
+            "{}/v1.0/directoryObjects/{}/transitiveMemberOf/microsoft.graph.group\
+             ?$select=id,displayName&$top=999",
+            self.endpoint, principal_id
+        );
+        let mut groups = Vec::new();
+        loop {
+            let token = self.tokens.token().await?;
+            let response = self
+                .http
+                .get(&url)
+                .bearer_auth(token)
+                .send()
+                .await
+                .map_err(|e| {
+                    AzureError::ApiError(format!("Microsoft Graph request failed: {e}"))
+                })?;
+            let body = read_body(response).await?;
+            groups.extend(
+                body.get("value")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|item| {
+                        // The cast path returns groups without @odata.type.
+                        let mut p = principal_from_item(item)?;
+                        p.kind = "group".into();
+                        Some(p)
+                    }),
+            );
+            match body.get("@odata.nextLink").and_then(Value::as_str) {
+                Some(next) if !next.is_empty() => url = next.to_string(),
+                _ => break,
+            }
+        }
+        Ok(groups)
+    }
+}
+
+/// A Microsoft Graph response's JSON, or its error message.
+async fn read_body(response: reqwest::Response) -> Result<Value> {
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|e| AzureError::ApiError(format!("Microsoft Graph response: {e}")))?;
+    if !status.is_success() {
+        let message = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| v.pointer("/error/message")?.as_str().map(str::to_string))
+            .unwrap_or_else(|| text.chars().take(300).collect());
+        return Err(AzureError::Http {
+            status: status.as_u16(),
+            message,
+        });
+    }
+    serde_json::from_str(&text)
+        .map_err(|e| AzureError::ApiError(format!("Invalid Microsoft Graph response: {e}")))
+}
+
 fn principal_from_item(item: &Value) -> Option<Principal> {
     let text = |key: &str| item.get(key).and_then(Value::as_str).unwrap_or_default();
     let id = text("id");
@@ -166,6 +232,37 @@ mod tests {
             requests.lock().unwrap()[0]["ids"].as_array().unwrap().len(),
             4
         );
+    }
+
+    #[tokio::test]
+    async fn groups_include_nested_ones_across_pages() {
+        let base = Arc::new(std::sync::Mutex::new(String::new()));
+        let base_in_server = base.clone();
+        let (endpoint, _) = serve_paths(move |path, _| {
+            assert!(
+                path.starts_with(
+                    "/v1.0/directoryObjects/u1/transitiveMemberOf/microsoft.graph.group"
+                ),
+                "{path}"
+            );
+            if path.contains("page=2") {
+                ok(json!({"value": [{"id": "g2", "displayName": "Nested"}]}))
+            } else {
+                let next = format!("{}{}&page=2", base_in_server.lock().unwrap(), path);
+                ok(
+                    json!({"value": [{"id": "g1", "displayName": "Platform Admins"}],
+                          "@odata.nextLink": next}),
+                )
+            }
+        })
+        .await;
+        *base.lock().unwrap() = endpoint.clone();
+        let groups = client(&endpoint).groups_of("u1").await.unwrap();
+        let names: Vec<(&str, &str)> = groups
+            .iter()
+            .map(|g| (g.display_name.as_str(), g.kind.as_str()))
+            .collect();
+        assert_eq!(names, [("Platform Admins", "group"), ("Nested", "group")]);
     }
 
     #[tokio::test]

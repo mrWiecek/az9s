@@ -110,6 +110,14 @@ pub struct AppState {
     /// Only this role's assignments (its GUID), when opened from `:role`
     pub ra_role: Option<String>,
 
+    /// One principal's access (lowercase ID): its own assignments and its
+    /// groups' (`:access`, `p` in `:ra`)
+    pub ra_principal: Option<String>,
+
+    /// The groups each principal belongs to, nested ones too (by lowercase
+    /// principal ID), as looked up
+    pub principal_groups: HashMap<String, Vec<az9s_azure::directory::Principal>>,
+
     /// Every policy exemption in the tenant, once loaded
     pub policy_exemptions: Vec<crate::policy::PolicyExemption>,
 
@@ -263,7 +271,11 @@ pub struct RoleAssignmentRow {
     /// Custom role (`None`: definition not loaded)
     pub custom: Option<bool>,
     pub reach: crate::rbac::Reach,
-    /// "inherited", "this scope" or "below" (empty for the whole tenant)
+    /// In one principal's access: the group it holds this through (`None`:
+    /// assigned to the principal itself)
+    pub via: Option<String>,
+    /// "inherited", "this scope" or "below"; "direct" or "via <group>" in
+    /// one principal's access (empty for the whole tenant)
     pub origin_label: String,
     /// Where it is assigned, readable
     pub scope_label: String,
@@ -864,6 +876,16 @@ impl AppState {
     /// each. `/` narrows by role, built-in/custom, principal, type or scope.
     pub fn role_assignment_rows(&self) -> Vec<RoleAssignmentRow> {
         use crate::rbac::{assignments_at, Reach};
+        // One principal's access: whose assignments count, and through which
+        // group (lowercase ID → group name; the principal itself: None).
+        let holders: Option<HashMap<String, Option<String>>> =
+            self.ra_principal.as_ref().map(|p| {
+                let mut holders = HashMap::from([(p.clone(), None)]);
+                for g in self.principal_groups.get(p).into_iter().flatten() {
+                    holders.insert(g.id.to_ascii_lowercase(), Some(g.display_name.clone()));
+                }
+                holders
+            });
         let mut rows: Vec<RoleAssignmentRow> = assignments_at(
             &self.role_assignments,
             self.ra_scope.as_ref(),
@@ -875,7 +897,14 @@ impl AppState {
                 .as_ref()
                 .is_none_or(|role| a.role_guid().eq_ignore_ascii_case(role))
         })
-        .map(|(a, reach)| {
+        .filter_map(|(a, reach)| {
+            let via = match &holders {
+                None => None,
+                Some(holders) => holders.get(&a.principal_id.to_ascii_lowercase())?.clone(),
+            };
+            Some((a, reach, via))
+        })
+        .map(|(a, reach, via)| {
             let role = self.role_definition(&a.role_guid());
             let scope_label = if a.scope == "/" {
                 "tenant root (/)".to_string()
@@ -893,6 +922,10 @@ impl AppState {
                     .unwrap_or_else(|| a.role_guid()),
                 custom: role.map(|r| r.is_custom()),
                 origin_label: match (&reach, self.ra_scope.is_some()) {
+                    _ if holders.is_some() => match &via {
+                        Some(group) => format!("via {group}"),
+                        None => "direct".into(),
+                    },
                     (_, false) => String::new(),
                     (Reach::Inherited(_), true) => "inherited".into(),
                     (Reach::Here, true) => "this scope".into(),
@@ -900,6 +933,7 @@ impl AppState {
                 },
                 scope_label,
                 reach,
+                via,
                 assignment: a.clone(),
             }
         })

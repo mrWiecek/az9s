@@ -68,6 +68,10 @@ pub enum LoadRequest {
     Principals {
         ids: Vec<String>,
     },
+    /// The groups a principal belongs to, nested ones too (Microsoft Graph).
+    PrincipalGroups {
+        principal_id: String,
+    },
     /// Resources evaluated / non-compliant per subscription, tenant-wide:
     /// the compliance roll-up of the management group tree and `:compliance`.
     ComplianceRollup,
@@ -106,6 +110,7 @@ pub enum LoadKind {
     RoleAssignments,
     RoleDefinitions,
     Principals,
+    PrincipalGroups,
     ComplianceRollup,
     PolicyCompliance,
     ComplianceSummary,
@@ -127,6 +132,7 @@ impl LoadKind {
             LoadKind::RoleAssignments => "role assignments",
             LoadKind::RoleDefinitions => "role definitions",
             LoadKind::Principals => "principal names",
+            LoadKind::PrincipalGroups => "group memberships",
             LoadKind::ComplianceRollup => "compliance per subscription",
             LoadKind::PolicyCompliance => "policy compliance",
             LoadKind::ComplianceSummary => "compliance summary",
@@ -150,6 +156,7 @@ impl LoadRequest {
             LoadRequest::RoleAssignments { .. } => LoadKind::RoleAssignments,
             LoadRequest::RoleDefinitions { .. } => LoadKind::RoleDefinitions,
             LoadRequest::Principals { .. } => LoadKind::Principals,
+            LoadRequest::PrincipalGroups { .. } => LoadKind::PrincipalGroups,
             LoadRequest::ComplianceRollup => LoadKind::ComplianceRollup,
             LoadRequest::PolicyCompliance { .. } => LoadKind::PolicyCompliance,
             LoadRequest::ComplianceSummary { .. } => LoadKind::ComplianceSummary,
@@ -173,6 +180,8 @@ pub enum LoadedData {
     RoleAssignments(Vec<crate::rbac::RoleAssignment>),
     RoleDefinitions(Vec<crate::rbac::RoleDefinition>),
     Principals(Vec<az9s_azure::directory::Principal>),
+    /// A principal (lowercase ID) and its groups
+    PrincipalGroups(String, Vec<az9s_azure::directory::Principal>),
     /// Per subscription (lowercase ID), tenant-wide
     ComplianceRollup(HashMap<String, Compliance>),
     PolicyCompliance(PolicyScope, HashMap<String, Compliance>),
@@ -465,7 +474,8 @@ impl Fetcher for AzureFetcher {
                 },
                 LoadRequest::RoleAssignments { .. }
                 | LoadRequest::RoleDefinitions { .. }
-                | LoadRequest::Principals { .. } => FetchOutcome {
+                | LoadRequest::Principals { .. }
+                | LoadRequest::PrincipalGroups { .. } => FetchOutcome {
                     data: Err("role assignments need Resource Graph \
                                    (not available with AZ9S_BACKEND=arm)"
                         .into()),
@@ -642,6 +652,26 @@ impl Fetcher for GraphFetcher {
             .boxed();
         }
         match &request {
+            LoadRequest::PrincipalGroups { principal_id } => {
+                let directory = self.directory.clone();
+                let id = principal_id.to_ascii_lowercase();
+                return async move {
+                    let data = match directory {
+                        Some(directory) => directory
+                            .groups_of(&id)
+                            .await
+                            .map(|groups| LoadedData::PrincipalGroups(id, groups))
+                            .map_err(|e| e.to_string()),
+                        None => Ok(LoadedData::PrincipalGroups(id, vec![])),
+                    };
+                    FetchOutcome {
+                        data,
+                        failed_subscriptions: vec![],
+                        notice: None,
+                    }
+                }
+                .boxed();
+            }
             LoadRequest::Principals { ids } => {
                 let directory = self.directory.clone();
                 let ids = ids.clone();
@@ -973,6 +1003,7 @@ impl Fetcher for GraphFetcher {
                 | LoadRequest::RoleAssignments { .. }
                 | LoadRequest::RoleDefinitions { .. }
                 | LoadRequest::Principals { .. }
+                | LoadRequest::PrincipalGroups { .. }
                 | LoadRequest::ComplianceRollup
                 | LoadRequest::PolicyCompliance { .. }
                 | LoadRequest::ComplianceSummary { .. }
@@ -1064,6 +1095,7 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::RoleAssignments => LoadedData::RoleAssignments(vec![]),
         LoadKind::RoleDefinitions => LoadedData::RoleDefinitions(vec![]),
         LoadKind::Principals => LoadedData::Principals(vec![]),
+        LoadKind::PrincipalGroups => LoadedData::PrincipalGroups(String::new(), vec![]),
         LoadKind::ComplianceRollup => LoadedData::ComplianceRollup(HashMap::new()),
         LoadKind::PolicyCompliance => {
             LoadedData::PolicyCompliance(PolicyScope::Group(String::new()), HashMap::new())

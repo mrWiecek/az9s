@@ -25,6 +25,11 @@ const SELECTED: &str = "selected";
 /// Navigation metadata key: the resource list request (JSON) a view showed,
 /// reloaded on going back when the list has since been replaced.
 const RESOURCES: &str = "resources";
+/// Navigation metadata keys: what a role assignment list showed (its scope
+/// as `g:<group>` or `s:<subscription>`, role GUID, principal ID).
+const RA_SCOPE: &str = "ra_scope";
+const RA_ROLE: &str = "ra_role";
+const RA_PRINCIPAL: &str = "ra_principal";
 /// Navigation metadata key: the resource a detail view showed (JSON), with
 /// its tab and cursor, reopened on going back from another detail view.
 const DETAIL: &str = "detail";
@@ -484,6 +489,22 @@ impl TuiApp {
                 debug!("Command: role assignments, scope {:?}", scope);
                 self.open_role_assignments(scope);
             }
+            CommandKind::Access(query) => {
+                debug!("Command: access {}", query);
+                match self.find_principal(&query) {
+                    Some(id) => {
+                        let state = self.state_mut();
+                        state.clear_navigation();
+                        state.filter.clear();
+                        self.core.open_access(&id);
+                    }
+                    None => self.state_mut().set_error(Some(format!(
+                        "No principal named {query} among those az9s knows.\n\n\
+                         Give the principal's object ID, or open :ra all first so \
+                         names are loaded, then press p on one of its rows."
+                    ))),
+                }
+            }
             CommandKind::RoleDefinitions => {
                 debug!("Command: role definitions");
                 let state = self.state_mut();
@@ -679,6 +700,36 @@ impl TuiApp {
         if let Some(id) = select {
             self.state_mut().select_id(&format!("/subscriptions/{id}"));
         }
+    }
+
+    /// A principal's ID (lowercase) by its name, sign-in name, app ID or
+    /// object ID: exact matches first, then a unique partial match. An ID
+    /// that looks like a GUID is taken as is.
+    fn find_principal(&self, query: &str) -> Option<String> {
+        let q = query.trim().to_ascii_lowercase();
+        if q.is_empty() {
+            return None;
+        }
+        let principals = &self.state().principals;
+        let fields = |p: &az9s_core::rbac::Principal| {
+            [
+                p.id.to_ascii_lowercase(),
+                p.display_name.to_ascii_lowercase(),
+                p.detail.to_ascii_lowercase(),
+            ]
+        };
+        if let Some(p) = principals.values().find(|p| fields(p).contains(&q)) {
+            return Some(p.id.to_ascii_lowercase());
+        }
+        let partial: Vec<&az9s_core::rbac::Principal> = principals
+            .values()
+            .filter(|p| fields(p).iter().any(|f| f.contains(&q)))
+            .collect();
+        if let [only] = partial.as_slice() {
+            return Some(only.id.to_ascii_lowercase());
+        }
+        let is_guid = q.len() == 36 && q.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+        is_guid.then_some(q)
     }
 
     /// A management group by name or display name (case-insensitive).
@@ -997,6 +1048,19 @@ impl TuiApp {
             state.list_state.reset();
             state.cross_subscription_mode = ctx.metadata.contains_key(CROSS_SUBSCRIPTION);
             state.scope_group = ctx.metadata.get(SCOPE_GROUP).cloned();
+            // A role assignment list: the scope, role and principal it showed.
+            if state.view == ViewMode::RoleAssignments {
+                state.ra_scope =
+                    ctx.metadata
+                        .get(RA_SCOPE)
+                        .and_then(|s| match s.split_once(':')? {
+                            ("g", g) => Some(PolicyScope::Group(g.to_string())),
+                            ("s", s) => Some(PolicyScope::Subscription(s.to_string())),
+                            _ => None,
+                        });
+                state.ra_role = ctx.metadata.get(RA_ROLE).cloned();
+                state.ra_principal = ctx.metadata.get(RA_PRINCIPAL).cloned();
+            }
             // Back to the policy view keeps its scope (still in state).
             state.resource_query = ctx
                 .metadata
@@ -1755,6 +1819,21 @@ impl TuiApp {
         if let Some(id) = state.selected_id() {
             metadata.insert(SELECTED.to_string(), id);
         }
+        if state.view == ViewMode::RoleAssignments {
+            if let Some(scope) = &state.ra_scope {
+                let encoded = match scope {
+                    PolicyScope::Group(g) => format!("g:{g}"),
+                    PolicyScope::Subscription(s) => format!("s:{s}"),
+                };
+                metadata.insert(RA_SCOPE.to_string(), encoded);
+            }
+            if let Some(role) = &state.ra_role {
+                metadata.insert(RA_ROLE.to_string(), role.clone());
+            }
+            if let Some(principal) = &state.ra_principal {
+                metadata.insert(RA_PRINCIPAL.to_string(), principal.clone());
+            }
+        }
         let ctx = NavigationContext {
             view: state.view.clone(),
             subscription_id: state.selected_subscription.as_ref().map(|s| s.id.clone()),
@@ -1814,6 +1893,15 @@ impl TuiApp {
                 KeyCode::Char('n') => self.search_step(true),
                 KeyCode::Char('N') => self.search_step(false),
                 _ => {}
+            }
+            return Ok(true);
+        }
+        if self.state().view == ViewMode::RoleAssignments && key.code == KeyCode::Char('p') {
+            // Everything the row's principal (or group) has, everywhere.
+            if let Some(row) = self.state().selected_role_assignment() {
+                self.push_current_context(None);
+                self.state_mut().filter.clear();
+                self.core.open_access(&row.assignment.principal_id);
             }
             return Ok(true);
         }

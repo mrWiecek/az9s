@@ -214,8 +214,9 @@ Work items, in order:
       a scope (inherited, here, below) with principal names from Microsoft
       Graph; `:role` role definitions, custom vs built-in, with assignment
       counts; drill-downs role ↔ assignments ↔ permissions (v0.18.0).
-- [ ] Access next: a principal's access across the tenant (everything one user
-      or group can do), PIM eligible assignments, deny assignments.
+- [x] A principal's access across the tenant: `p` in `:ra` or `:access
+      <principal>`, its own assignments and its groups' (nested too) (v0.19.0).
+- [ ] Access next: PIM eligible assignments, deny assignments.
 - Policy *actions* (trigger a compliance scan, create or extend exemptions, start
   remediation) come in M4 on top of the action framework.
 

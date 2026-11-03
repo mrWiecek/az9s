@@ -12,6 +12,23 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-03
+
+### Added
+- **One principal's access across the tenant.** `p` on a row of `:ra`, or
+  `:access <name | sign-in name | app ID | object ID>`, lists every role a
+  user, group or app holds: its own assignments ("direct") and those of
+  every group it belongs to, nested groups included ("via *group*"). The
+  title says how many of each and how many groups it is a member of.
+  Groups come from Microsoft Graph; without access a notice says so and
+  the direct assignments still show. `Enter`, `d` and `p` work as in `:ra`
+  (`p` on a group row shows the group's own access).
+
+### Fixed
+- Going back (`Esc`) to a role assignment list restores the scope, role
+  and principal it showed, instead of keeping the filter of the list you
+  left.
+
 ## [0.18.0] - 2026-11-03
 
 ### Added
@@ -552,7 +569,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/mrWiecek/az9s/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/mrWiecek/az9s/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/mrWiecek/az9s/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/mrWiecek/az9s/compare/v0.15.0...v0.16.0
