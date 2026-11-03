@@ -10,6 +10,7 @@
 //! for a view the user already left can never overwrite a newer one.
 
 use crate::models::{Resource, ResourceGroup, Subscription};
+use crate::policy::{compliance_from_rows, Compliance, PolicyAssignment, PolicyScope};
 use crate::scope_tree::ScopeTree;
 use crate::timing;
 use az9s_azure::management_groups::ManagementGroupClient;
@@ -47,6 +48,12 @@ pub enum LoadRequest {
     },
     /// The tenants the user can access, with names.
     Tenants,
+    /// Every policy assignment in the tenant.
+    PolicyAssignments,
+    /// Compliance counts per assignment for resources in a scope.
+    PolicyCompliance {
+        scope: PolicyScope,
+    },
 }
 
 /// Which list a request fills. One request per kind is in flight at a time.
@@ -58,6 +65,8 @@ pub enum LoadKind {
     ScopeTree,
     ResourceDetail,
     Tenants,
+    PolicyAssignments,
+    PolicyCompliance,
 }
 
 impl LoadKind {
@@ -69,6 +78,8 @@ impl LoadKind {
             LoadKind::ScopeTree => "management group tree",
             LoadKind::ResourceDetail => "resource details",
             LoadKind::Tenants => "tenants",
+            LoadKind::PolicyAssignments => "policy assignments",
+            LoadKind::PolicyCompliance => "policy compliance",
         }
     }
 }
@@ -82,6 +93,8 @@ impl LoadRequest {
             LoadRequest::ScopeTree => LoadKind::ScopeTree,
             LoadRequest::ResourceDetail { .. } => LoadKind::ResourceDetail,
             LoadRequest::Tenants => LoadKind::Tenants,
+            LoadRequest::PolicyAssignments => LoadKind::PolicyAssignments,
+            LoadRequest::PolicyCompliance { .. } => LoadKind::PolicyCompliance,
         }
     }
 }
@@ -95,6 +108,8 @@ pub enum LoadedData {
     /// A resource's document (`Null` only as an empty placeholder).
     ResourceDetail(serde_json::Value),
     Tenants(Vec<crate::models::Tenant>),
+    PolicyAssignments(Vec<PolicyAssignment>),
+    PolicyCompliance(PolicyScope, HashMap<String, Compliance>),
 }
 
 /// Outcome of a fetch: the data (or an error), plus the subscriptions that
@@ -377,6 +392,15 @@ impl Fetcher for AzureFetcher {
                     failed_subscriptions: Vec::new(),
                     notice: None,
                 },
+                LoadRequest::PolicyAssignments | LoadRequest::PolicyCompliance { .. } => {
+                    FetchOutcome {
+                        data: Err("policy needs Resource Graph \
+                                   (not available with AZ9S_BACKEND=arm)"
+                            .into()),
+                        failed_subscriptions: Vec::new(),
+                        notice: None,
+                    }
+                }
             }
         }
         .boxed()
@@ -473,10 +497,22 @@ impl Fetcher for GraphFetcher {
         } = &request
         {
             let graph = self.graph.clone();
+            let cell = self.home_tenant.clone();
             let query = resource_graph::resource_detail_query(resource_id);
-            let scope = GraphScope::Subscriptions(vec![subscription_id.clone()]);
+            // Policy objects can sit on management groups (no subscription):
+            // look for them across the tenant.
+            let policy = resource_graph::is_policy_id(resource_id) || subscription_id.is_empty();
+            let subscription_id = subscription_id.clone();
             return async move {
                 let _t = timing::timer("azure.resource_detail");
+                let scope = if policy {
+                    match Self::resolve_tenant(&graph, &cell).await {
+                        Some(tenant) => GraphScope::ManagementGroup(tenant),
+                        None => GraphScope::Subscriptions(vec![subscription_id]),
+                    }
+                } else {
+                    GraphScope::Subscriptions(vec![subscription_id])
+                };
                 let mut first = None;
                 let result = graph
                     .query_pages(&query, &scope, |rows| {
@@ -499,6 +535,63 @@ impl Fetcher for GraphFetcher {
                 }
             }
             .boxed();
+        }
+        match &request {
+            LoadRequest::PolicyAssignments => {
+                let graph = self.graph.clone();
+                let cell = self.home_tenant.clone();
+                return async move {
+                    let _t = timing::timer("azure.policy_assignments");
+                    let data = async {
+                        let tenant = Self::resolve_tenant(&graph, &cell)
+                            .await
+                            .ok_or("could not determine the tenant from the Azure token")?;
+                        let rows = query_all(
+                            &graph,
+                            &resource_graph::policy_assignments_query(),
+                            &GraphScope::ManagementGroup(tenant),
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
+                        Ok::<_, String>(LoadedData::PolicyAssignments(
+                            rows.iter().filter_map(PolicyAssignment::from_row).collect(),
+                        ))
+                    }
+                    .await;
+                    FetchOutcome {
+                        data,
+                        failed_subscriptions: vec![],
+                        notice: None,
+                    }
+                }
+                .boxed();
+            }
+            LoadRequest::PolicyCompliance { scope } => {
+                let graph = self.graph.clone();
+                let scope = scope.clone();
+                return async move {
+                    let _t = timing::timer("azure.policy_compliance");
+                    let graph_scope = match &scope {
+                        PolicyScope::Group(g) => GraphScope::ManagementGroup(g.clone()),
+                        PolicyScope::Subscription(s) => GraphScope::Subscriptions(vec![s.clone()]),
+                    };
+                    let data = query_all(
+                        &graph,
+                        &resource_graph::policy_compliance_query(),
+                        &graph_scope,
+                    )
+                    .await
+                    .map(|rows| LoadedData::PolicyCompliance(scope, compliance_from_rows(&rows)))
+                    .map_err(|e| e.to_string());
+                    FetchOutcome {
+                        data,
+                        failed_subscriptions: vec![],
+                        notice: None,
+                    }
+                }
+                .boxed();
+            }
+            _ => {}
         }
         if request == LoadRequest::Tenants {
             let client = self.management_groups.clone();
@@ -566,6 +659,8 @@ impl Fetcher for GraphFetcher {
                 LoadRequest::Subscriptions
                 | LoadRequest::ScopeTree
                 | LoadRequest::Tenants
+                | LoadRequest::PolicyAssignments
+                | LoadRequest::PolicyCompliance { .. }
                 | LoadRequest::ResourceDetail { .. } => {
                     unreachable!("handled above")
                 }
@@ -647,7 +742,25 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::ScopeTree => LoadedData::ScopeTree(ScopeTree::default()),
         LoadKind::ResourceDetail => LoadedData::ResourceDetail(serde_json::Value::Null),
         LoadKind::Tenants => LoadedData::Tenants(vec![]),
+        LoadKind::PolicyAssignments => LoadedData::PolicyAssignments(vec![]),
+        LoadKind::PolicyCompliance => {
+            LoadedData::PolicyCompliance(PolicyScope::Group(String::new()), HashMap::new())
+        }
     }
+}
+
+/// Run a Resource Graph query and collect every row (for small results,
+/// such as policy assignments or per-assignment counts).
+async fn query_all(
+    graph: &ResourceGraphClient,
+    query: &str,
+    scope: &GraphScope,
+) -> az9s_azure::Result<Vec<serde_json::Value>> {
+    let mut all = Vec::new();
+    graph
+        .query_pages(query, scope, |rows| all.extend(rows))
+        .await?;
+    Ok(all)
 }
 
 /// Run a Resource Graph query and stream each page into `sink`, keeping only

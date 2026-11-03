@@ -39,6 +39,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("res", "resources"),
     ("type", "resource counts per type"),
     ("tag", "tags and how many resources carry them"),
+    ("policy", "policy assignments and compliance"),
     ("ctx", "switch tenant"),
 ];
 
@@ -63,6 +64,16 @@ pub fn complete(input: &str, state: &AppState) -> Completion {
                     let id = r.id?;
                     Some((r.name, r.domain.unwrap_or(id)))
                 }));
+                prefixed(word, options.into_iter())
+            } else if cmd == "policy" {
+                let mut options = vec![("all".to_string(), "whole tenant".to_string())];
+                options.extend(
+                    state
+                        .subscriptions
+                        .iter()
+                        .filter(|s| state.in_tenant(s))
+                        .map(|s| (s.name.clone(), "subscription".into())),
+                );
                 prefixed(word, options.into_iter())
             } else if !matches!(cmd.as_str(), "rg" | "res" | "type" | "tag") {
                 vec![]
@@ -309,7 +320,7 @@ mod tests {
             ["type", "tag", "ctx"],
             "starting with t, then containing t"
         );
-        assert_eq!(texts("").len(), 7);
+        assert_eq!(texts("").len(), 8);
         assert!(texts("xyz").is_empty());
     }
 

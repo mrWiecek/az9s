@@ -37,6 +37,7 @@ pub fn help_lines() -> Vec<Line<'static>> {
         heading("Commands (type : then the command, Enter runs it)"),
         l("  Suggestions appear as you type: commands, scopes, filter keys, and values"),
         l("  from what's loaded (type=, loc=, tag=key=…). Tab completes, ↑/↓ choose."),
+        l("  :policy [all|<sub>]                Policy assignments that apply there, with compliance"),
         l("  :ctx  [all|<tenant>]               Tenants: list them, or switch (name, domain or ID)"),
         l("  :mg                                Management group tree (the start view)"),
         l("  :sub                               Subscriptions"),
@@ -106,6 +107,13 @@ pub fn help_lines() -> Vec<Line<'static>> {
         l("            Esc again clears the highlights."),
         l("  VNets list their subnets: prefixes, delegations, NSG, route table, NAT gateway"),
         l(""),
+        heading("Policy (:policy)"),
+        l("  Assignments that apply at the scope: assigned there or inherited from"),
+        l("  management groups above it (\"from Platform\"). Each shows non-compliant out of"),
+        l("  evaluated resources, worst first; I = initiative, P = single policy."),
+        l("  :policy uses where you are (highlighted subscription or management group);"),
+        l("  :policy all the whole tenant. Enter opens the assignment (Overview, JSON)."),
+        l(""),
         heading("Tenants (:ctx)"),
         l("  :ctx        list the tenants you can use (● current); Enter switches"),
         l("  :ctx Contoso   switch by name, domain or ID;  :ctx all   back to the default"),
@@ -136,7 +144,21 @@ pub fn render_help(f: &mut Frame, area: Rect, scroll: &mut usize) {
 
     let lines = help_lines();
     let viewport = modal_area.height.saturating_sub(2) as usize;
-    *scroll = (*scroll).min(lines.len().saturating_sub(viewport));
+    // Long lines wrap, so count the rows they take, not the lines.
+    let inner_width = modal_area.width.saturating_sub(2).max(1) as usize;
+    let rows: usize = lines
+        .iter()
+        .map(|l| {
+            let rows = l.width().max(1).div_ceil(inner_width);
+            // Word wrapping can need one more row than the width suggests.
+            if rows > 1 {
+                rows + 1
+            } else {
+                rows
+            }
+        })
+        .sum();
+    *scroll = (*scroll).min(rows.saturating_sub(viewport));
     let help_paragraph = Paragraph::new(lines)
         .block(
             Block::default()

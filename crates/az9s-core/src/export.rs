@@ -63,6 +63,34 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
                 with_header("count\talias\ttype", lines),
             )
         }
+        ViewMode::PolicyAssignments => {
+            let rows = state.policy_rows();
+            let lines = rows.iter().map(|r| {
+                let (nc, total) = r.compliance.map_or((String::new(), String::new()), |c| {
+                    (c.non_compliant.to_string(), c.total.to_string())
+                });
+                tsv(&[
+                    &r.assignment.display_name,
+                    if r.assignment.is_initiative() {
+                        "initiative"
+                    } else {
+                        "policy"
+                    },
+                    &r.assignment.enforcement,
+                    &nc,
+                    &total,
+                    &r.origin_label,
+                    &r.assignment.id,
+                ])
+            });
+            (
+                count(rows.len(), "policy assignment"),
+                with_header(
+                    "assignment\tkind\tenforcement\tnon-compliant\tevaluated\tassigned\tid",
+                    lines,
+                ),
+            )
+        }
         ViewMode::TenantList => {
             let rows = state.tenant_rows();
             let lines = rows.iter().filter_map(|r| {

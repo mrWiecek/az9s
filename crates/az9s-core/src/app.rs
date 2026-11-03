@@ -207,6 +207,32 @@ impl App {
         }
     }
 
+    /// Cache key of the policy assignments for the current tenant.
+    fn policy_key(&self) -> String {
+        match &self.state.tenant {
+            Some(tenant) => format!("policy_assignments:{}", tenant.to_ascii_lowercase()),
+            None => "policy_assignments".into(),
+        }
+    }
+
+    /// Show the policy assignments that apply at `scope` (cached first),
+    /// and load fresh assignments and compliance counts in the background.
+    pub fn open_policy(&mut self, scope: crate::policy::PolicyScope) {
+        let state = &mut self.state;
+        state.view = ViewMode::PolicyAssignments;
+        state.list_state.reset();
+        state.policy_scope = Some(scope.clone());
+        if state
+            .policy_compliance
+            .as_ref()
+            .is_some_and(|(s, _)| *s != scope)
+        {
+            state.policy_compliance = None;
+        }
+        self.request(LoadRequest::PolicyAssignments);
+        self.request(LoadRequest::PolicyCompliance { scope });
+    }
+
     /// Cache key of the management group tree for the current tenant.
     fn scope_tree_key(&self) -> String {
         match &self.state.tenant {
@@ -287,6 +313,28 @@ impl App {
         let repo = self.cache.repository();
         let result = match request {
             LoadRequest::Subscriptions | LoadRequest::Tenants => return,
+            LoadRequest::PolicyAssignments => {
+                repo.document(&self.policy_key()).map(|doc| {
+                    match doc.and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at))) {
+                        Some((items, at)) => (LoadedData::PolicyAssignments(items), Some(at)),
+                        None => (LoadedData::PolicyAssignments(vec![]), None),
+                    }
+                })
+            }
+            LoadRequest::PolicyCompliance { scope } => repo
+                .document(&format!("policy_compliance:{}", scope.arm_id()))
+                .map(|doc| {
+                    match doc.and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at))) {
+                        Some((counts, at)) => (
+                            LoadedData::PolicyCompliance(scope.clone(), counts),
+                            Some(at),
+                        ),
+                        None => (
+                            LoadedData::PolicyCompliance(scope.clone(), Default::default()),
+                            None,
+                        ),
+                    }
+                }),
             LoadRequest::ScopeTree => repo.document(&tree_key).map(|doc| match doc {
                 Some((json, cached_at)) => match serde_json::from_str(&json) {
                     Ok(tree) => (LoadedData::ScopeTree(tree), Some(cached_at)),
@@ -349,6 +397,8 @@ impl App {
             LoadKind::ScopeTree => usize::from(self.state.scope_tree.is_some()),
             LoadKind::ResourceDetail => usize::from(self.state.resource_document.is_some()),
             LoadKind::Tenants => self.state.tenants.len(),
+            LoadKind::PolicyAssignments => self.state.policy_assignments.len(),
+            LoadKind::PolicyCompliance => usize::from(self.state.policy_compliance.is_some()),
         }
     }
 
@@ -495,6 +545,10 @@ impl App {
             LoadedData::Resources(items) => put(&mut self.state.resources, items, append),
             LoadedData::ScopeTree(tree) => self.state.set_scope_tree(tree),
             LoadedData::Tenants(tenants) => self.state.tenants = tenants,
+            LoadedData::PolicyAssignments(items) => self.state.policy_assignments = items,
+            LoadedData::PolicyCompliance(scope, counts) => {
+                self.state.policy_compliance = Some((scope, counts))
+            }
             LoadedData::ResourceDetail(doc) => {
                 self.state.resource_document = Some(doc).filter(|d| !d.is_null())
             }
@@ -525,6 +579,25 @@ impl App {
         let job = match request {
             // Tenant names are small and refreshed on each :ctx.
             LoadRequest::Tenants => return,
+            LoadRequest::PolicyAssignments => {
+                match serde_json::to_string(&self.state.policy_assignments) {
+                    Ok(value) => WriteJob::Document {
+                        key: self.policy_key(),
+                        value,
+                    },
+                    Err(_) => return,
+                }
+            }
+            LoadRequest::PolicyCompliance { scope } => match &self.state.policy_compliance {
+                Some((s, counts)) if s == scope => match serde_json::to_string(counts) {
+                    Ok(value) => WriteJob::Document {
+                        key: format!("policy_compliance:{}", scope.arm_id()),
+                        value,
+                    },
+                    Err(_) => return,
+                },
+                _ => return,
+            },
             LoadRequest::Subscriptions => WriteJob::Subscriptions(self.state.subscriptions.clone()),
             LoadRequest::ResourceGroups { subscription_ids } => WriteJob::ResourceGroups {
                 subscription_ids: scope(subscription_ids),
@@ -596,6 +669,7 @@ fn view_of(kind: LoadKind) -> ViewMode {
         LoadKind::ScopeTree => ViewMode::ManagementGroupTree,
         LoadKind::ResourceDetail => ViewMode::ResourceDetail,
         LoadKind::Tenants => ViewMode::TenantList,
+        LoadKind::PolicyAssignments | LoadKind::PolicyCompliance => ViewMode::PolicyAssignments,
     }
 }
 

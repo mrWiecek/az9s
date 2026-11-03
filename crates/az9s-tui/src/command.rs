@@ -34,6 +34,8 @@ pub enum CommandKind {
     ResourceTypes { scope: Scope, query: ResourceQuery },
     /// Tag key/value counts
     Tags { scope: Scope, query: ResourceQuery },
+    /// Policy assignments that apply at a scope, with compliance
+    Policy { scope: Scope },
     /// Tenants: `None` lists them; `Some("all")` or a tenant name/ID switches
     Context(Option<String>),
     /// A known command with bad arguments (the message says why)
@@ -81,6 +83,15 @@ impl Command {
         let cmd = parts[0].to_lowercase();
 
         match cmd.as_str() {
+            "policy" => Self {
+                kind: CommandKind::Policy {
+                    scope: match parts.get(1) {
+                        None => Scope::Current,
+                        Some(t) if t.eq_ignore_ascii_case("all") => Scope::All,
+                        Some(_) => Scope::Subscription(parts[1..].join(" ")),
+                    },
+                },
+            },
             "ctx" | "context" | "tenant" => Self {
                 kind: CommandKind::Context(
                     Some(parts[1..].join(" ")).filter(|arg| !arg.is_empty()),
@@ -136,7 +147,7 @@ impl Command {
         match &self.kind {
             CommandKind::Unknown(cmd) if !cmd.is_empty() => {
                 Some(format!(
-                    "Unknown command: '{}'\n\nAvailable commands:\n  :ctx [all|<tenant>] - Tenants\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type\n  :tag [all|<sub>] - Tags and how many resources carry them",
+                    "Unknown command: '{}'\n\nAvailable commands:\n  :policy [all|<sub>] - Policy assignments and compliance\n  :ctx [all|<tenant>] - Tenants\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type\n  :tag [all|<sub>] - Tags and how many resources carry them",
                     cmd
                 ))
             }
@@ -227,6 +238,21 @@ mod tests {
         assert_eq!(query.to_string(), "loc=westeurope tag=env:prod");
         let bad = Command::parse(":rg type=vm");
         assert!(bad.error_message().unwrap().contains("not resource groups"));
+    }
+
+    #[test]
+    fn test_parse_policy() {
+        assert_eq!(
+            Command::parse(":policy").kind,
+            CommandKind::Policy {
+                scope: Scope::Current
+            }
+        );
+        assert_eq!(
+            Command::parse(":policy all").kind,
+            CommandKind::Policy { scope: Scope::All }
+        );
+        assert!(!Command::parse(":policies").is_valid(), "singular only");
     }
 
     #[test]

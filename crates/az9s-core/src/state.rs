@@ -71,6 +71,18 @@ pub struct AppState {
     /// Tenants the user can access (names from Azure), once loaded
     pub tenants: Vec<crate::models::Tenant>,
 
+    /// Every policy assignment in the tenant, once loaded
+    pub policy_assignments: Vec<crate::policy::PolicyAssignment>,
+
+    /// Compliance counts per assignment (lowercase ID) for a scope
+    pub policy_compliance: Option<(
+        crate::policy::PolicyScope,
+        HashMap<String, crate::policy::Compliance>,
+    )>,
+
+    /// The scope the policy view shows
+    pub policy_scope: Option<crate::policy::PolicyScope>,
+
     /// The tenant az9s works in (`:ctx`); `None`: the Azure CLI's default
     /// login, with subscriptions of every tenant listed
     pub tenant: Option<String>,
@@ -177,6 +189,18 @@ pub struct TagCount {
     pub count: usize,
 }
 
+/// One row of the policy view (`:policy`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyRow {
+    pub assignment: crate::policy::PolicyAssignment,
+    /// Assigned at an ancestor rather than at this scope
+    pub inherited: bool,
+    /// "this scope" or "from <scope name>"
+    pub origin_label: String,
+    /// Resources evaluated / non-compliant, once loaded
+    pub compliance: Option<crate::policy::Compliance>,
+}
+
 /// One row of the tenant view (`:ctx`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TenantRow {
@@ -228,6 +252,8 @@ pub enum ViewMode {
     TagSummary,
     /// Tenants to switch to (`:ctx`)
     TenantList,
+    /// Policy assignments that apply at a scope (`:policy`)
+    PolicyAssignments,
     ResourceDetail,
     Logs,
 }
@@ -386,6 +412,7 @@ impl AppState {
             ViewMode::ResourceTypeSummary => self.type_summary().len(),
             ViewMode::TagSummary => self.tag_summary().len(),
             ViewMode::TenantList => self.tenant_rows().len(),
+            ViewMode::PolicyAssignments => self.policy_rows().len(),
             ViewMode::ManagementGroupTree => self.tree_rows().len(),
             _ => 0,
         }
@@ -524,6 +551,92 @@ impl AppState {
                         .is_some_and(|d| contains_ignore_ascii_case(d, &needle))
             })
             .collect()
+    }
+
+    /// Rows of the policy view: the assignments that apply at the policy
+    /// scope (assigned there or inherited), with compliance counts when
+    /// loaded, most non-compliant first. `/` narrows by name or origin.
+    pub fn policy_rows(&self) -> Vec<PolicyRow> {
+        use crate::policy::{applicable, Origin};
+        let Some(scope) = &self.policy_scope else {
+            return vec![];
+        };
+        let counts = self
+            .policy_compliance
+            .as_ref()
+            .filter(|(s, _)| s == scope)
+            .map(|(_, c)| c);
+        let mut rows: Vec<PolicyRow> =
+            applicable(&self.policy_assignments, scope, self.scope_tree.as_ref())
+                .into_iter()
+                .map(|(a, origin)| PolicyRow {
+                    origin_label: match &origin {
+                        Origin::Here => "this scope".into(),
+                        Origin::Inherited(scope) => format!("from {}", self.scope_label(scope)),
+                    },
+                    compliance: counts.and_then(|c| c.get(&a.id.to_ascii_lowercase()).copied()),
+                    assignment: a.clone(),
+                    inherited: origin != Origin::Here,
+                })
+                .collect();
+        rows.sort_by(|a, b| {
+            let nc = |r: &PolicyRow| r.compliance.map_or(0, |c| c.non_compliant);
+            nc(b).cmp(&nc(a)).then_with(|| {
+                a.assignment
+                    .display_name
+                    .to_lowercase()
+                    .cmp(&b.assignment.display_name.to_lowercase())
+            })
+        });
+        if self.filter.is_empty() {
+            return rows;
+        }
+        let needle = self.filter.to_ascii_lowercase();
+        rows.into_iter()
+            .filter(|r| {
+                contains_ignore_ascii_case(&r.assignment.display_name, &needle)
+                    || contains_ignore_ascii_case(&r.origin_label, &needle)
+            })
+            .collect()
+    }
+
+    /// The selected row of the policy view.
+    pub fn selected_policy_row(&self) -> Option<PolicyRow> {
+        if self.view != ViewMode::PolicyAssignments {
+            return None;
+        }
+        self.policy_rows().into_iter().nth(self.list_state.selected)
+    }
+
+    /// A readable name for a scope's ARM ID: a management group's or
+    /// subscription's display name when known.
+    pub fn scope_label(&self, arm_id: &str) -> String {
+        let lower = arm_id.to_ascii_lowercase();
+        if let Some(group) = lower.strip_prefix("/providers/microsoft.management/managementgroups/")
+        {
+            if let Some(name) = self.scope_tree.as_ref().and_then(|t| {
+                t.label_of(group).or_else(|| {
+                    t.groups
+                        .iter()
+                        .find(|g| g.name.eq_ignore_ascii_case(group))
+                        .map(|g| g.display_name.as_str())
+                })
+            }) {
+                return name.to_string();
+            }
+            return group.to_string();
+        }
+        if let Some(sub) = lower.strip_prefix("/subscriptions/") {
+            let id = sub.split('/').next().unwrap_or(sub);
+            if let Some(s) = self
+                .subscriptions
+                .iter()
+                .find(|s| s.id.eq_ignore_ascii_case(id))
+            {
+                return s.name.clone();
+            }
+        }
+        arm_id.to_string()
     }
 
     /// The selected row of the tenant view.
@@ -761,6 +874,7 @@ impl AppState {
                     crate::scope_tree::TreeRowKind::Unplaced => None,
                 }
             }
+            ViewMode::PolicyAssignments => self.selected_policy_row().map(|r| r.assignment.id),
             ViewMode::ResourceTypeSummary
             | ViewMode::TagSummary
             | ViewMode::TenantList

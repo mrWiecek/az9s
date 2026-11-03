@@ -100,6 +100,7 @@ fn draw_content(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         ViewMode::ResourceTypeSummary => draw_type_summary(f, area, app),
         ViewMode::TagSummary => draw_tag_summary(f, area, app),
         ViewMode::TenantList => draw_tenant_list(f, area, app),
+        ViewMode::PolicyAssignments => draw_policy(f, area, app),
         ViewMode::ResourceDetail => draw_resource_detail(f, area, app),
         ViewMode::Logs => draw_logs(f, area, app),
     }
@@ -489,6 +490,120 @@ fn draw_type_summary(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> 
         format!(
             "Resource Types ({}, {total} resources){scope} - Enter lists them",
             rows.len()
+        )
+    };
+    let list = SelectableList::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(theme().selection());
+    let mut widget_state = SelectableListState {
+        selected: list_state.selected - visible.start,
+        offset: 0,
+    };
+    list.render(area, f.buffer_mut(), &mut widget_state);
+    app.state_mut().list_state = list_state;
+    Ok(())
+}
+
+/// Draw the policy assignments that apply at a scope (`:policy`)
+fn draw_policy(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
+    let rows = app.state().policy_rows();
+    let state = app.state();
+    let t = theme();
+    let scope_name = state
+        .policy_scope
+        .as_ref()
+        .map(|s| state.scope_label(&s.arm_id()))
+        .unwrap_or_default();
+    let below = state.policy_scope.as_ref().map_or(0, |s| {
+        az9s_core::policy::assigned_below(&state.policy_assignments, s, state.scope_tree.as_ref())
+    });
+    let below_note = if below > 0 {
+        format!(", {below} more assigned below")
+    } else {
+        String::new()
+    };
+
+    if rows.is_empty() {
+        let message = if state.loading {
+            "Loading policy assignments and compliance…".to_string()
+        } else if !state.filter.is_empty() {
+            "No assignments match the current filter.\n\nPress Esc to clear the filter.".into()
+        } else {
+            format!(
+                "No policy assignments apply at {scope_name}{below_note}.\n\nOpen a child scope \
+                 (:policy <subscription>) or press r to refresh."
+            )
+        };
+        let content = Paragraph::new(message)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!("Policy · {scope_name}")),
+            )
+            .style(Style::default().fg(t.subtle))
+            .wrap(Wrap { trim: true });
+        f.render_widget(content, area);
+        return Ok(());
+    }
+
+    let compliance_width = 22;
+    let origin_width = 30;
+    let name_col = name_width(area.width, 3 + compliance_width + 14 + origin_width, 70);
+    let viewport = area.height.saturating_sub(2) as usize;
+    let mut list_state = state.list_state.clone();
+    let visible = list_state.visible_range(rows.len(), viewport);
+    let items: Vec<_> = rows[visible.clone()]
+        .iter()
+        .map(|r| {
+            let kind = if r.assignment.is_initiative() {
+                "I "
+            } else {
+                "P "
+            };
+            let (compliance, style) = match r.compliance {
+                Some(c) if c.non_compliant > 0 => (
+                    format!("{} / {} non-compliant", c.non_compliant, c.total),
+                    Style::default().fg(t.error).add_modifier(Modifier::BOLD),
+                ),
+                Some(c) => (
+                    format!("compliant ({})", c.total),
+                    Style::default().fg(t.ok),
+                ),
+                None if state.loading => ("…".into(), Style::default().fg(t.muted)),
+                None => ("no data".into(), Style::default().fg(t.muted)),
+            };
+            let enforcement = if r.assignment.is_enforced() {
+                ""
+            } else {
+                "not enforced"
+            };
+            list_item_spans(vec![
+                Span::styled(kind, Style::default().fg(t.accent)),
+                Span::styled(
+                    cell(&r.assignment.display_name, name_col),
+                    Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(cell(&compliance, compliance_width), style),
+                Span::styled(cell(enforcement, 14), Style::default().fg(t.highlight)),
+                Span::styled(
+                    cell(&r.origin_label, origin_width),
+                    Style::default().fg(if r.inherited { t.muted } else { t.special }),
+                ),
+            ])
+        })
+        .collect();
+
+    let title = if state.filter_mode {
+        format!(
+            "Policy · {scope_name} ({}) - Filter: {}_",
+            rows.len(),
+            state.filter
+        )
+    } else {
+        format!(
+            "Policy · {scope_name} ({} assignment{}{below_note}) · I initiative, P policy · Enter details",
+            rows.len(),
+            if rows.len() == 1 { "" } else { "s" }
         )
     };
     let list = SelectableList::new(items)
@@ -1198,6 +1313,18 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 (":", "Command"),
                 ("^P", "Go to"),
                 ("?", "Help"),
+                ("r", "Refresh"),
+                ("Esc", "Back"),
+                ("q", "Quit"),
+            ],
+            ViewMode::PolicyAssignments => vec![
+                ("↑↓/jk", "Navigate"),
+                ("Enter", "Details"),
+                ("/", "Filter"),
+                ("c", "Copy"),
+                ("y", "Copy ID"),
+                ("o", "Portal"),
+                (":", "Command"),
                 ("r", "Refresh"),
                 ("Esc", "Back"),
                 ("q", "Quit"),
