@@ -1,6 +1,7 @@
 pub mod app;
 pub mod cache;
 pub mod complete;
+pub mod config;
 pub mod detail;
 pub mod export;
 pub mod fuzzy;

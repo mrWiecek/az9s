@@ -158,3 +158,24 @@ async fn a_fetcher_without_management_groups_reports_it() {
         .await;
     assert!(matches!(outcome.data, Err(e) if e.contains("not configured")));
 }
+
+#[tokio::test]
+async fn config_can_start_on_subscriptions_and_reports_a_broken_file() {
+    use az9s_core::config::{Config, Loaded, StartView};
+    let (url, _) = serve_paths(|_, _| error(500, "unused")).await;
+    let mut app = app(&url, Cache::new(Path::new(":memory:")).unwrap());
+    app.apply_config(Loaded {
+        config: Config {
+            start: StartView::Sub,
+            ..Config::default()
+        },
+        path: None,
+        problem: Some("/x/config.toml: line 1: unknown field `colour`; using defaults".into()),
+    });
+    assert_eq!(app.state().view, ViewMode::SubscriptionList);
+    let notice = app.state().notice.clone().unwrap();
+    assert!(
+        notice.starts_with("Config /x/config.toml: line 1"),
+        "{notice}"
+    );
+}

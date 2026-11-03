@@ -456,3 +456,49 @@ async fn all_still_means_all_and_carries_over_to_the_next_command() {
         }
     );
 }
+
+#[tokio::test]
+async fn default_subscription_from_the_config_applies_without_context() {
+    let (mut app, azure) = setup();
+    {
+        let state = app.state_mut();
+        state.config.default_subscription = Some("dev".into());
+        state.view = ViewMode::ResourceList; // no highlighted subscription
+    }
+    type_command(&mut app, "rg").await;
+    assert_eq!(last_request(&azure).await, rg_request(&["id-dev"]));
+    // `all` still means all.
+    type_command(&mut app, "rg all").await;
+    assert_eq!(
+        last_request(&azure).await,
+        rg_request(&["id-prod", "id-dev"])
+    );
+}
+
+#[tokio::test]
+async fn auto_refresh_reloads_the_view_when_idle_and_due() {
+    let (mut app, azure) = setup();
+    let mut loads = app.take_load_receiver().unwrap();
+    press(&mut app, KeyCode::Enter).await; // prod's resource groups
+    app.apply_load(loads.recv().await.unwrap());
+    let before = azure.requests.lock().unwrap().len();
+    let now = std::time::Instant::now();
+
+    // Off by default.
+    app.tick_at(now + Duration::from_secs(3600)).await.unwrap();
+    assert_eq!(azure.requests.lock().unwrap().len(), before);
+
+    app.state_mut().config.refresh_interval = 60;
+    app.tick_at(now + Duration::from_secs(30)).await.unwrap();
+    assert_eq!(azure.requests.lock().unwrap().len(), before, "not due yet");
+
+    // Not while typing a command.
+    press(&mut app, KeyCode::Char(':')).await;
+    app.tick_at(now + Duration::from_secs(61)).await.unwrap();
+    assert_eq!(azure.requests.lock().unwrap().len(), before, "busy");
+    press(&mut app, KeyCode::Esc).await;
+
+    app.tick_at(now + Duration::from_secs(61)).await.unwrap();
+    assert_eq!(last_request(&azure).await, rg_request(&["id-prod"]));
+    assert_eq!(azure.requests.lock().unwrap().len(), before + 1);
+}

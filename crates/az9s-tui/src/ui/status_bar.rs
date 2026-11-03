@@ -29,6 +29,24 @@ impl StatusBar {
             spans.push(Span::raw("| "));
         }
 
+        // Settings worth knowing about at a glance
+        if state.config.read_only {
+            spans.push(Span::styled(
+                "RO ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw("| "));
+        }
+        if state.config.refresh_interval > 0 {
+            spans.push(Span::styled(
+                format!("auto ⟳ {}s ", state.config.refresh_interval),
+                Style::default().fg(Color::Cyan),
+            ));
+            spans.push(Span::raw("| "));
+        }
+
         // Item count in current view
         let count = state.current_list_len();
         if count > 0 {
@@ -194,6 +212,21 @@ mod tests {
 
         assert!(text.contains("Loading"));
         assert!(text.contains(SPINNER[0]));
+    }
+
+    #[test]
+    fn shows_read_only_and_auto_refresh() {
+        let mut state = AppState::default();
+        let text = format!("{:?}", StatusBar::render(&state));
+        assert!(text.contains("RO "), "read-only is the default");
+        assert!(!text.contains("auto"));
+        state.config.read_only = false;
+        state.config.refresh_interval = 60;
+        let text = format!("{:?}", StatusBar::render(&state));
+        assert!(
+            !text.contains("RO ") && text.contains("auto ⟳ 60s"),
+            "{text}"
+        );
     }
 
     #[test]

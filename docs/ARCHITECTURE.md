@@ -105,6 +105,11 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   in one memoized pass; `AppState::type_summary` counts types and
   `AppState::tag_summary` counts tag key/value pairs (each memoized per list
   and query).
+- `config.rs`: the optional config file (`Config::path`, `Config::load`,
+  `TEMPLATE` for `--init-config`). `App::start` applies it: the start view,
+  and `AppState::config` for the default subscription, auto-refresh
+  (`TuiApp::tick_at`) and read-only mode. Invalid files fall back to the
+  defaults with a status-bar notice.
 - `fuzzy.rs`: fzf-style fuzzy matching (in-order characters; contiguous
   runs, word starts and early matches score higher; several words must all
   match).

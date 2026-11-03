@@ -173,8 +173,10 @@ Work items, in order:
       `tag=env:prod`, and a resource-type summary view (`:type`).
 - [x] A real command palette with fuzzy search over commands and resources, and
       autocomplete for `:` commands.
-- [ ] Config file `~/.config/az9s/config.toml` for default subscription, refresh
-      interval, theme, and read-only mode.
+- [x] Config file `~/.config/az9s/config.toml` for default subscription, refresh
+      interval, start view and read-only mode (`az9s --init-config` writes one).
+- [ ] Themes (a `theme` setting): colours are hard-coded today; needs one
+      palette used by every view first.
 - [x] **Scope tree:** tenant root → management groups → subscriptions → resource
       groups, with `:mg` to jump. This becomes the top-level navigation (needed by M3),
       and az9s opens at the tenant root management group by default.

@@ -107,6 +107,24 @@ crates/
 
 How it fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## Configuration
+
+Optional. `az9s --init-config` writes a commented file with the defaults;
+`az9s --help` shows where it lives (Linux/WSL: `~/.config/az9s/config.toml`;
+macOS: `~/Library/Application Support/az9s/config.toml`; Windows:
+`%APPDATA%\az9s\config\config.toml`). `--config <path>` or `AZ9S_CONFIG`
+use another file.
+
+```toml
+start = "mg"                               # first view: "mg" (tree) or "sub"
+default_subscription = "prod-connectivity" # for :rg/:res/:type/:tag without context
+refresh_interval = 120                     # auto-refresh every N s (min 30); 0 = off
+read_only = true                           # status bar shows RO; actions (M4) disabled
+```
+
+A mistake in the file (unknown key, wrong type) doesn't stop az9s: it starts
+with the defaults and the status bar names the line and the problem.
+
 ## Troubleshooting
 
 | Symptom | Try |

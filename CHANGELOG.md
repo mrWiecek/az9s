@@ -12,6 +12,26 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-03
+
+### Added
+- **Config file**, optional: `config.toml` in the config directory
+  (`~/.config/az9s/` on Linux and WSL; `az9s --help` shows the path), or
+  `--config <path>` / `AZ9S_CONFIG`. `az9s --init-config` writes a
+  commented one with the defaults (it never overwrites). Settings:
+  - `start = "mg" | "sub"`: the first view.
+  - `default_subscription`: what `:rg`, `:res`, `:type` and `:tag` use when
+    nothing is highlighted or open (otherwise all subscriptions).
+  - `refresh_interval`: reload the current view every N seconds (at least
+    30; 0, the default, is off). It waits while you type, search, use the
+    palette or read help. The status bar shows `auto ⟳ Ns`.
+  - `read_only` (default `true`): the status bar shows `RO`; actions that
+    change Azure (M4) will check it.
+
+  A broken file never stops az9s: it starts with the defaults and the
+  status bar says which line is wrong and why (e.g. `line 2: unknown field
+  refresh_intervall, expected one of …`).
+
 ## [0.8.0] - 2026-11-03
 
 ### Added
@@ -365,7 +385,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/mrWiecek/az9s/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/mrWiecek/az9s/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/mrWiecek/az9s/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mrWiecek/az9s/compare/v0.5.0...v0.6.0
