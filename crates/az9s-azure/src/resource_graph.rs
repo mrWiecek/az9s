@@ -566,6 +566,44 @@ pub fn policy_compliance_query() -> String {
         .to_string()
 }
 
+/// KQL for individual policy states (one row per resource, assignment and
+/// policy definition), filtered by `filter` (a KQL `where` condition).
+fn policy_states_query(filter: &str) -> String {
+    format!(
+        "policyresources \
+         | where type =~ 'microsoft.policyinsights/policystates' \
+         | where {filter} \
+         | project resourceId = tostring(properties.resourceId), \
+             resourceType = tostring(properties.resourceType), \
+             resourceGroup = tostring(properties.resourceGroup), \
+             subscriptionId = tostring(properties.subscriptionId), \
+             location = tostring(properties.resourceLocation), \
+             assignmentId = tostring(properties.policyAssignmentId), \
+             definition = coalesce(tostring(properties.policyDefinitionReferenceId), \
+                 tostring(properties.policyDefinitionName)), \
+             state = tostring(properties.complianceState), \
+             timestamp = tostring(properties.timestamp) \
+         | order by resourceId asc"
+    )
+}
+
+/// KQL listing the non-compliant resources of one policy assignment.
+pub fn non_compliant_states_query(assignment_id: &str) -> String {
+    policy_states_query(&format!(
+        "tolower(tostring(properties.policyAssignmentId)) == {} \
+         and tostring(properties.complianceState) =~ 'NonCompliant'",
+        kql_string(&assignment_id.to_ascii_lowercase())
+    ))
+}
+
+/// KQL listing every policy state of one resource (all assignments).
+pub fn resource_policy_states_query(resource_id: &str) -> String {
+    policy_states_query(&format!(
+        "tolower(tostring(properties.resourceId)) == {}",
+        kql_string(&resource_id.to_ascii_lowercase())
+    ))
+}
+
 fn str_field(row: &Value, key: &str) -> String {
     row.get(key)
         .and_then(Value::as_str)
@@ -633,6 +671,22 @@ mod tests {
     use super::*;
     use crate::testing::{error, ok, serve, serve_counting, serve_sequence, Reply, StaticToken};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn policy_state_queries_filter_by_assignment_or_resource() {
+        let q = non_compliant_states_query("/X/policyAssignments/A1");
+        assert!(
+            q.contains("== '/x/policyassignments/a1'"),
+            "lowercased: {q}"
+        );
+        assert!(q.contains("=~ 'NonCompliant'"));
+        let q = resource_policy_states_query("/subscriptions/S/rg/x/it's");
+        assert!(
+            q.contains(r"== '/subscriptions/s/rg/x/it\'s'"),
+            "escaped: {q}"
+        );
+        assert!(q.contains("project resourceId"));
+    }
 
     #[test]
     fn policy_objects_are_read_from_policyresources() {

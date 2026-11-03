@@ -171,8 +171,8 @@ async fn detail_opens_from_the_list_row_then_shows_the_full_document() {
         "{text}"
     );
 
-    // JSON tab scrolls; G reaches the end, g the top.
-    press(&mut app, KeyCode::Tab).await;
+    // JSON tab (4) scrolls; G reaches the end, g the top.
+    press(&mut app, KeyCode::Char('4')).await;
     assert_eq!(app.state().detail_tab, DetailTab::Json);
     let top = screen(&mut terminal, &mut app);
     assert!(top.contains("\"hardwareProfile\""), "{top}");
@@ -262,7 +262,7 @@ async fn c_copies_the_current_view() {
     // In the detail view, JSON tab: the whole document.
     press(&mut app, KeyCode::Enter).await;
     app.apply_load(loads.recv().await.unwrap());
-    press(&mut app, KeyCode::Char('3')).await;
+    press(&mut app, KeyCode::Char('4')).await;
     press(&mut app, KeyCode::Char('c')).await;
 
     let calls = recorder.0.lock().unwrap().clone();
@@ -295,7 +295,7 @@ async fn slash_searches_the_detail_view_like_vim() {
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
     press(&mut app, KeyCode::Enter).await;
     app.apply_load(loads.recv().await.unwrap());
-    press(&mut app, KeyCode::Char('3')).await; // JSON
+    press(&mut app, KeyCode::Char('4')).await; // JSON
     screen(&mut terminal, &mut app);
     let line_of = |app: &TuiApp| app.state().detail_match.unwrap().0;
 
@@ -346,7 +346,7 @@ async fn esc_while_typing_cancels_and_restores_the_view() {
     let mut loads = app.take_load_receiver().unwrap();
     press(&mut app, KeyCode::Enter).await;
     app.apply_load(loads.recv().await.unwrap());
-    press(&mut app, KeyCode::Char('3')).await;
+    press(&mut app, KeyCode::Char('4')).await;
 
     press(&mut app, KeyCode::Char('/')).await;
     type_text(&mut app, "nothing-like-this").await;

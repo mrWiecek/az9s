@@ -233,6 +233,55 @@ impl App {
         self.request(LoadRequest::PolicyCompliance { scope });
     }
 
+    /// Show the resources that are non-compliant with `assignment` in the
+    /// policy view's scope, loaded fresh (policy states change often and are
+    /// not cached).
+    pub fn open_non_compliant(&mut self, assignment: crate::policy::PolicyAssignment) {
+        let Some(scope) = self.state.policy_scope.clone() else {
+            return;
+        };
+        let state = &mut self.state;
+        let same = state
+            .policy_states_assignment
+            .as_ref()
+            .is_some_and(|a| a.id.eq_ignore_ascii_case(&assignment.id));
+        if !same {
+            state.policy_states.clear();
+        }
+        let assignment_id = assignment.id.clone();
+        state.policy_states_assignment = Some(assignment);
+        state.view = ViewMode::PolicyNonCompliant;
+        state.list_state.reset();
+        self.request(LoadRequest::PolicyStates {
+            scope,
+            assignment_id,
+        });
+    }
+
+    /// Load the policy states of the resource in the detail view (for its
+    /// Policy tab), unless they are loaded already or `force`.
+    pub fn load_resource_policy(&mut self, force: bool) {
+        let Some(resource) = &self.state.selected_resource_detail else {
+            return;
+        };
+        let loaded = self
+            .state
+            .resource_policy
+            .as_ref()
+            .is_some_and(|(id, _)| id.eq_ignore_ascii_case(&resource.id));
+        if loaded && !force {
+            return;
+        }
+        if !loaded {
+            self.state.resource_policy = None;
+        }
+        let request = LoadRequest::ResourcePolicy {
+            resource_id: resource.id.clone(),
+            subscription_id: resource.subscription_id.clone(),
+        };
+        self.request(request);
+    }
+
     /// Cache key of the management group tree for the current tenant.
     fn scope_tree_key(&self) -> String {
         match &self.state.tenant {
@@ -319,7 +368,10 @@ impl App {
         let tree_key = self.scope_tree_key();
         let repo = self.cache.repository();
         let result = match request {
-            LoadRequest::Subscriptions | LoadRequest::Tenants => return,
+            LoadRequest::Subscriptions
+            | LoadRequest::Tenants
+            | LoadRequest::PolicyStates { .. }
+            | LoadRequest::ResourcePolicy { .. } => return,
             LoadRequest::PolicyAssignments => {
                 repo.document(&self.policy_key()).map(|doc| {
                     match doc.and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at))) {
@@ -406,6 +458,8 @@ impl App {
             LoadKind::Tenants => self.state.tenants.len(),
             LoadKind::PolicyAssignments => self.state.policy_assignments.len(),
             LoadKind::PolicyCompliance => usize::from(self.state.policy_compliance.is_some()),
+            LoadKind::PolicyStates => self.state.policy_states.len(),
+            LoadKind::ResourcePolicy => usize::from(self.state.resource_policy.is_some()),
         }
     }
 
@@ -513,6 +567,8 @@ impl App {
                 // enough. Otherwise the list is empty or incomplete: error.
                 if kind == LoadKind::ScopeTree && !pending.staged {
                     self.fall_back_to_subscriptions(&e);
+                } else if kind == LoadKind::ResourcePolicy && !pending.staged {
+                    self.state.notice = Some(format!("Policy states unavailable: {e}"));
                 } else if kind == LoadKind::ResourceDetail && !pending.staged {
                     // The view still shows what the list knew: no popup.
                     self.state.notice = Some(format!("Details unavailable: {e}"));
@@ -559,6 +615,12 @@ impl App {
             LoadedData::ResourceDetail(doc) => {
                 self.state.resource_document = Some(doc).filter(|d| !d.is_null())
             }
+            LoadedData::PolicyStates(items) => self.state.policy_states = items,
+            LoadedData::ResourcePolicy(id, states) => {
+                if !id.is_empty() {
+                    self.state.resource_policy = Some((id, states))
+                }
+            }
         }
     }
 
@@ -584,8 +646,11 @@ impl App {
         };
         let _t = timing::timer("cache.queue_write");
         let job = match request {
-            // Tenant names are small and refreshed on each :ctx.
-            LoadRequest::Tenants => return,
+            // Tenant names are small and refreshed on each :ctx; policy
+            // states change often and are always loaded fresh.
+            LoadRequest::Tenants
+            | LoadRequest::PolicyStates { .. }
+            | LoadRequest::ResourcePolicy { .. } => return,
             LoadRequest::PolicyAssignments => {
                 match serde_json::to_string(&self.state.policy_assignments) {
                     Ok(value) => WriteJob::Document {
@@ -674,7 +739,8 @@ fn view_of(kind: LoadKind) -> ViewMode {
         LoadKind::ResourceGroups => ViewMode::ResourceGroupList,
         LoadKind::Resources => ViewMode::ResourceList,
         LoadKind::ScopeTree => ViewMode::ManagementGroupTree,
-        LoadKind::ResourceDetail => ViewMode::ResourceDetail,
+        LoadKind::ResourceDetail | LoadKind::ResourcePolicy => ViewMode::ResourceDetail,
+        LoadKind::PolicyStates => ViewMode::PolicyNonCompliant,
         LoadKind::Tenants => ViewMode::TenantList,
         LoadKind::PolicyAssignments | LoadKind::PolicyCompliance => ViewMode::PolicyAssignments,
     }

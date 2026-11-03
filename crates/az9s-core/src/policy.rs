@@ -117,6 +117,92 @@ pub fn compliance_from_rows(rows: &[Value]) -> HashMap<String, Compliance> {
         .collect()
 }
 
+/// One policy evaluation: a resource against one policy of an assignment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyState {
+    pub resource_id: String,
+    pub resource_type: String,
+    pub resource_group: String,
+    pub subscription_id: String,
+    pub location: String,
+    pub assignment_id: String,
+    /// The policy within the assignment (its reference ID in an initiative,
+    /// or the definition's name).
+    pub definition: String,
+    /// "Compliant", "NonCompliant", "Exempt", "Unknown", …
+    pub state: String,
+    pub timestamp: String,
+}
+
+impl PolicyState {
+    pub fn from_row(row: &Value) -> Option<Self> {
+        let text = |key: &str| {
+            row.get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let resource_id = text("resourceId");
+        if resource_id.is_empty() {
+            return None;
+        }
+        Some(Self {
+            resource_id,
+            resource_type: text("resourceType"),
+            resource_group: text("resourceGroup"),
+            subscription_id: text("subscriptionId"),
+            location: text("location"),
+            assignment_id: text("assignmentId"),
+            definition: text("definition"),
+            state: text("state"),
+            timestamp: text("timestamp"),
+        })
+    }
+
+    pub fn is_non_compliant(&self) -> bool {
+        self.state.eq_ignore_ascii_case("NonCompliant")
+    }
+
+    /// The resource's name: the last segment of its ID.
+    pub fn resource_name(&self) -> &str {
+        self.resource_id
+            .rsplit('/')
+            .next()
+            .unwrap_or(&self.resource_id)
+    }
+}
+
+/// A non-compliant resource and the policies it fails (one assignment).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NonCompliantResource {
+    pub state: PolicyState,
+    /// Failing policies of the assignment, sorted, without duplicates.
+    pub policies: Vec<String>,
+}
+
+/// One row per resource from an assignment's non-compliant states (several
+/// rows per resource when an initiative has several failing policies).
+pub fn group_by_resource(states: &[PolicyState]) -> Vec<NonCompliantResource> {
+    let mut by_id: HashMap<String, NonCompliantResource> = HashMap::new();
+    for s in states.iter().filter(|s| s.is_non_compliant()) {
+        let entry = by_id
+            .entry(s.resource_id.to_ascii_lowercase())
+            .or_insert_with(|| NonCompliantResource {
+                state: s.clone(),
+                policies: vec![],
+            });
+        if !s.definition.is_empty() && !entry.policies.contains(&s.definition) {
+            entry.policies.push(s.definition.clone());
+        }
+    }
+    let mut rows: Vec<NonCompliantResource> = by_id.into_values().collect();
+    for r in &mut rows {
+        r.policies.sort();
+    }
+    rows.sort_by_cached_key(|r| r.state.resource_name().to_lowercase());
+    rows
+}
+
 /// How an assignment comes to apply at a scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Origin {
@@ -353,6 +439,49 @@ mod tests {
         let all = assignments();
         let found = applicable(&all, &PolicyScope::Subscription("sub-c".into()), None);
         assert_eq!(names(&found), ["on-sub-c"]);
+    }
+
+    #[test]
+    fn non_compliant_states_group_per_resource() {
+        let state = |id: &str, def: &str, st: &str| PolicyState {
+            resource_id: id.into(),
+            resource_type: "microsoft.storage/storageaccounts".into(),
+            resource_group: "rg".into(),
+            subscription_id: "s".into(),
+            location: "westeurope".into(),
+            assignment_id: "/a".into(),
+            definition: def.into(),
+            state: st.into(),
+            timestamp: String::new(),
+        };
+        let rows = group_by_resource(&[
+            state("/x/storageAccounts/zeta", "https-only", "NonCompliant"),
+            state("/x/storageAccounts/alpha", "tls12", "NonCompliant"),
+            state("/X/storageAccounts/ZETA", "no-public-blob", "NonCompliant"),
+            state("/x/storageAccounts/zeta", "https-only", "NonCompliant"),
+            state("/x/storageAccounts/fine", "tls12", "Compliant"),
+        ]);
+        let summary: Vec<(&str, Vec<String>)> = rows
+            .iter()
+            .map(|r| (r.state.resource_name(), r.policies.clone()))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("alpha", vec!["tls12".to_string()]),
+                (
+                    "zeta",
+                    vec!["https-only".to_string(), "no-public-blob".to_string()]
+                ),
+            ]
+        );
+        let parsed = PolicyState::from_row(&json!({
+            "resourceId": "/x/vaults/kv", "state": "NonCompliant", "definition": "d"
+        }))
+        .unwrap();
+        assert!(parsed.is_non_compliant());
+        assert_eq!(parsed.resource_name(), "kv");
+        assert!(PolicyState::from_row(&json!({"state": "x"})).is_none());
     }
 
     #[test]

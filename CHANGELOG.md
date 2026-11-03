@@ -12,6 +12,19 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-03
+
+### Added
+- **Policy drill-down.** In `:policy`, `Enter` on an assignment lists the
+  resources that are non-compliant with it in that scope, one row per
+  resource with the failing policies (for an initiative: "+N more"). `/`
+  filters by name, type, resource group or policy; `c` copies the list.
+  `Enter` on a resource opens its detail view. `d` opens the assignment
+  itself (what `Enter` did before).
+- **Policy tab in the detail view** (`3`; JSON moved to `4`): every policy
+  that evaluates the resource, with its state, non-compliant first. Loaded
+  when you open the tab, for any resource.
+
 ## [0.12.1] - 2026-11-03
 
 ### Fixed
@@ -452,7 +465,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/mrWiecek/az9s/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/mrWiecek/az9s/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/mrWiecek/az9s/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/mrWiecek/az9s/compare/v0.10.0...v0.11.0

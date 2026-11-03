@@ -91,6 +91,26 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
                 ),
             )
         }
+        ViewMode::PolicyNonCompliant => {
+            let rows = state.non_compliant_rows();
+            let lines = rows.iter().map(|r| {
+                tsv(&[
+                    r.state.resource_name(),
+                    &r.state.resource_type,
+                    &r.state.resource_group,
+                    &r.state.subscription_id,
+                    &r.policies.join(", "),
+                    &r.state.resource_id,
+                ])
+            });
+            (
+                count(rows.len(), "non-compliant resource"),
+                with_header(
+                    "name\ttype\tresource group\tsubscription\tfailing policies\tid",
+                    lines,
+                ),
+            )
+        }
         ViewMode::TenantList => {
             let rows = state.tenant_rows();
             let lines = rows.iter().filter_map(|r| {
@@ -153,6 +173,16 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
                     let tags = detail::tags(doc, resource);
                     let lines = tags.iter().map(|(k, v)| tsv(&[k, v])).collect();
                     (count(tags.len(), "tag"), lines)
+                }
+                DetailTab::Policy => {
+                    let rows = state.detail_policy_states()?;
+                    let lines = rows
+                        .iter()
+                        .map(|(name, s)| tsv(&[&s.state, name, &s.definition, &s.assignment_id]));
+                    (
+                        count(rows.len(), "policy state"),
+                        with_header("state\tassignment\tpolicy\tassignment id", lines),
+                    )
                 }
                 DetailTab::Json => {
                     // Only the real document: the placeholder is not worth copying.

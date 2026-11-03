@@ -10,7 +10,7 @@
 //! for a view the user already left can never overwrite a newer one.
 
 use crate::models::{Resource, ResourceGroup, Subscription};
-use crate::policy::{compliance_from_rows, Compliance, PolicyAssignment, PolicyScope};
+use crate::policy::{compliance_from_rows, Compliance, PolicyAssignment, PolicyScope, PolicyState};
 use crate::scope_tree::ScopeTree;
 use crate::timing;
 use az9s_azure::management_groups::ManagementGroupClient;
@@ -54,6 +54,17 @@ pub enum LoadRequest {
     PolicyCompliance {
         scope: PolicyScope,
     },
+    /// Non-compliant policy states of one assignment, for resources in a scope.
+    PolicyStates {
+        scope: PolicyScope,
+        assignment_id: String,
+    },
+    /// Every policy state of one resource (an empty subscription searches
+    /// the whole tenant).
+    ResourcePolicy {
+        resource_id: String,
+        subscription_id: String,
+    },
 }
 
 /// Which list a request fills. One request per kind is in flight at a time.
@@ -67,6 +78,8 @@ pub enum LoadKind {
     Tenants,
     PolicyAssignments,
     PolicyCompliance,
+    PolicyStates,
+    ResourcePolicy,
 }
 
 impl LoadKind {
@@ -80,6 +93,8 @@ impl LoadKind {
             LoadKind::Tenants => "tenants",
             LoadKind::PolicyAssignments => "policy assignments",
             LoadKind::PolicyCompliance => "policy compliance",
+            LoadKind::PolicyStates => "non-compliant resources",
+            LoadKind::ResourcePolicy => "resource policy states",
         }
     }
 }
@@ -95,6 +110,8 @@ impl LoadRequest {
             LoadRequest::Tenants => LoadKind::Tenants,
             LoadRequest::PolicyAssignments => LoadKind::PolicyAssignments,
             LoadRequest::PolicyCompliance { .. } => LoadKind::PolicyCompliance,
+            LoadRequest::PolicyStates { .. } => LoadKind::PolicyStates,
+            LoadRequest::ResourcePolicy { .. } => LoadKind::ResourcePolicy,
         }
     }
 }
@@ -110,6 +127,9 @@ pub enum LoadedData {
     Tenants(Vec<crate::models::Tenant>),
     PolicyAssignments(Vec<PolicyAssignment>),
     PolicyCompliance(PolicyScope, HashMap<String, Compliance>),
+    PolicyStates(Vec<PolicyState>),
+    /// The resource ID and its policy states.
+    ResourcePolicy(String, Vec<PolicyState>),
 }
 
 /// Outcome of a fetch: the data (or an error), plus the subscriptions that
@@ -392,15 +412,16 @@ impl Fetcher for AzureFetcher {
                     failed_subscriptions: Vec::new(),
                     notice: None,
                 },
-                LoadRequest::PolicyAssignments | LoadRequest::PolicyCompliance { .. } => {
-                    FetchOutcome {
-                        data: Err("policy needs Resource Graph \
+                LoadRequest::PolicyAssignments
+                | LoadRequest::PolicyCompliance { .. }
+                | LoadRequest::PolicyStates { .. }
+                | LoadRequest::ResourcePolicy { .. } => FetchOutcome {
+                    data: Err("policy needs Resource Graph \
                                    (not available with AZ9S_BACKEND=arm)"
-                            .into()),
-                        failed_subscriptions: Vec::new(),
-                        notice: None,
-                    }
-                }
+                        .into()),
+                    failed_subscriptions: Vec::new(),
+                    notice: None,
+                },
             }
         }
         .boxed()
@@ -591,6 +612,71 @@ impl Fetcher for GraphFetcher {
                 }
                 .boxed();
             }
+            LoadRequest::PolicyStates {
+                scope,
+                assignment_id,
+            } => {
+                let graph = self.graph.clone();
+                let graph_scope = match scope {
+                    PolicyScope::Group(g) => GraphScope::ManagementGroup(g.clone()),
+                    PolicyScope::Subscription(s) => GraphScope::Subscriptions(vec![s.clone()]),
+                };
+                let query = resource_graph::non_compliant_states_query(assignment_id);
+                return async move {
+                    let _t = timing::timer("azure.policy_states");
+                    let data = query_all(&graph, &query, &graph_scope)
+                        .await
+                        .map(|rows| {
+                            LoadedData::PolicyStates(
+                                rows.iter().filter_map(PolicyState::from_row).collect(),
+                            )
+                        })
+                        .map_err(|e| e.to_string());
+                    FetchOutcome {
+                        data,
+                        failed_subscriptions: vec![],
+                        notice: None,
+                    }
+                }
+                .boxed();
+            }
+            LoadRequest::ResourcePolicy {
+                resource_id,
+                subscription_id,
+            } => {
+                let graph = self.graph.clone();
+                let cell = self.home_tenant.clone();
+                let query = resource_graph::resource_policy_states_query(resource_id);
+                let resource_id = resource_id.clone();
+                let subscription_id = subscription_id.clone();
+                return async move {
+                    let _t = timing::timer("azure.resource_policy");
+                    let data = async {
+                        let scope = if subscription_id.is_empty() {
+                            let tenant = Self::resolve_tenant(&graph, &cell)
+                                .await
+                                .ok_or("could not determine the tenant from the Azure token")?;
+                            GraphScope::ManagementGroup(tenant)
+                        } else {
+                            GraphScope::Subscriptions(vec![subscription_id])
+                        };
+                        let rows = query_all(&graph, &query, &scope)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        Ok::<_, String>(LoadedData::ResourcePolicy(
+                            resource_id,
+                            rows.iter().filter_map(PolicyState::from_row).collect(),
+                        ))
+                    }
+                    .await;
+                    FetchOutcome {
+                        data,
+                        failed_subscriptions: vec![],
+                        notice: None,
+                    }
+                }
+                .boxed();
+            }
             _ => {}
         }
         if request == LoadRequest::Tenants {
@@ -661,6 +747,8 @@ impl Fetcher for GraphFetcher {
                 | LoadRequest::Tenants
                 | LoadRequest::PolicyAssignments
                 | LoadRequest::PolicyCompliance { .. }
+                | LoadRequest::PolicyStates { .. }
+                | LoadRequest::ResourcePolicy { .. }
                 | LoadRequest::ResourceDetail { .. } => {
                     unreachable!("handled above")
                 }
@@ -746,6 +834,8 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::PolicyCompliance => {
             LoadedData::PolicyCompliance(PolicyScope::Group(String::new()), HashMap::new())
         }
+        LoadKind::PolicyStates => LoadedData::PolicyStates(vec![]),
+        LoadKind::ResourcePolicy => LoadedData::ResourcePolicy(String::new(), vec![]),
     }
 }
 

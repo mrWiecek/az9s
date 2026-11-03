@@ -193,8 +193,9 @@ Work items, in order:
 - [ ] `:assignment` and `:exemption` commands; browse definitions and initiatives
       (set definitions).
 - [ ] Compliance summary per scope (totals across assignments).
-- [ ] Drill down: assignment → non-compliant resources → resource detail. Also the
-      reverse: resource → its policy states.
+- [x] Drill down: assignment → non-compliant resources (with the failing
+      policies) → resource detail. Also the reverse: the detail view's Policy
+      tab lists the resource's policy states (v0.13.0).
 - [ ] Compliance roll-up across the management-group tree: which subscriptions and
       resource groups have the most non-compliant resources.
 - [ ] List exemptions (with expiry) and remediation tasks, read-only.

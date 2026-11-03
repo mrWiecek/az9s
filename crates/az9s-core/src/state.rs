@@ -83,6 +83,15 @@ pub struct AppState {
     /// The scope the policy view shows
     pub policy_scope: Option<crate::policy::PolicyScope>,
 
+    /// The assignment whose non-compliant resources are shown
+    pub policy_states_assignment: Option<crate::policy::PolicyAssignment>,
+
+    /// Non-compliant policy states of that assignment, once loaded
+    pub policy_states: Vec<crate::policy::PolicyState>,
+
+    /// Policy states of the resource in the detail view: (resource ID, states)
+    pub resource_policy: Option<(String, Vec<crate::policy::PolicyState>)>,
+
     /// The tenant az9s works in (`:ctx`); `None`: the Azure CLI's default
     /// login, with subscriptions of every tenant listed
     pub tenant: Option<String>,
@@ -254,6 +263,8 @@ pub enum ViewMode {
     TenantList,
     /// Policy assignments that apply at a scope (`:policy`)
     PolicyAssignments,
+    /// Non-compliant resources of one policy assignment
+    PolicyNonCompliant,
     ResourceDetail,
     Logs,
 }
@@ -264,16 +275,23 @@ pub enum DetailTab {
     #[default]
     Overview,
     Tags,
+    Policy,
     Json,
 }
 
 impl DetailTab {
-    pub const ALL: [DetailTab; 3] = [DetailTab::Overview, DetailTab::Tags, DetailTab::Json];
+    pub const ALL: [DetailTab; 4] = [
+        DetailTab::Overview,
+        DetailTab::Tags,
+        DetailTab::Policy,
+        DetailTab::Json,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
             DetailTab::Overview => "Overview",
             DetailTab::Tags => "Tags",
+            DetailTab::Policy => "Policy",
             DetailTab::Json => "JSON",
         }
     }
@@ -413,6 +431,7 @@ impl AppState {
             ViewMode::TagSummary => self.tag_summary().len(),
             ViewMode::TenantList => self.tenant_rows().len(),
             ViewMode::PolicyAssignments => self.policy_rows().len(),
+            ViewMode::PolicyNonCompliant => self.non_compliant_rows().len(),
             ViewMode::ManagementGroupTree => self.tree_rows().len(),
             _ => 0,
         }
@@ -606,6 +625,67 @@ impl AppState {
             return None;
         }
         self.policy_rows().into_iter().nth(self.list_state.selected)
+    }
+
+    /// Rows of the non-compliant view: one per resource, `/` narrows by
+    /// name, type, resource group or failing policy.
+    pub fn non_compliant_rows(&self) -> Vec<crate::policy::NonCompliantResource> {
+        let rows = crate::policy::group_by_resource(&self.policy_states);
+        if self.filter.is_empty() {
+            return rows;
+        }
+        let needle = self.filter.to_ascii_lowercase();
+        rows.into_iter()
+            .filter(|r| {
+                contains_ignore_ascii_case(r.state.resource_name(), &needle)
+                    || contains_ignore_ascii_case(&r.state.resource_type, &needle)
+                    || contains_ignore_ascii_case(&r.state.resource_group, &needle)
+                    || r.policies
+                        .iter()
+                        .any(|p| contains_ignore_ascii_case(p, &needle))
+            })
+            .collect()
+    }
+
+    /// The selected row of the non-compliant view.
+    pub fn selected_non_compliant(&self) -> Option<crate::policy::NonCompliantResource> {
+        if self.view != ViewMode::PolicyNonCompliant {
+            return None;
+        }
+        self.non_compliant_rows()
+            .into_iter()
+            .nth(self.list_state.selected)
+    }
+
+    /// Policy states of the resource in the detail view, once loaded:
+    /// non-compliant first, then by assignment name and policy.
+    pub fn detail_policy_states(&self) -> Option<Vec<(String, crate::policy::PolicyState)>> {
+        let resource = self.selected_resource_detail.as_ref()?;
+        let (id, states) = self.resource_policy.as_ref()?;
+        if !id.eq_ignore_ascii_case(&resource.id) {
+            return None;
+        }
+        let mut rows: Vec<(String, crate::policy::PolicyState)> = states
+            .iter()
+            .map(|s| (self.assignment_name(&s.assignment_id), s.clone()))
+            .collect();
+        rows.sort_by(|(an, a), (bn, b)| {
+            b.is_non_compliant()
+                .cmp(&a.is_non_compliant())
+                .then_with(|| an.to_lowercase().cmp(&bn.to_lowercase()))
+                .then_with(|| a.definition.cmp(&b.definition))
+        });
+        Some(rows)
+    }
+
+    /// An assignment's display name when loaded, else the last part of its ID.
+    pub fn assignment_name(&self, id: &str) -> String {
+        self.policy_assignments
+            .iter()
+            .find(|a| a.id.eq_ignore_ascii_case(id))
+            .map(|a| a.display_name.clone())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| id.rsplit('/').next().unwrap_or(id).to_string())
     }
 
     /// A readable name for a scope's ARM ID: a management group's or
@@ -875,6 +955,9 @@ impl AppState {
                 }
             }
             ViewMode::PolicyAssignments => self.selected_policy_row().map(|r| r.assignment.id),
+            ViewMode::PolicyNonCompliant => {
+                self.selected_non_compliant().map(|r| r.state.resource_id)
+            }
             ViewMode::ResourceTypeSummary
             | ViewMode::TagSummary
             | ViewMode::TenantList
@@ -916,6 +999,14 @@ impl AppState {
                 .position(|r| r.id == id),
             ViewMode::ResourceList => self.filtered_resources().iter().position(|r| r.id == id),
             ViewMode::ManagementGroupTree => self.tree_rows().iter().position(|r| r.key == id),
+            ViewMode::PolicyAssignments => self
+                .policy_rows()
+                .iter()
+                .position(|r| r.assignment.id == id),
+            ViewMode::PolicyNonCompliant => self
+                .non_compliant_rows()
+                .iter()
+                .position(|r| r.state.resource_id == id),
             _ => None,
         };
         if let Some(i) = position {
