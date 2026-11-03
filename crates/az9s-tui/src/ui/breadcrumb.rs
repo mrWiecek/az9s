@@ -91,6 +91,7 @@ impl Breadcrumb {
             ViewMode::TagSummary => "Tags",
             ViewMode::TenantList => "Tenants",
             ViewMode::PolicyAssignments => "Policy",
+            ViewMode::PolicyNonCompliant => "Non-compliant",
             ViewMode::ResourceDetail => "Resource Detail",
             ViewMode::Logs => "Logs",
         }

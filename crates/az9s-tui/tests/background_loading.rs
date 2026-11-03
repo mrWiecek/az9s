@@ -63,6 +63,10 @@ impl Fetcher for SlowAzure {
                 LoadRequest::ScopeTree => LoadedData::ScopeTree(tree()),
                 LoadRequest::Tenants => LoadedData::Tenants(vec![]),
                 LoadRequest::PolicyAssignments => LoadedData::PolicyAssignments(vec![]),
+                LoadRequest::PolicyStates { .. } => LoadedData::PolicyStates(vec![]),
+                LoadRequest::ResourcePolicy { resource_id, .. } => {
+                    LoadedData::ResourcePolicy(resource_id, vec![])
+                }
                 LoadRequest::PolicyCompliance { scope } => {
                     LoadedData::PolicyCompliance(scope, Default::default())
                 }

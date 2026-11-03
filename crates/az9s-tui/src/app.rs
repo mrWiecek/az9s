@@ -861,7 +861,17 @@ impl TuiApp {
                 info!("Refreshing subscriptions");
                 self.core.request(LoadRequest::Subscriptions);
             }
-            (ViewMode::ResourceDetail, _) => self.core.refresh_resource_detail(),
+            (ViewMode::ResourceDetail, _) => {
+                self.core.refresh_resource_detail();
+                if self.state().detail_tab == DetailTab::Policy {
+                    self.core.load_resource_policy(true);
+                }
+            }
+            (ViewMode::PolicyNonCompliant, _) => {
+                if let Some(a) = self.state().policy_states_assignment.clone() {
+                    self.core.open_non_compliant(a);
+                }
+            }
             (ViewMode::TenantList, _) => self.core.request(LoadRequest::Tenants),
             (ViewMode::PolicyAssignments, _) => {
                 if let Some(scope) = self.state().policy_scope.clone() {
@@ -1150,6 +1160,30 @@ impl TuiApp {
         self.state_mut().notice = Some(notice);
     }
 
+    /// `d` in the policy view: the selected assignment's own details.
+    fn open_assignment_detail(&mut self) {
+        let Some(row) = self.state().selected_policy_row() else {
+            return;
+        };
+        self.push_current_context(None);
+        let a = row.assignment;
+        let subscription_id = a
+            .scope
+            .to_ascii_lowercase()
+            .strip_prefix("/subscriptions/")
+            .map(|s| s.split('/').next().unwrap_or(s).to_string())
+            .unwrap_or_default();
+        self.core.open_resource_detail(az9s_core::models::Resource {
+            id: a.id,
+            name: a.display_name,
+            resource_type: "Microsoft.Authorization/policyAssignments".into(),
+            location: String::new(),
+            resource_group: String::new(),
+            subscription_id,
+            tags: Default::default(),
+        });
+    }
+
     /// Handle selection (Enter key)
     async fn handle_select(&mut self) -> Result<bool> {
         match self.state().view {
@@ -1166,20 +1200,21 @@ impl TuiApp {
             ViewMode::PolicyAssignments => {
                 if let Some(row) = self.state().selected_policy_row() {
                     self.push_current_context(None);
-                    let a = row.assignment;
-                    let subscription_id = a
-                        .scope
-                        .to_ascii_lowercase()
-                        .strip_prefix("/subscriptions/")
-                        .map(|s| s.split('/').next().unwrap_or(s).to_string())
-                        .unwrap_or_default();
+                    self.core.open_non_compliant(row.assignment);
+                }
+                Ok(true)
+            }
+            ViewMode::PolicyNonCompliant => {
+                if let Some(row) = self.state().selected_non_compliant() {
+                    self.push_current_context(None);
+                    let s = row.state;
                     self.core.open_resource_detail(az9s_core::models::Resource {
-                        id: a.id,
-                        name: a.display_name,
-                        resource_type: "Microsoft.Authorization/policyAssignments".into(),
-                        location: String::new(),
-                        resource_group: String::new(),
-                        subscription_id,
+                        name: s.resource_name().to_string(),
+                        id: s.resource_id,
+                        resource_type: s.resource_type,
+                        location: s.location,
+                        resource_group: s.resource_group,
+                        subscription_id: s.subscription_id,
                         tags: Default::default(),
                     });
                 }
@@ -1380,7 +1415,7 @@ impl TuiApp {
             let next = match key.code {
                 KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => Some(tab.cycle(1)),
                 KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => Some(tab.cycle(-1)),
-                KeyCode::Char(c @ '1'..='3') => Some(DetailTab::ALL[c as usize - '1' as usize]),
+                KeyCode::Char(c @ '1'..='4') => Some(DetailTab::ALL[c as usize - '1' as usize]),
                 _ => None,
             };
             if let Some(next) = next.filter(|n| *n != tab) {
@@ -1388,12 +1423,19 @@ impl TuiApp {
                 state.detail_tab = next;
                 state.detail_scroll = 0;
                 state.detail_match = None;
+                if next == DetailTab::Policy {
+                    self.core.load_resource_policy(false);
+                }
             }
             match key.code {
                 KeyCode::Char('n') => self.search_step(true),
                 KeyCode::Char('N') => self.search_step(false),
                 _ => {}
             }
+            return Ok(true);
+        }
+        if self.state().view == ViewMode::PolicyAssignments && key.code == KeyCode::Char('d') {
+            self.open_assignment_detail();
             return Ok(true);
         }
         if self.state().view == ViewMode::ManagementGroupTree {

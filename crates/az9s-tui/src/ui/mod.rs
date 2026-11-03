@@ -101,6 +101,7 @@ fn draw_content(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         ViewMode::TagSummary => draw_tag_summary(f, area, app),
         ViewMode::TenantList => draw_tenant_list(f, area, app),
         ViewMode::PolicyAssignments => draw_policy(f, area, app),
+        ViewMode::PolicyNonCompliant => draw_non_compliant(f, area, app),
         ViewMode::ResourceDetail => draw_resource_detail(f, area, app),
         ViewMode::Logs => draw_logs(f, area, app),
     }
@@ -505,6 +506,101 @@ fn draw_type_summary(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> 
 }
 
 /// Draw the policy assignments that apply at a scope (`:policy`)
+/// Resources that are non-compliant with one assignment, in the policy scope.
+fn draw_non_compliant(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
+    let rows = app.state().non_compliant_rows();
+    let state = app.state();
+    let t = theme();
+    let assignment = state
+        .policy_states_assignment
+        .as_ref()
+        .map(|a| a.display_name.clone())
+        .unwrap_or_default();
+    let scope_name = state
+        .policy_scope
+        .as_ref()
+        .map(|s| state.scope_label(&s.arm_id()))
+        .unwrap_or_default();
+    let heading = format!(
+        "Non-compliant · {} · {scope_name}",
+        truncate_with_ellipsis(&assignment, 60)
+    );
+
+    if rows.is_empty() {
+        let message = if state.loading {
+            "Loading non-compliant resources…".to_string()
+        } else if !state.filter.is_empty() {
+            "No resources match the current filter.\n\nPress Esc to clear the filter.".into()
+        } else {
+            format!(
+                "No resource in {scope_name} is non-compliant with this assignment.\n\n\
+                 Azure evaluates policy about once a day; press r to refresh."
+            )
+        };
+        let content = Paragraph::new(message)
+            .block(Block::default().borders(Borders::ALL).title(heading))
+            .style(Style::default().fg(t.subtle))
+            .wrap(Wrap { trim: true });
+        f.render_widget(content, area);
+        return Ok(());
+    }
+
+    let type_width = 22;
+    let rg_width = 28;
+    let name_col = name_width(area.width, type_width + rg_width + 30, 60);
+    let viewport = area.height.saturating_sub(2) as usize;
+    let mut list_state = state.list_state.clone();
+    let visible = list_state.visible_range(rows.len(), viewport);
+    let items: Vec<_> = rows[visible.clone()]
+        .iter()
+        .map(|r| {
+            let policies = match r.policies.len() {
+                0 => String::new(),
+                1 => r.policies[0].clone(),
+                n => format!("{} (+{} more)", r.policies[0], n - 1),
+            };
+            list_item_spans(vec![
+                Span::styled(
+                    cell(r.state.resource_name(), name_col),
+                    Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    cell(
+                        &resource_type::short_label(&r.state.resource_type),
+                        type_width,
+                    ),
+                    Style::default().fg(t.accent),
+                ),
+                Span::styled(
+                    cell(&r.state.resource_group, rg_width),
+                    Style::default().fg(t.muted),
+                ),
+                Span::styled(policies, Style::default().fg(t.error)),
+            ])
+        })
+        .collect();
+
+    let title = if state.filter_mode {
+        format!("{heading} ({}) - Filter: {}_", rows.len(), state.filter)
+    } else {
+        format!(
+            "{heading} ({} resource{}) · Enter details",
+            rows.len(),
+            if rows.len() == 1 { "" } else { "s" }
+        )
+    };
+    let list = SelectableList::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(theme().selection());
+    let mut widget_state = SelectableListState {
+        selected: list_state.selected - visible.start,
+        offset: 0,
+    };
+    list.render(area, f.buffer_mut(), &mut widget_state);
+    app.state_mut().list_state = list_state;
+    Ok(())
+}
+
 fn draw_policy(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     let rows = app.state().policy_rows();
     let state = app.state();
@@ -601,7 +697,8 @@ fn draw_policy(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         )
     } else {
         format!(
-            "Policy · {scope_name} ({} assignment{}{below_note}) · I initiative, P policy · Enter details",
+            "Policy · {scope_name} ({} assignment{}{below_note}) · I initiative, P policy · \
+             Enter non-compliant, d details",
             rows.len(),
             if rows.len() == 1 { "" } else { "s" }
         )
@@ -1005,8 +1102,48 @@ pub fn detail_lines(state: &AppState) -> Vec<Line<'static>> {
                     .collect()
             }
         }
+        DetailTab::Policy => policy_state_lines(state),
         DetailTab::Json => detail::json_text(doc).lines().map(json_line).collect(),
     }
+}
+
+/// The Policy tab: every policy state of the resource, non-compliant first.
+fn policy_state_lines(state: &AppState) -> Vec<Line<'static>> {
+    let t = theme();
+    let muted = |text: &str| {
+        vec![Line::from(Span::styled(
+            text.to_string(),
+            Style::default().fg(t.muted),
+        ))]
+    };
+    let Some(rows) = state.detail_policy_states() else {
+        return muted("Loading policy states…");
+    };
+    if rows.is_empty() {
+        return muted("No policy evaluates this resource (or Azure has not evaluated it yet).");
+    }
+    let width = rows
+        .iter()
+        .map(|(name, _)| name.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(50);
+    rows.into_iter()
+        .map(|(name, s)| {
+            let style = if s.is_non_compliant() {
+                Style::default().fg(t.error).add_modifier(Modifier::BOLD)
+            } else if s.state.eq_ignore_ascii_case("Compliant") {
+                Style::default().fg(t.ok)
+            } else {
+                Style::default().fg(t.muted)
+            };
+            Line::from(vec![
+                Span::styled(format!("{:<13} ", s.state), style),
+                Span::styled(cell(&name, width + 2), Style::default().fg(t.highlight)),
+                Span::styled(s.definition, Style::default().fg(t.text)),
+            ])
+        })
+        .collect()
 }
 
 /// The Overview tab: a heading per section, then aligned label/value rows.
@@ -1319,6 +1456,19 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
             ],
             ViewMode::PolicyAssignments => vec![
                 ("↑↓/jk", "Navigate"),
+                ("Enter", "Non-compliant"),
+                ("d", "Details"),
+                ("/", "Filter"),
+                ("c", "Copy"),
+                ("y", "Copy ID"),
+                ("o", "Portal"),
+                (":", "Command"),
+                ("r", "Refresh"),
+                ("Esc", "Back"),
+                ("q", "Quit"),
+            ],
+            ViewMode::PolicyNonCompliant => vec![
+                ("↑↓/jk", "Navigate"),
                 ("Enter", "Details"),
                 ("/", "Filter"),
                 ("c", "Copy"),
@@ -1363,7 +1513,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("q", "Quit"),
             ],
             ViewMode::ResourceDetail => vec![
-                ("Tab/1-3", "Tabs"),
+                ("Tab/1-4", "Tabs"),
                 ("↑↓/jk", "Scroll"),
                 ("/ n N", "Search"),
                 ("c", "Copy"),

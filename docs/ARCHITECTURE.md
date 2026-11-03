@@ -118,6 +118,11 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   `assigned_below` counts those further down. `App::open_policy` loads
   `LoadRequest::PolicyAssignments` (tenant-wide) and
   `LoadRequest::PolicyCompliance { scope }`, both cached as documents.
+  The drill-down is not cached (policy states change often):
+  `App::open_non_compliant` loads `LoadRequest::PolicyStates` (one
+  assignment's non-compliant states in the policy scope), shown one row per
+  resource by `group_by_resource`; `App::load_resource_policy` loads
+  `LoadRequest::ResourcePolicy` when the detail view's Policy tab opens.
 - `config.rs`: the optional config file (`Config::path`, `Config::load`,
   `TEMPLATE` for `--init-config`). `App::start` applies it: the start view,
   and `AppState::config` for the default subscription, auto-refresh
