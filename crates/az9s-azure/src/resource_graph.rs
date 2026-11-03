@@ -58,8 +58,9 @@ impl TokenSource for CliTenantTokenSource {
     fn token(&self) -> BoxFuture<'_, Result<String>> {
         async move {
             let _t = timing::timer("azure.token");
-            let output = tokio::process::Command::new(&self.program)
-                .args([
+            let output = crate::cli::az_command(
+                &self.program,
+                &[
                     "account",
                     "get-access-token",
                     "--resource",
@@ -70,12 +71,11 @@ impl TokenSource for CliTenantTokenSource {
                     "accessToken",
                     "--output",
                     "tsv",
-                ])
-                .output()
-                .await
-                .map_err(|e| {
-                    AzureError::AuthenticationFailed(format!("could not run the Azure CLI: {e}"))
-                })?;
+                ],
+            )
+            .output()
+            .await
+            .map_err(|e| AzureError::AuthenticationFailed(crate::cli::start_error(&e)))?;
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let first = stderr
