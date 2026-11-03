@@ -116,6 +116,22 @@ impl Fetcher for Azure {
                     ],
                 ))
             }
+            LoadRequest::ComplianceRollup => Ok(LoadedData::ComplianceRollup(HashMap::from([
+                (
+                    "s1".to_string(),
+                    Compliance {
+                        non_compliant: 30,
+                        total: 200,
+                    },
+                ),
+                (
+                    "s2".to_string(),
+                    Compliance {
+                        non_compliant: 0,
+                        total: 50,
+                    },
+                ),
+            ]))),
             LoadRequest::ComplianceSummary { scope } => Ok(LoadedData::ComplianceSummary(
                 scope,
                 HashMap::from([
@@ -394,4 +410,86 @@ async fn policy_all_uses_the_tenant_root_and_needs_the_tree() {
         .as_deref()
         .unwrap()
         .contains("needs the management group tree"));
+}
+
+#[tokio::test]
+async fn tree_shows_compliance_and_compliance_ranks_subscriptions() {
+    let (mut app, _) = setup(true);
+    let mut loads = app.take_load_receiver().unwrap();
+    {
+        // A second subscription, directly below the root; a third with no
+        // evaluated resources.
+        let state = app.state_mut();
+        for (id, name) in [("s2", "dev"), ("s3", "sandbox")] {
+            state.subscriptions.push(Subscription {
+                id: id.into(),
+                name: name.into(),
+                state: "Enabled".into(),
+                tenant_id: "root".into(),
+            });
+            state
+                .scope_tree
+                .as_mut()
+                .unwrap()
+                .subscriptions
+                .push(SubscriptionNode {
+                    id: id.into(),
+                    display_name: name.into(),
+                    parent: "root".into(),
+                });
+        }
+    }
+
+    // `:compliance all`: worst first, unevaluated last.
+    command(&mut app, "compliance all").await;
+    assert_eq!(app.state().view, ViewMode::ComplianceRanking);
+    app.apply_load(loads.recv().await.unwrap());
+    let rows = app.state().compliance_rows();
+    let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["prod", "dev", "sandbox"]);
+    assert_eq!(rows[0].group, "Platform");
+    let text = screen(&mut app);
+    for expected in [
+        "Compliance · whole tenant (1 of 3 subscriptions with non-compliant resources)",
+        "85.0% · 30 non-compliant",
+        "100.0% · all 50 compliant",
+        "not evaluated",
+    ] {
+        assert!(text.contains(expected), "{expected}\n{text}");
+    }
+
+    // A management group by name: only its subscriptions.
+    command(&mut app, "compliance platform").await;
+    let names: Vec<String> = app
+        .state()
+        .compliance_rows()
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert_eq!(names, ["prod"]);
+
+    // Enter: the subscription's policy view.
+    press(&mut app, KeyCode::Enter).await;
+    assert_eq!(app.state().view, ViewMode::PolicyAssignments);
+    assert_eq!(
+        app.state().policy_scope,
+        Some(PolicyScope::Subscription("s1".into()))
+    );
+    assert_eq!(
+        app.state()
+            .policy_summary()
+            .unwrap()
+            .resources
+            .non_compliant,
+        30,
+        "the summary shows at once, from the roll-up"
+    );
+
+    // The tree: groups add up their subscriptions.
+    command(&mut app, "mg").await;
+    let text = screen(&mut app);
+    assert!(
+        text.contains("88.0% · 30 non-compliant"),
+        "root: 30 of 250\n{text}"
+    );
 }

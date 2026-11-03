@@ -121,7 +121,13 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   `LoadRequest::ComplianceSummary { scope }`: distinct resources evaluated /
   non-compliant per subscription (cached as `compliance_summary:<scope>`),
   summed by `ComplianceSummary::from_subscriptions` for the view's first
-  line. Per-subscription rows add up exactly, so management groups can be
+  line. `LoadRequest::ComplianceRollup` runs the same query tenant-wide
+  (cached as `compliance_rollup:<tenant>`, loaded with the tree):
+  `AppState::group_compliance` adds up a group's subscriptions for the
+  tree's column, `compliance_rows` ranks them for `:compliance`, and
+  `policy_summary` falls back to it until the scope's own summary arrives.
+  It is a separate load kind so it never cancels, or is cancelled by, the
+  policy view's summary. Per-subscription rows add up exactly, so management groups can be
   rolled up from them.
   The drill-down is not cached (policy states change often):
   `App::open_non_compliant` loads `LoadRequest::PolicyStates` (one

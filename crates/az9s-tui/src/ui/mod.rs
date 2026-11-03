@@ -102,6 +102,7 @@ fn draw_content(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         ViewMode::TenantList => draw_tenant_list(f, area, app),
         ViewMode::PolicyAssignments => draw_policy(f, area, app),
         ViewMode::PolicyNonCompliant => draw_non_compliant(f, area, app),
+        ViewMode::ComplianceRanking => draw_compliance(f, area, app),
         ViewMode::ResourceDetail => draw_resource_detail(f, area, app),
         ViewMode::Logs => draw_logs(f, area, app),
     }
@@ -185,6 +186,12 @@ fn draw_tree(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
                     _ => row.key.clone(),
                 }
             };
+            let compliance = if row.is_group() {
+                app.state().group_compliance(&row.key).map(|s| s.resources)
+            } else {
+                app.state().subscription_compliance(&row.key)
+            };
+            let (compliance, compliance_style) = compliance_cell(compliance);
             let label_style = if row.is_group() {
                 Style::default()
                     .fg(theme().text)
@@ -197,6 +204,7 @@ fn draw_tree(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
                 Span::styled(marker, Style::default().fg(theme().muted)),
                 Span::styled(icon, Style::default().fg(color)),
                 Span::styled(format!("{label:<width$}  "), label_style),
+                Span::styled(cell(&compliance, COMPLIANCE_WIDTH), compliance_style),
                 Span::styled(detail, Style::default().fg(theme().muted)),
             ])
         })
@@ -506,6 +514,118 @@ fn draw_type_summary(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> 
 }
 
 /// Draw the policy assignments that apply at a scope (`:policy`)
+/// Width of the compliance column in the tree and `:compliance`.
+const COMPLIANCE_WIDTH: usize = 30;
+
+/// A scope's compliance as "92.4% · 140 non-compliant", coloured: green when
+/// fully compliant, red below 80%, else yellow. Empty while not loaded.
+fn compliance_cell(c: Option<az9s_core::policy::Compliance>) -> (String, Style) {
+    let t = theme();
+    match c {
+        None => (String::new(), Style::default()),
+        Some(c) if c.total == 0 => ("not evaluated".into(), Style::default().fg(t.muted)),
+        Some(c) => {
+            let compliant = c.total - c.non_compliant.min(c.total);
+            let percent = 100.0 * compliant as f64 / c.total as f64;
+            let color = if c.non_compliant == 0 {
+                t.ok
+            } else if percent < 80.0 {
+                t.error
+            } else {
+                t.highlight
+            };
+            let text = if c.non_compliant == 0 {
+                format!("{percent:.1}% · all {} compliant", grouped(c.total))
+            } else {
+                format!("{percent:.1}% · {} non-compliant", grouped(c.non_compliant))
+            };
+            (text, Style::default().fg(color))
+        }
+    }
+}
+
+/// `:compliance`: subscriptions ranked by non-compliant resources.
+fn draw_compliance(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
+    let rows = app.state().compliance_rows();
+    let state = app.state();
+    let t = theme();
+    let scope_name = match &state.compliance_group {
+        Some(group) => state.scope_label(&format!(
+            "/providers/Microsoft.Management/managementGroups/{group}"
+        )),
+        None => "whole tenant".into(),
+    };
+    let heading = format!("Compliance · {scope_name}");
+    if rows.is_empty() {
+        let message = if state.compliance_rollup.is_none() && state.loading {
+            "Loading compliance per subscription…".to_string()
+        } else if state.compliance_rollup.is_none() {
+            "Compliance per subscription is not loaded (it needs Resource Graph access at \
+             the tenant root). Press r to retry."
+                .to_string()
+        } else if !state.filter.is_empty() {
+            "No subscriptions match the current filter.\n\nPress Esc to clear the filter.".into()
+        } else {
+            "No subscriptions here.".into()
+        };
+        let content = Paragraph::new(message)
+            .block(Block::default().borders(Borders::ALL).title(heading))
+            .style(Style::default().fg(t.subtle))
+            .wrap(Wrap { trim: true });
+        f.render_widget(content, area);
+        return Ok(());
+    }
+
+    let group_width = 28;
+    let name_col = name_width(area.width, 8 + COMPLIANCE_WIDTH + group_width, 50);
+    let viewport = area.height.saturating_sub(2) as usize;
+    let mut list_state = state.list_state.clone();
+    let visible = list_state.visible_range(rows.len(), viewport);
+    let items: Vec<_> = rows[visible.clone()]
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let (compliance, style) = compliance_cell(Some(r.compliance));
+            list_item_spans(vec![
+                Span::styled(
+                    format!("{:>4}  ", visible.start + i + 1),
+                    Style::default().fg(t.muted),
+                ),
+                Span::styled(
+                    cell(&r.name, name_col),
+                    Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(cell(&compliance, COMPLIANCE_WIDTH), style),
+                Span::styled(cell(&r.group, group_width), Style::default().fg(t.muted)),
+            ])
+        })
+        .collect();
+
+    let affected = rows
+        .iter()
+        .filter(|r| r.compliance.non_compliant > 0)
+        .count();
+    let title = if state.filter_mode {
+        format!("{heading} ({}) - Filter: {}_", rows.len(), state.filter)
+    } else {
+        format!(
+            "{heading} ({affected} of {} subscriptions with non-compliant resources) · \
+             Enter policy",
+            rows.len()
+        )
+    };
+    let list = SelectableList::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(theme().selection());
+    let mut widget_state = SelectableListState {
+        selected: list_state.selected - visible.start,
+        offset: 0,
+    };
+    list.render(area, f.buffer_mut(), &mut widget_state);
+    app.state_mut().list_state = list_state;
+    Ok(())
+}
+
 /// Resources that are non-compliant with one assignment, in the policy scope.
 fn draw_non_compliant(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     let rows = app.state().non_compliant_rows();
@@ -1604,6 +1724,17 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 (":", "Command"),
                 ("r", "Refresh"),
                 ("Esc", "Back"),
+                ("q", "Quit"),
+            ],
+            ViewMode::ComplianceRanking => vec![
+                ("↑↓/jk", "Navigate"),
+                ("Enter", "Policy"),
+                ("/", "Filter"),
+                ("c", "Copy"),
+                ("y", "Copy ID"),
+                ("o", "Portal"),
+                (":", "Command"),
+                ("r", "Refresh"),
                 ("q", "Quit"),
             ],
             ViewMode::PolicyNonCompliant => vec![

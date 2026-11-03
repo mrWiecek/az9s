@@ -36,6 +36,9 @@ pub enum CommandKind {
     Tags { scope: Scope, query: ResourceQuery },
     /// Policy assignments that apply at a scope, with compliance
     Policy { scope: Scope },
+    /// Subscriptions ranked by non-compliant resources (a management group
+    /// by name, or `all`)
+    Compliance { scope: Scope },
     /// Tenants: `None` lists them; `Some("all")` or a tenant name/ID switches
     Context(Option<String>),
     /// A known command with bad arguments (the message says why)
@@ -88,6 +91,16 @@ impl Command {
                     scope: match parts.get(1) {
                         None => Scope::Current,
                         Some(t) if t.eq_ignore_ascii_case("all") => Scope::All,
+                        Some(_) => Scope::Subscription(parts[1..].join(" ")),
+                    },
+                },
+            },
+            "compliance" => Self {
+                kind: CommandKind::Compliance {
+                    scope: match parts.get(1) {
+                        None => Scope::Current,
+                        Some(t) if t.eq_ignore_ascii_case("all") => Scope::All,
+                        // A management group (or subscription) by name.
                         Some(_) => Scope::Subscription(parts[1..].join(" ")),
                     },
                 },
@@ -147,7 +160,7 @@ impl Command {
         match &self.kind {
             CommandKind::Unknown(cmd) if !cmd.is_empty() => {
                 Some(format!(
-                    "Unknown command: '{}'\n\nAvailable commands:\n  :policy [all|<sub>] - Policy assignments and compliance\n  :ctx [all|<tenant>] - Tenants\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type\n  :tag [all|<sub>] - Tags and how many resources carry them",
+                    "Unknown command: '{}'\n\nAvailable commands:\n  :policy [all|<sub>] - Policy assignments and compliance\n  :compliance [all|<mg>] - Subscriptions by non-compliant resources\n  :ctx [all|<tenant>] - Tenants\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type\n  :tag [all|<sub>] - Tags and how many resources carry them",
                     cmd
                 ))
             }

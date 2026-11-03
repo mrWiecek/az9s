@@ -463,6 +463,7 @@ impl TuiApp {
             | CommandKind::ResourceTypes { scope, .. }
             | CommandKind::Tags { scope, .. }
             | CommandKind::Policy { scope }
+            | CommandKind::Compliance { scope }
                 if *scope == Scope::Current =>
             {
                 *scope = context;
@@ -476,6 +477,10 @@ impl TuiApp {
                     self.state_mut().clear_navigation();
                     self.core.open_policy(policy_scope);
                 }
+            }
+            CommandKind::Compliance { scope } => {
+                debug!("Command: compliance, scope {:?}", scope);
+                self.open_compliance(scope);
             }
             CommandKind::Context(None) => {
                 debug!("Command: tenants");
@@ -623,6 +628,55 @@ impl TuiApp {
                 }
             },
         }
+    }
+
+    /// `:compliance`: the subscriptions of a management group (or the whole
+    /// tenant) ranked by non-compliant resources. A subscription scope ranks
+    /// the whole tenant with that subscription selected.
+    fn open_compliance(&mut self, scope: Scope) {
+        let (group, select) = match scope {
+            Scope::All | Scope::Current => (None, None),
+            Scope::Group(group) => (Some(group), None),
+            Scope::Subscription(name) => match self.find_group(&name) {
+                Some(group) => (Some(group), None),
+                None => match self.find_subscription(&name) {
+                    Some(sub) => (None, Some(sub.id.to_ascii_lowercase())),
+                    None => {
+                        self.state_mut().set_error(Some(format!(
+                            "No management group or subscription named {name}"
+                        )));
+                        return;
+                    }
+                },
+            },
+        };
+        let state = self.state_mut();
+        state.clear_navigation();
+        // The tenant root group is the whole tenant.
+        let root = state.scope_tree.as_ref().map(|t| t.root.clone());
+        state.compliance_group = group.filter(|g| Some(g) != root.as_ref());
+        state.filter.clear();
+        state.view = ViewMode::ComplianceRanking;
+        state.list_state.reset();
+        self.core.load_compliance_rollup();
+        if let Some(id) = select {
+            self.state_mut().select_id(&format!("/subscriptions/{id}"));
+        }
+    }
+
+    /// A management group by name or display name (case-insensitive).
+    fn find_group(&self, name: &str) -> Option<String> {
+        let tree = self.state().scope_tree.as_ref()?;
+        if tree.root.eq_ignore_ascii_case(name) || tree.root_display_name.eq_ignore_ascii_case(name)
+        {
+            return Some(tree.root.clone());
+        }
+        tree.groups
+            .iter()
+            .find(|g| {
+                g.name.eq_ignore_ascii_case(name) || g.display_name.eq_ignore_ascii_case(name)
+            })
+            .map(|g| g.name.clone())
     }
 
     /// What a command without a scope applies to: the highlighted
@@ -887,6 +941,10 @@ impl TuiApp {
             (ViewMode::ManagementGroupTree, _) => {
                 info!("Refreshing the management group tree");
                 self.core.request(LoadRequest::ScopeTree);
+                self.core.request(LoadRequest::ComplianceRollup);
+            }
+            (ViewMode::ComplianceRanking, _) => {
+                self.core.request(LoadRequest::ComplianceRollup);
             }
             (ViewMode::ResourceGroupList, Some(subscription_ids)) => {
                 self.core
@@ -1342,6 +1400,17 @@ impl TuiApp {
                 if let Some(row) = self.state().selected_policy_row() {
                     self.push_current_context(None);
                     self.core.open_non_compliant(row.assignment);
+                }
+                Ok(true)
+            }
+            ViewMode::ComplianceRanking => {
+                if let Some(row) = self.state().selected_compliance_row() {
+                    self.push_current_context(None);
+                    if let Some(sub) = self.find_subscription(&row.subscription_id).cloned() {
+                        self.state_mut().selected_subscription = Some(sub);
+                    }
+                    self.core
+                        .open_policy(PolicyScope::Subscription(row.subscription_id));
                 }
                 Ok(true)
             }

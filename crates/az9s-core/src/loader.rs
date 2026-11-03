@@ -53,6 +53,9 @@ pub enum LoadRequest {
     Tenants,
     /// Every policy assignment in the tenant.
     PolicyAssignments,
+    /// Resources evaluated / non-compliant per subscription, tenant-wide:
+    /// the compliance roll-up of the management group tree and `:compliance`.
+    ComplianceRollup,
     /// Compliance counts per assignment for resources in a scope.
     PolicyCompliance {
         scope: PolicyScope,
@@ -84,6 +87,7 @@ pub enum LoadKind {
     ResourceDetail,
     Tenants,
     PolicyAssignments,
+    ComplianceRollup,
     PolicyCompliance,
     ComplianceSummary,
     PolicyStates,
@@ -100,6 +104,7 @@ impl LoadKind {
             LoadKind::ResourceDetail => "resource details",
             LoadKind::Tenants => "tenants",
             LoadKind::PolicyAssignments => "policy assignments",
+            LoadKind::ComplianceRollup => "compliance per subscription",
             LoadKind::PolicyCompliance => "policy compliance",
             LoadKind::ComplianceSummary => "compliance summary",
             LoadKind::PolicyStates => "non-compliant resources",
@@ -118,6 +123,7 @@ impl LoadRequest {
             LoadRequest::ResourceDetail { .. } => LoadKind::ResourceDetail,
             LoadRequest::Tenants => LoadKind::Tenants,
             LoadRequest::PolicyAssignments => LoadKind::PolicyAssignments,
+            LoadRequest::ComplianceRollup => LoadKind::ComplianceRollup,
             LoadRequest::PolicyCompliance { .. } => LoadKind::PolicyCompliance,
             LoadRequest::ComplianceSummary { .. } => LoadKind::ComplianceSummary,
             LoadRequest::PolicyStates { .. } => LoadKind::PolicyStates,
@@ -136,6 +142,8 @@ pub enum LoadedData {
     ResourceDetail(serde_json::Value),
     Tenants(Vec<crate::models::Tenant>),
     PolicyAssignments(Vec<PolicyAssignment>),
+    /// Per subscription (lowercase ID), tenant-wide
+    ComplianceRollup(HashMap<String, Compliance>),
     PolicyCompliance(PolicyScope, HashMap<String, Compliance>),
     /// Per subscription (lowercase ID)
     ComplianceSummary(PolicyScope, HashMap<String, Compliance>),
@@ -425,6 +433,7 @@ impl Fetcher for AzureFetcher {
                     notice: None,
                 },
                 LoadRequest::PolicyAssignments
+                | LoadRequest::ComplianceRollup
                 | LoadRequest::PolicyCompliance { .. }
                 | LoadRequest::ComplianceSummary { .. }
                 | LoadRequest::PolicyStates { .. }
@@ -583,6 +592,35 @@ impl Fetcher for GraphFetcher {
             .boxed();
         }
         match &request {
+            LoadRequest::ComplianceRollup => {
+                let graph = self.graph.clone();
+                let cell = self.home_tenant.clone();
+                return async move {
+                    let _t = timing::timer("azure.compliance_rollup");
+                    let data = async {
+                        let tenant = Self::resolve_tenant(&graph, &cell)
+                            .await
+                            .ok_or("could not determine the tenant from the Azure token")?;
+                        let rows = query_all(
+                            &graph,
+                            &resource_graph::compliance_summary_query(),
+                            &GraphScope::ManagementGroup(tenant),
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
+                        Ok::<_, String>(LoadedData::ComplianceRollup(
+                            subscription_compliance_from_rows(&rows),
+                        ))
+                    }
+                    .await;
+                    FetchOutcome {
+                        data,
+                        failed_subscriptions: vec![],
+                        notice: None,
+                    }
+                }
+                .boxed();
+            }
             LoadRequest::PolicyAssignments => {
                 let graph = self.graph.clone();
                 let cell = self.home_tenant.clone();
@@ -789,6 +827,7 @@ impl Fetcher for GraphFetcher {
                 | LoadRequest::ScopeTree
                 | LoadRequest::Tenants
                 | LoadRequest::PolicyAssignments
+                | LoadRequest::ComplianceRollup
                 | LoadRequest::PolicyCompliance { .. }
                 | LoadRequest::ComplianceSummary { .. }
                 | LoadRequest::PolicyStates { .. }
@@ -875,6 +914,7 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::ResourceDetail => LoadedData::ResourceDetail(serde_json::Value::Null),
         LoadKind::Tenants => LoadedData::Tenants(vec![]),
         LoadKind::PolicyAssignments => LoadedData::PolicyAssignments(vec![]),
+        LoadKind::ComplianceRollup => LoadedData::ComplianceRollup(HashMap::new()),
         LoadKind::PolicyCompliance => {
             LoadedData::PolicyCompliance(PolicyScope::Group(String::new()), HashMap::new())
         }
