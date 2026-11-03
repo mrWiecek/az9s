@@ -88,6 +88,7 @@ const COMMANDS: &[(&str, &str)] = &[
         "compliance all",
         "Subscriptions ranked by non-compliant resources",
     ),
+    ("exemption all", "Policy exemptions and when they expire"),
     ("ctx", "Switch tenant"),
 ];
 

@@ -66,6 +66,152 @@ impl PolicyAssignment {
     }
 }
 
+/// An exemption: resources at its scope (and below) are exempt from an
+/// assignment, or from some of an initiative's policies.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyExemption {
+    pub id: String,
+    pub name: String,
+    pub display_name: String,
+    pub assignment_id: String,
+    /// "Waiver" or "Mitigated"
+    pub category: String,
+    /// ISO 8601 date-time, empty when it never expires
+    pub expires_on: String,
+    pub description: String,
+    /// The initiative's policies it covers (empty: the whole assignment)
+    pub references: Vec<String>,
+}
+
+/// How soon an exemption expires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Expiry {
+    /// Expired this many days ago (0: today)
+    Expired(i64),
+    /// Expires in this many days
+    In(i64),
+    Never,
+}
+
+/// Exemptions expiring within this many days are flagged.
+pub const EXPIRY_WARNING_DAYS: i64 = 30;
+
+impl PolicyExemption {
+    /// From a row of `resource_graph::policy_exemptions_query`.
+    pub fn from_row(row: &Value) -> Option<Self> {
+        let text = |key: &str| {
+            row.get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let id = text("id");
+        if id.is_empty() {
+            return None;
+        }
+        let name = text("name");
+        Some(Self {
+            display_name: Some(text("displayName"))
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| name.clone()),
+            name,
+            assignment_id: text("assignmentId"),
+            category: text("category"),
+            expires_on: text("expiresOn"),
+            description: text("description"),
+            references: row
+                .get("references")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            id,
+        })
+    }
+
+    /// The scope it is made at (its ID up to the provider segment).
+    pub fn scope(&self) -> &str {
+        const MARKER: &str = "/providers/microsoft.authorization/policyexemptions/";
+        match self.id.to_ascii_lowercase().find(MARKER) {
+            Some(0) | None => "/",
+            Some(i) => &self.id[..i],
+        }
+    }
+
+    /// How soon it expires, as of `now` (unix seconds).
+    pub fn expiry(&self, now: i64) -> Expiry {
+        let Ok(at) = chrono::DateTime::parse_from_rfc3339(&self.expires_on) else {
+            return Expiry::Never;
+        };
+        // Whole days, rounded down.
+        let at = at.timestamp();
+        if at <= now {
+            Expiry::Expired((now - at) / 86_400)
+        } else {
+            Expiry::In((at - now) / 86_400)
+        }
+    }
+
+    /// Whether it exempts `state`: same assignment, the resource at or below
+    /// its scope, and (for a partial exemption) one of its policies.
+    pub fn covers(&self, state: &PolicyState) -> bool {
+        let scope = self.scope().to_ascii_lowercase();
+        let resource = state.resource_id.to_ascii_lowercase();
+        self.assignment_id
+            .eq_ignore_ascii_case(&state.assignment_id)
+            && (resource == scope || resource.starts_with(&format!("{scope}/")))
+            && (self.references.is_empty()
+                || self
+                    .references
+                    .iter()
+                    .any(|r| r.eq_ignore_ascii_case(&state.definition)))
+    }
+}
+
+/// "expired 3 days ago", "expires in 12 days", "never expires".
+pub fn expiry_label(expiry: Expiry) -> String {
+    let days = |n: i64| {
+        if n == 1 {
+            "1 day".to_string()
+        } else {
+            format!("{n} days")
+        }
+    };
+    match expiry {
+        Expiry::Expired(0) => "expired today".into(),
+        Expiry::Expired(n) => format!("expired {} ago", days(n)),
+        Expiry::In(0) => "expires today".into(),
+        Expiry::In(n) => format!("expires in {}", days(n)),
+        Expiry::Never => "never expires".into(),
+    }
+}
+
+/// Whether an ARM ID is `target` or inside it: for a management group, any
+/// group or subscription below it (and what is inside those).
+pub fn within(arm_id: &str, target: &PolicyScope, tree: Option<&ScopeTree>) -> bool {
+    let id = arm_id.to_ascii_lowercase();
+    let inside = |root: &str| id == root || id.starts_with(&format!("{root}/"));
+    let target_id = target.arm_id();
+    if inside(&target_id) {
+        return true;
+    }
+    match (target, tree) {
+        (PolicyScope::Group(g), Some(tree)) => {
+            descendant_groups(tree, g)
+                .into_iter()
+                .any(|d| inside(&group_id(&d)))
+                || tree
+                    .subscriptions_under(g, &[])
+                    .into_iter()
+                    .any(|s| inside(&PolicyScope::Subscription(s).arm_id()))
+        }
+        _ => false,
+    }
+}
+
 /// Where policy is looked at: a management group or a subscription.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PolicyScope {
@@ -549,6 +695,74 @@ mod tests {
         let all = assignments();
         let found = applicable(&all, &PolicyScope::Subscription("sub-c".into()), None);
         assert_eq!(names(&found), ["on-sub-c"]);
+    }
+
+    #[test]
+    fn exemptions_expire_cover_states_and_sit_within_scopes() {
+        let day = 86_400;
+        let now = 1_700_000_000;
+        let iso = |t: i64| chrono::DateTime::from_timestamp(t, 0).unwrap().to_rfc3339();
+        let mut e = PolicyExemption {
+            id: "/subscriptions/S1/resourceGroups/rg/providers/Microsoft.Authorization/policyExemptions/x".into(),
+            assignment_id: "/a/policyAssignments/A1".into(),
+            ..Default::default()
+        };
+        assert_eq!(e.scope(), "/subscriptions/S1/resourceGroups/rg");
+        assert_eq!(e.expiry(now), Expiry::Never);
+        e.expires_on = iso(now - 3 * day - 60);
+        assert_eq!(e.expiry(now), Expiry::Expired(3));
+        e.expires_on = iso(now + 10 * day + 60);
+        assert_eq!(e.expiry(now), Expiry::In(10));
+        assert_eq!(expiry_label(Expiry::In(1)), "expires in 1 day");
+        assert_eq!(expiry_label(Expiry::Expired(0)), "expired today");
+        assert!(Expiry::Expired(9) < Expiry::In(0) && Expiry::In(400) < Expiry::Never);
+
+        let state = |resource: &str, definition: &str| PolicyState {
+            resource_id: resource.into(),
+            assignment_id: "/A/policyassignments/a1".into(),
+            definition: definition.into(),
+            ..Default::default()
+        };
+        let inside = "/subscriptions/s1/resourcegroups/RG/providers/x/y/kv";
+        assert!(e.covers(&state(inside, "p1")), "whole assignment, any case");
+        assert!(!e.covers(&state("/subscriptions/s1/resourceGroups/rg2/x", "p1")));
+        assert!(
+            !e.covers(&state("/subscriptions/s1/resourceGroups/rgx", "p1")),
+            "not a prefix match"
+        );
+        e.references = vec!["P2".into()];
+        assert!(!e.covers(&state(inside, "p1")) && e.covers(&state(inside, "p2")));
+
+        let tree = crate::scope_tree::ScopeTree {
+            root: "root".into(),
+            root_display_name: "Root".into(),
+            groups: vec![crate::scope_tree::GroupNode {
+                name: "corp".into(),
+                display_name: "Corp".into(),
+                parent: "root".into(),
+            }],
+            subscriptions: vec![crate::scope_tree::SubscriptionNode {
+                id: "s1".into(),
+                display_name: "s1".into(),
+                parent: "corp".into(),
+            }],
+        };
+        let root = PolicyScope::Group("root".into());
+        assert!(
+            within(e.scope(), &root, Some(&tree)),
+            "a subscription's group below root"
+        );
+        assert!(within(&group_id("corp"), &root, Some(&tree)));
+        assert!(!within(
+            e.scope(),
+            &PolicyScope::Subscription("s2".into()),
+            Some(&tree)
+        ));
+        assert!(within(
+            e.scope(),
+            &PolicyScope::Subscription("S1".into()),
+            None
+        ));
     }
 
     #[test]

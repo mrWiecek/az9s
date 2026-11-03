@@ -95,6 +95,12 @@ pub struct AppState {
     /// across the tenant: the tree's compliance column and `:compliance`
     pub compliance_rollup: Option<HashMap<String, crate::policy::Compliance>>,
 
+    /// Every policy exemption in the tenant, once loaded
+    pub policy_exemptions: Vec<crate::policy::PolicyExemption>,
+
+    /// The scope `:exemption` lists (`None`: the whole tenant)
+    pub exemption_scope: Option<crate::policy::PolicyScope>,
+
     /// The management group `:compliance` ranks the subscriptions of
     /// (`None`: the whole tenant)
     pub compliance_group: Option<String>,
@@ -229,6 +235,17 @@ pub struct PolicyRow {
     pub compliance: Option<crate::policy::Compliance>,
 }
 
+/// One row of `:exemption`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExemptionRow {
+    pub exemption: crate::policy::PolicyExemption,
+    pub expiry: crate::policy::Expiry,
+    /// The exempted assignment's display name
+    pub assignment: String,
+    /// Where the exemption is made, readable
+    pub scope_label: String,
+}
+
 /// One row of `:compliance`: a subscription and its compliance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComplianceRow {
@@ -298,6 +315,8 @@ pub enum ViewMode {
     PolicyNonCompliant,
     /// Subscriptions ranked by non-compliant resources (`:compliance`)
     ComplianceRanking,
+    /// Policy exemptions at or below a scope (`:exemption`)
+    ExemptionList,
     ResourceDetail,
     Logs,
 }
@@ -466,6 +485,7 @@ impl AppState {
             ViewMode::PolicyAssignments => self.policy_rows().len(),
             ViewMode::PolicyNonCompliant => self.non_compliant_rows().len(),
             ViewMode::ComplianceRanking => self.compliance_rows().len(),
+            ViewMode::ExemptionList => self.exemption_rows().len(),
             ViewMode::ManagementGroupTree => self.tree_rows().len(),
             _ => 0,
         }
@@ -782,6 +802,78 @@ impl AppState {
                     || contains_ignore_ascii_case(&r.group, &needle)
             })
             .collect()
+    }
+
+    /// Rows of `:exemption`: the exemptions at or below the scope, expired
+    /// first, then soonest to expire, then those that never expire. `/`
+    /// narrows by name, category, assignment, scope or reason.
+    pub fn exemption_rows(&self) -> Vec<ExemptionRow> {
+        let now = chrono::Utc::now().timestamp();
+        let mut rows: Vec<ExemptionRow> = self
+            .policy_exemptions
+            .iter()
+            .filter(|e| {
+                self.exemption_scope.as_ref().is_none_or(|scope| {
+                    crate::policy::within(e.scope(), scope, self.scope_tree.as_ref())
+                })
+            })
+            .map(|e| ExemptionRow {
+                expiry: e.expiry(now),
+                assignment: self.assignment_name(&e.assignment_id),
+                scope_label: self.scope_label(e.scope()),
+                exemption: e.clone(),
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            a.expiry.cmp(&b.expiry).then_with(|| {
+                a.exemption
+                    .display_name
+                    .to_lowercase()
+                    .cmp(&b.exemption.display_name.to_lowercase())
+            })
+        });
+        if self.filter.is_empty() {
+            return rows;
+        }
+        let needle = self.filter.to_ascii_lowercase();
+        rows.into_iter()
+            .filter(|r| {
+                [
+                    r.exemption.display_name.as_str(),
+                    &r.exemption.category,
+                    &r.exemption.description,
+                    &r.assignment,
+                    &r.scope_label,
+                ]
+                .iter()
+                .any(|f| contains_ignore_ascii_case(f, &needle))
+            })
+            .collect()
+    }
+
+    /// The selected row of `:exemption`.
+    pub fn selected_exemption(&self) -> Option<ExemptionRow> {
+        if self.view != ViewMode::ExemptionList {
+            return None;
+        }
+        self.exemption_rows()
+            .into_iter()
+            .nth(self.list_state.selected)
+    }
+
+    /// The exemption that exempts a policy state, if loaded: one that covers
+    /// it and hasn't expired (expired ones no longer exempt), the most
+    /// specific scope first.
+    pub fn exemption_for(
+        &self,
+        state: &crate::policy::PolicyState,
+    ) -> Option<&crate::policy::PolicyExemption> {
+        let now = chrono::Utc::now().timestamp();
+        self.policy_exemptions
+            .iter()
+            .filter(|e| e.covers(state))
+            .filter(|e| !matches!(e.expiry(now), crate::policy::Expiry::Expired(_)))
+            .max_by_key(|e| e.scope().len())
     }
 
     /// The selected row of `:compliance`.
@@ -1149,6 +1241,7 @@ impl AppState {
             ViewMode::ComplianceRanking => self
                 .selected_compliance_row()
                 .map(|r| format!("/subscriptions/{}", r.subscription_id)),
+            ViewMode::ExemptionList => self.selected_exemption().map(|r| r.exemption.id),
             ViewMode::ResourceGroupList => self.selected_resource_group().map(|r| r.id.clone()),
             ViewMode::ResourceList => self.selected_resource().map(|r| r.id.clone()),
             ViewMode::ResourceDetail => {
@@ -1224,6 +1317,10 @@ impl AppState {
                 .compliance_rows()
                 .iter()
                 .position(|r| format!("/subscriptions/{}", r.subscription_id) == id),
+            ViewMode::ExemptionList => self
+                .exemption_rows()
+                .iter()
+                .position(|r| r.exemption.id == id),
             _ => None,
         };
         if let Some(i) = position {

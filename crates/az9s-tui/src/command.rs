@@ -36,6 +36,9 @@ pub enum CommandKind {
     Tags { scope: Scope, query: ResourceQuery },
     /// Policy assignments that apply at a scope, with compliance
     Policy { scope: Scope },
+    /// Policy exemptions at or below a scope (a management group or
+    /// subscription by name, or `all`)
+    Exemption { scope: Scope },
     /// Subscriptions ranked by non-compliant resources (a management group
     /// by name, or `all`)
     Compliance { scope: Scope },
@@ -88,6 +91,15 @@ impl Command {
         match cmd.as_str() {
             "policy" => Self {
                 kind: CommandKind::Policy {
+                    scope: match parts.get(1) {
+                        None => Scope::Current,
+                        Some(t) if t.eq_ignore_ascii_case("all") => Scope::All,
+                        Some(_) => Scope::Subscription(parts[1..].join(" ")),
+                    },
+                },
+            },
+            "exemption" => Self {
+                kind: CommandKind::Exemption {
                     scope: match parts.get(1) {
                         None => Scope::Current,
                         Some(t) if t.eq_ignore_ascii_case("all") => Scope::All,
@@ -160,7 +172,7 @@ impl Command {
         match &self.kind {
             CommandKind::Unknown(cmd) if !cmd.is_empty() => {
                 Some(format!(
-                    "Unknown command: '{}'\n\nAvailable commands:\n  :policy [all|<sub>] - Policy assignments and compliance\n  :compliance [all|<mg>] - Subscriptions by non-compliant resources\n  :ctx [all|<tenant>] - Tenants\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type\n  :tag [all|<sub>] - Tags and how many resources carry them",
+                    "Unknown command: '{}'\n\nAvailable commands:\n  :policy [all|<sub>] - Policy assignments and compliance\n  :compliance [all|<mg>] - Subscriptions by non-compliant resources\n  :exemption [all|<mg>|<sub>] - Policy exemptions and when they expire\n  :ctx [all|<tenant>] - Tenants\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type\n  :tag [all|<sub>] - Tags and how many resources carry them",
                     cmd
                 ))
             }

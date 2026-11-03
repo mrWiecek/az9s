@@ -12,6 +12,21 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-03
+
+### Added
+- **`:exemption [all|<mg>|<sub>]`**: policy exemptions at or below the
+  scope (a management group or subscription by name, or where you are),
+  with their category (waiver or mitigated), expiry, the assignment they
+  exempt from, where they are made and why. Expired ones come first in
+  red, then those expiring within 30 days in yellow, then the rest; the
+  title counts both. `Enter` opens an exemption's details; `/`, `c`, `y`
+  and `o` work as in other lists.
+- **Exempt policies name their exemption** in a resource's Policy tab
+  ("exemption *name*, expires in 12 days"), and `Enter` opens it. Expired
+  exemptions no longer exempt, so they are never the one named; the most
+  specific active one is.
+
 ## [0.16.0] - 2026-11-03
 
 ### Added
@@ -509,7 +524,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/mrWiecek/az9s/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/mrWiecek/az9s/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/mrWiecek/az9s/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/mrWiecek/az9s/compare/v0.13.0...v0.14.0

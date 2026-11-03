@@ -553,6 +553,21 @@ pub fn policy_assignments_query() -> String {
         .to_string()
 }
 
+/// KQL listing every policy exemption in the scope.
+pub fn policy_exemptions_query() -> String {
+    "policyresources \
+     | where type =~ 'microsoft.authorization/policyexemptions' \
+     | project id, name, \
+         displayName = tostring(properties.displayName), \
+         assignmentId = tostring(properties.policyAssignmentId), \
+         category = tostring(properties.exemptionCategory), \
+         expiresOn = tostring(properties.expiresOn), \
+         description = tostring(properties.description), \
+         references = properties.policyDefinitionReferenceIds \
+     | order by displayName asc"
+        .to_string()
+}
+
 /// KQL counting, per policy assignment, the resources evaluated and those
 /// non-compliant, from the latest policy states in the scope.
 pub fn policy_compliance_query() -> String {

@@ -103,6 +103,7 @@ fn draw_content(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         ViewMode::PolicyAssignments => draw_policy(f, area, app),
         ViewMode::PolicyNonCompliant => draw_non_compliant(f, area, app),
         ViewMode::ComplianceRanking => draw_compliance(f, area, app),
+        ViewMode::ExemptionList => draw_exemptions(f, area, app),
         ViewMode::ResourceDetail => draw_resource_detail(f, area, app),
         ViewMode::Logs => draw_logs(f, area, app),
     }
@@ -544,6 +545,113 @@ fn compliance_cell(c: Option<az9s_core::policy::Compliance>) -> (String, Style) 
     }
 }
 
+/// An exemption's expiry, coloured: red when expired, yellow within
+/// [`EXPIRY_WARNING_DAYS`](az9s_core::policy::EXPIRY_WARNING_DAYS).
+fn expiry_span(expiry: az9s_core::policy::Expiry, width: usize) -> Span<'static> {
+    use az9s_core::policy::{expiry_label, Expiry, EXPIRY_WARNING_DAYS};
+    let t = theme();
+    let style = match expiry {
+        Expiry::Expired(_) => Style::default().fg(t.error).add_modifier(Modifier::BOLD),
+        Expiry::In(d) if d <= EXPIRY_WARNING_DAYS => Style::default().fg(t.highlight),
+        Expiry::In(_) => Style::default().fg(t.ok),
+        Expiry::Never => Style::default().fg(t.muted),
+    };
+    Span::styled(cell(&expiry_label(expiry), width), style)
+}
+
+/// `:exemption`: exemptions at or below a scope, soonest to expire first.
+fn draw_exemptions(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
+    use az9s_core::policy::{Expiry, EXPIRY_WARNING_DAYS};
+    let rows = app.state().exemption_rows();
+    let state = app.state();
+    let t = theme();
+    let scope_name = state
+        .exemption_scope
+        .as_ref()
+        .map(|s| state.scope_label(&s.arm_id()))
+        .unwrap_or_else(|| "whole tenant".into());
+    let heading = format!("Exemptions · {scope_name}");
+    if rows.is_empty() {
+        let message = if state.loading {
+            "Loading policy exemptions…".to_string()
+        } else if !state.filter.is_empty() {
+            "No exemptions match the current filter.\n\nPress Esc to clear the filter.".into()
+        } else {
+            format!("No policy exemptions at or below {scope_name}.")
+        };
+        let content = Paragraph::new(message)
+            .block(Block::default().borders(Borders::ALL).title(heading))
+            .style(Style::default().fg(t.subtle))
+            .wrap(Wrap { trim: true });
+        f.render_widget(content, area);
+        return Ok(());
+    }
+
+    let (category_w, expiry_w, assignment_w, scope_w) = (11, 24, 32, 30);
+    let name_col = name_width(
+        area.width,
+        category_w + expiry_w + assignment_w + scope_w,
+        36,
+    );
+    let viewport = area.height.saturating_sub(2) as usize;
+    let mut list_state = state.list_state.clone();
+    let visible = list_state.visible_range(rows.len(), viewport);
+    let items: Vec<_> = rows[visible.clone()]
+        .iter()
+        .map(|r| {
+            list_item_spans(vec![
+                Span::styled(
+                    cell(&r.exemption.display_name, name_col),
+                    Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    cell(&r.exemption.category, category_w),
+                    Style::default().fg(t.accent),
+                ),
+                expiry_span(r.expiry, expiry_w),
+                Span::styled(
+                    cell(&r.assignment, assignment_w),
+                    Style::default().fg(t.highlight),
+                ),
+                Span::styled(cell(&r.scope_label, scope_w), Style::default().fg(t.muted)),
+                Span::styled(
+                    r.exemption.description.clone(),
+                    Style::default().fg(t.muted),
+                ),
+            ])
+        })
+        .collect();
+
+    let expired = rows
+        .iter()
+        .filter(|r| matches!(r.expiry, Expiry::Expired(_)))
+        .count();
+    let soon = rows
+        .iter()
+        .filter(|r| matches!(r.expiry, Expiry::In(d) if d <= EXPIRY_WARNING_DAYS))
+        .count();
+    let title = if state.filter_mode {
+        format!("{heading} ({}) - Filter: {}_", rows.len(), state.filter)
+    } else {
+        format!(
+            "{heading} ({} exemption{}, {expired} expired, {soon} expiring within \
+             {EXPIRY_WARNING_DAYS} days) · Enter details",
+            rows.len(),
+            if rows.len() == 1 { "" } else { "s" }
+        )
+    };
+    let list = SelectableList::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(theme().selection());
+    let mut widget_state = SelectableListState {
+        selected: list_state.selected - visible.start,
+        offset: 0,
+    };
+    list.render(area, f.buffer_mut(), &mut widget_state);
+    app.state_mut().list_state = list_state;
+    Ok(())
+}
+
 /// `:compliance`: subscriptions ranked by non-compliant resources.
 fn draw_compliance(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     let rows = app.state().compliance_rows();
@@ -912,6 +1020,13 @@ fn compliance_summary_line(
         Style::default().fg(t.muted),
     ));
     Line::from(spans)
+}
+
+/// Now, in unix seconds.
+fn chrono_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 /// A count with thousands separators: 12345 → "12,345".
@@ -1375,7 +1490,22 @@ fn policy_state_lines(state: &AppState) -> Vec<Line<'static>> {
             Style::default().fg(t.muted)
         };
         let scope = state.scope_label(az9s_core::policy::assignment_scope(&s.assignment_id));
-        Line::from(vec![
+        // Exempt: which exemption, and until when (Enter opens it).
+        let exemption = state
+            .exemption_for(&s)
+            .filter(|_| s.state.eq_ignore_ascii_case("Exempt"))
+            .map(|e| {
+                let expiry = e.expiry(chrono_now());
+                (
+                    format!(
+                        "  · exemption {}, {}",
+                        e.display_name,
+                        az9s_core::policy::expiry_label(expiry)
+                    ),
+                    expiry,
+                )
+            });
+        let mut spans = vec![
             Span::styled(format!("{:<13} ", s.state), style),
             Span::styled(
                 cell(s.policy_label(), policy_w),
@@ -1391,7 +1521,15 @@ fn policy_state_lines(state: &AppState) -> Vec<Line<'static>> {
             ),
             Span::styled(cell(&name, assignment_w), Style::default().fg(t.highlight)),
             Span::styled(scope, Style::default().fg(t.muted)),
-        ])
+        ];
+        if let Some((text, expiry)) = exemption {
+            let color = match expiry {
+                az9s_core::policy::Expiry::Expired(_) => t.error,
+                _ => t.accent,
+            };
+            spans.push(Span::styled(text, Style::default().fg(color)));
+        }
+        Line::from(spans)
     }));
     lines
 }
@@ -1724,6 +1862,17 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 (":", "Command"),
                 ("r", "Refresh"),
                 ("Esc", "Back"),
+                ("q", "Quit"),
+            ],
+            ViewMode::ExemptionList => vec![
+                ("↑↓/jk", "Navigate"),
+                ("Enter", "Details"),
+                ("/", "Filter"),
+                ("c", "Copy"),
+                ("y", "Copy ID"),
+                ("o", "Portal"),
+                (":", "Command"),
+                ("r", "Refresh"),
                 ("q", "Quit"),
             ],
             ViewMode::ComplianceRanking => vec![

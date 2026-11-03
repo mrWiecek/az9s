@@ -219,6 +219,35 @@ impl App {
         }
     }
 
+    /// Cache key of the policy exemptions for the current tenant.
+    fn exemptions_key(&self) -> String {
+        match &self.state.tenant {
+            Some(tenant) => format!("policy_exemptions:{}", tenant.to_ascii_lowercase()),
+            None => "policy_exemptions".into(),
+        }
+    }
+
+    /// Load the tenant's policy exemptions (cached first) unless loading.
+    pub fn load_exemptions(&mut self) {
+        if !self.pending.contains_key(&LoadKind::PolicyExemptions) {
+            self.request(LoadRequest::PolicyExemptions);
+        }
+    }
+
+    /// `:exemption`: the exemptions at or below `scope` (`None`: the whole
+    /// tenant), soonest to expire first.
+    pub fn open_exemptions(&mut self, scope: Option<crate::policy::PolicyScope>) {
+        let state = &mut self.state;
+        state.exemption_scope = scope;
+        state.view = ViewMode::ExemptionList;
+        state.list_state.reset();
+        self.request(LoadRequest::PolicyExemptions);
+        // Names of the assignments they exempt from.
+        if self.state.policy_assignments.is_empty() {
+            self.request(LoadRequest::PolicyAssignments);
+        }
+    }
+
     /// Cache key of the compliance roll-up for the current tenant.
     fn rollup_key(&self) -> String {
         match &self.state.tenant {
@@ -311,6 +340,10 @@ impl App {
             subscription_id: resource.subscription_id.clone(),
         };
         self.request(request);
+        // Exempt states link to their exemption.
+        if self.state.policy_exemptions.is_empty() {
+            self.load_exemptions();
+        }
     }
 
     /// Cache key of the management group tree for the current tenant.
@@ -411,6 +444,12 @@ impl App {
             | LoadRequest::Tenants
             | LoadRequest::PolicyStates { .. }
             | LoadRequest::ResourcePolicy { .. } => return,
+            LoadRequest::PolicyExemptions => repo.document(&self.exemptions_key()).map(|doc| {
+                match doc.and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at))) {
+                    Some((items, at)) => (LoadedData::PolicyExemptions(items), Some(at)),
+                    None => (LoadedData::PolicyExemptions(vec![]), None),
+                }
+            }),
             LoadRequest::ComplianceRollup => repo.document(&self.rollup_key()).map(|doc| match doc
                 .and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at)))
             {
@@ -516,6 +555,7 @@ impl App {
             LoadKind::ResourceDetail => usize::from(self.state.resource_document.is_some()),
             LoadKind::Tenants => self.state.tenants.len(),
             LoadKind::PolicyAssignments => self.state.policy_assignments.len(),
+            LoadKind::PolicyExemptions => self.state.policy_exemptions.len(),
             LoadKind::ComplianceRollup => usize::from(self.state.compliance_rollup.is_some()),
             LoadKind::PolicyCompliance => usize::from(self.state.policy_compliance.is_some()),
             LoadKind::ComplianceSummary => usize::from(self.state.compliance_summary.is_some()),
@@ -554,6 +594,13 @@ impl App {
             }
             Err(e) if staged => self.state.notice = Some(format!("{e}; showing cached data")),
             Err(e) if kind == LoadKind::ScopeTree => self.fall_back_to_subscriptions(&e),
+            // Exemptions loaded for the Policy tab are optional too.
+            Err(e)
+                if kind == LoadKind::PolicyExemptions
+                    && self.state.view != ViewMode::ExemptionList =>
+            {
+                warn!("Policy exemptions unavailable: {}", e)
+            }
             // The tree's compliance column is optional: no popup for it.
             Err(e)
                 if kind == LoadKind::ComplianceRollup
@@ -638,6 +685,10 @@ impl App {
                 // enough. Otherwise the list is empty or incomplete: error.
                 if kind == LoadKind::ScopeTree && !pending.staged {
                     self.fall_back_to_subscriptions(&e);
+                } else if kind == LoadKind::PolicyExemptions
+                    && self.state.view != ViewMode::ExemptionList
+                {
+                    warn!("Policy exemptions unavailable: {}", e);
                 } else if kind == LoadKind::ComplianceRollup
                     && self.state.view != ViewMode::ComplianceRanking
                 {
@@ -689,6 +740,7 @@ impl App {
             LoadedData::ScopeTree(tree) => self.state.set_scope_tree(tree),
             LoadedData::Tenants(tenants) => self.state.tenants = tenants,
             LoadedData::PolicyAssignments(items) => self.state.policy_assignments = items,
+            LoadedData::PolicyExemptions(items) => self.state.policy_exemptions = items,
             LoadedData::ComplianceRollup(counts) => self.state.compliance_rollup = Some(counts),
             LoadedData::PolicyCompliance(scope, counts) => {
                 self.state.policy_compliance = Some((scope, counts))
@@ -735,6 +787,15 @@ impl App {
             LoadRequest::Tenants
             | LoadRequest::PolicyStates { .. }
             | LoadRequest::ResourcePolicy { .. } => return,
+            LoadRequest::PolicyExemptions => {
+                match serde_json::to_string(&self.state.policy_exemptions) {
+                    Ok(value) => WriteJob::Document {
+                        key: self.exemptions_key(),
+                        value,
+                    },
+                    Err(_) => return,
+                }
+            }
             LoadRequest::ComplianceRollup => match &self.state.compliance_rollup {
                 Some(counts) => match serde_json::to_string(counts) {
                     Ok(value) => WriteJob::Document {
@@ -850,6 +911,7 @@ fn view_of(kind: LoadKind) -> ViewMode {
             ViewMode::PolicyAssignments
         }
         LoadKind::ComplianceRollup => ViewMode::ComplianceRanking,
+        LoadKind::PolicyExemptions => ViewMode::ExemptionList,
     }
 }
 
