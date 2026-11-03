@@ -203,7 +203,11 @@ Work items, in order:
       subscriptions); `:compliance [all|<mg>]` ranks subscriptions by
       non-compliant resources (v0.16.0).
 - [ ] The same per resource group (within a subscription).
-- [ ] List exemptions (with expiry) and remediation tasks, read-only.
+- [x] List exemptions (with expiry), read-only: `:exemption [all|<mg>|<sub>]`,
+      soonest to expire first; a resource's Exempt policies name their
+      exemption (v0.17.0).
+- [ ] Remediation tasks, read-only (status and resources succeeded/failed per
+      assignment; not in Resource Graph, so ARM per scope).
 - Policy *actions* (trigger a compliance scan, create or extend exemptions, start
   remediation) come in M4 on top of the action framework.
 

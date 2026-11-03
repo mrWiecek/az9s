@@ -464,6 +464,7 @@ impl TuiApp {
             | CommandKind::Tags { scope, .. }
             | CommandKind::Policy { scope }
             | CommandKind::Compliance { scope }
+            | CommandKind::Exemption { scope }
                 if *scope == Scope::Current =>
             {
                 *scope = context;
@@ -477,6 +478,10 @@ impl TuiApp {
                     self.state_mut().clear_navigation();
                     self.core.open_policy(policy_scope);
                 }
+            }
+            CommandKind::Exemption { scope } => {
+                debug!("Command: exemption, scope {:?}", scope);
+                self.open_exemptions(scope);
             }
             CommandKind::Compliance { scope } => {
                 debug!("Command: compliance, scope {:?}", scope);
@@ -943,6 +948,9 @@ impl TuiApp {
                 self.core.request(LoadRequest::ScopeTree);
                 self.core.request(LoadRequest::ComplianceRollup);
             }
+            (ViewMode::ExemptionList, _) => {
+                self.core.request(LoadRequest::PolicyExemptions);
+            }
             (ViewMode::ComplianceRanking, _) => {
                 self.core.request(LoadRequest::ComplianceRollup);
             }
@@ -1129,7 +1137,13 @@ impl TuiApp {
         if let Some((key, value)) = self.state().selected_detail_tag() {
             self.open_tag_resources(key, value);
         } else if let Some(policy) = self.state().selected_detail_policy() {
-            self.open_policy_definition(policy);
+            // An exempt policy: the exemption explains it.
+            match self.state().exemption_for(&policy).cloned() {
+                Some(exemption) if policy.state.eq_ignore_ascii_case("Exempt") => {
+                    self.open_from_detail(exemption_resource(&exemption))
+                }
+                _ => self.open_policy_definition(policy),
+            }
         }
     }
 
@@ -1172,19 +1186,11 @@ impl TuiApp {
             self.state_mut().notice = Some("Azure did not report this policy's definition".into());
             return;
         }
-        let state = self.state();
-        let back = state.selected_resource_detail.as_ref().and_then(|r| {
-            serde_json::to_string(&(r, state.detail_tab.index(), state.detail_cursor)).ok()
-        });
-        self.push_current_context(None);
-        if let (Some(back), Some(ctx)) = (back, self.state_mut().navigation_stack.last_mut()) {
-            ctx.metadata.insert(DETAIL.into(), back);
-        }
         let set = policy
             .definition_id
             .to_ascii_lowercase()
             .contains("/policysetdefinitions/");
-        self.core.open_resource_detail(az9s_core::models::Resource {
+        self.open_from_detail(az9s_core::models::Resource {
             name: policy.policy_label().to_string(),
             id: policy.definition_id,
             resource_type: if set {
@@ -1199,6 +1205,50 @@ impl TuiApp {
             subscription_id: String::new(),
             tags: Default::default(),
         });
+    }
+
+    /// Open another object's detail from the detail view; Esc comes back to
+    /// this resource, on the same tab and row.
+    fn open_from_detail(&mut self, resource: az9s_core::models::Resource) {
+        let state = self.state();
+        let back = state.selected_resource_detail.as_ref().and_then(|r| {
+            serde_json::to_string(&(r, state.detail_tab.index(), state.detail_cursor)).ok()
+        });
+        self.push_current_context(None);
+        if let (Some(back), Some(ctx)) = (back, self.state_mut().navigation_stack.last_mut()) {
+            ctx.metadata.insert(DETAIL.into(), back);
+        }
+        self.core.open_resource_detail(resource);
+    }
+
+    /// `:exemption`: the exemptions at or below a scope (a management group
+    /// or subscription by name; `all` or no context: the whole tenant).
+    fn open_exemptions(&mut self, scope: Scope) {
+        let scope = match scope {
+            Scope::All => None,
+            Scope::Current => None,
+            Scope::Group(group) => Some(PolicyScope::Group(group)),
+            Scope::Subscription(name) => match self.find_group(&name) {
+                Some(group) => Some(PolicyScope::Group(group)),
+                None => match self.find_subscription(&name) {
+                    Some(sub) => Some(PolicyScope::Subscription(sub.id.clone())),
+                    None => {
+                        self.state_mut().set_error(Some(format!(
+                            "No management group or subscription named {name}"
+                        )));
+                        return;
+                    }
+                },
+            },
+        };
+        // The tenant root group is the whole tenant.
+        let root = self.state().scope_tree.as_ref().map(|t| t.root.clone());
+        let scope =
+            scope.filter(|s| !matches!(s, PolicyScope::Group(g) if Some(g) == root.as_ref()));
+        let state = self.state_mut();
+        state.clear_navigation();
+        state.filter.clear();
+        self.core.open_exemptions(scope);
     }
 
     fn scroll_detail(&mut self, lines: isize) {
@@ -1400,6 +1450,14 @@ impl TuiApp {
                 if let Some(row) = self.state().selected_policy_row() {
                     self.push_current_context(None);
                     self.core.open_non_compliant(row.assignment);
+                }
+                Ok(true)
+            }
+            ViewMode::ExemptionList => {
+                if let Some(row) = self.state().selected_exemption() {
+                    self.push_current_context(None);
+                    self.core
+                        .open_resource_detail(exemption_resource(&row.exemption));
                 }
                 Ok(true)
             }
@@ -1661,6 +1719,24 @@ impl TuiApp {
             }
         }
         Ok(true)
+    }
+}
+
+/// An exemption as a detail-view item (found by ID across the tenant).
+fn exemption_resource(e: &az9s_core::policy::PolicyExemption) -> az9s_core::models::Resource {
+    let scope = e.scope().to_ascii_lowercase();
+    let subscription_id = scope
+        .strip_prefix("/subscriptions/")
+        .map(|s| s.split('/').next().unwrap_or(s).to_string())
+        .unwrap_or_default();
+    az9s_core::models::Resource {
+        id: e.id.clone(),
+        name: e.display_name.clone(),
+        resource_type: "Microsoft.Authorization/policyExemptions".into(),
+        location: String::new(),
+        resource_group: String::new(),
+        subscription_id,
+        tags: Default::default(),
     }
 }
 

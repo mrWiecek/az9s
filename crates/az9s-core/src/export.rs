@@ -111,6 +111,29 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
                 ),
             )
         }
+        ViewMode::ExemptionList => {
+            let rows = state.exemption_rows();
+            let lines = rows.iter().map(|r| {
+                let e = &r.exemption;
+                tsv(&[
+                    &e.display_name,
+                    &e.category,
+                    &crate::policy::expiry_label(r.expiry),
+                    &e.expires_on,
+                    &r.assignment,
+                    &r.scope_label,
+                    &e.description,
+                    &e.id,
+                ])
+            });
+            (
+                count(rows.len(), "exemption"),
+                with_header(
+                    "exemption\tcategory\texpiry\texpires on\tassignment\tscope\treason\tid",
+                    lines,
+                ),
+            )
+        }
         ViewMode::ComplianceRanking => {
             let rows = state.compliance_rows();
             let lines = rows.iter().map(|r| {

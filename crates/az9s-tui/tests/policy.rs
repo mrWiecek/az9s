@@ -3,7 +3,7 @@
 use az9s_core::cache::Cache;
 use az9s_core::loader::{ChunkSink, FetchOutcome, Fetcher, LoadRequest, LoadedData};
 use az9s_core::models::Subscription;
-use az9s_core::policy::{Compliance, PolicyAssignment, PolicyScope, PolicyState};
+use az9s_core::policy::{Compliance, PolicyAssignment, PolicyExemption, PolicyScope, PolicyState};
 use az9s_core::scope_tree::{GroupNode, ScopeTree, SubscriptionNode};
 use az9s_core::state::{DetailTab, ViewMode};
 use az9s_core::App;
@@ -38,6 +38,32 @@ fn state(resource_id: &str, assignment: &str, definition: &str, compliance: &str
 }
 
 const PURGE_DEF: &str = "/providers/Microsoft.Authorization/policyDefinitions/purge";
+
+/// Three exemptions: expired (on the key vault), expiring in 10 days (on the
+/// subscription), never (on the Platform group).
+fn exemptions() -> Vec<PolicyExemption> {
+    // An hour past the whole days, so the day count can't flip mid-test.
+    let at = |days: i64| {
+        let hour = chrono::Duration::hours(days.signum());
+        (chrono::Utc::now() + chrono::Duration::days(days) + hour).to_rfc3339()
+    };
+    let exemption =
+        |scope: &str, name: &str, assignment_name: &str, expires: String| PolicyExemption {
+            id: format!("{scope}/providers/Microsoft.Authorization/policyExemptions/{name}"),
+            name: name.into(),
+            display_name: format!("Exempt {name}"),
+            assignment_id: assignment(assignment_name, &mg("root"), false).id,
+            category: "Waiver".into(),
+            expires_on: expires,
+            description: format!("because {name}"),
+            references: vec![],
+        };
+    vec![
+        exemption(&mg("platform"), "forever", "tags", String::new()),
+        exemption("/subscriptions/s1", "soon", "tags", at(10)),
+        exemption(KV, "old", "tags", at(-3)),
+    ]
+}
 
 fn assignment(name: &str, scope: &str, initiative: bool) -> PolicyAssignment {
     PolicyAssignment {
@@ -116,6 +142,7 @@ impl Fetcher for Azure {
                     ],
                 ))
             }
+            LoadRequest::PolicyExemptions => Ok(LoadedData::PolicyExemptions(exemptions())),
             LoadRequest::ComplianceRollup => Ok(LoadedData::ComplianceRollup(HashMap::from([
                 (
                     "s1".to_string(),
@@ -319,7 +346,8 @@ async fn drill_down_from_assignment_to_non_compliant_resource_and_back() {
     app.apply_load(loads.recv().await.unwrap()); // the document (not in this fake)
     press(&mut app, KeyCode::Char('3')).await;
     assert_eq!(app.state().detail_tab, DetailTab::Policy);
-    app.apply_load(loads.recv().await.unwrap());
+    app.apply_load(loads.recv().await.unwrap()); // states
+    app.apply_load(loads.recv().await.unwrap()); // exemptions, for Exempt rows
     let rows = app.state().detail_policy_states().unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(
@@ -492,4 +520,88 @@ async fn tree_shows_compliance_and_compliance_ranks_subscriptions() {
         text.contains("88.0% · 30 non-compliant"),
         "root: 30 of 250\n{text}"
     );
+}
+
+#[tokio::test]
+async fn exemptions_list_soonest_to_expire_first_and_exempt_rows_open_them() {
+    let (mut app, _) = setup(true);
+    let mut loads = app.take_load_receiver().unwrap();
+    command(&mut app, "exemption all").await;
+    assert_eq!(app.state().view, ViewMode::ExemptionList);
+    app.apply_load(loads.recv().await.unwrap());
+    app.apply_load(loads.recv().await.unwrap()); // assignments, for names
+    let names: Vec<String> = app
+        .state()
+        .exemption_rows()
+        .into_iter()
+        .map(|r| r.exemption.name)
+        .collect();
+    assert_eq!(names, ["old", "soon", "forever"]);
+    let text = screen(&mut app);
+    for expected in [
+        "Exemptions · whole tenant (3 exemptions, 1 expired, 1 expiring within 30 days)",
+        "expired 3 days ago",
+        "expires in 10 days",
+        "never expires",
+        "Require tags",
+        "because old",
+    ] {
+        assert!(text.contains(expected), "{expected}\n{text}");
+    }
+
+    // At or below a scope: the subscription has its own and the vault's.
+    command(&mut app, "exemption prod").await;
+    let names: Vec<String> = app
+        .state()
+        .exemption_rows()
+        .into_iter()
+        .map(|r| r.exemption.name)
+        .collect();
+    assert_eq!(names, ["old", "soon"]);
+
+    // Enter: the exemption's details.
+    press(&mut app, KeyCode::Enter).await;
+    assert_eq!(app.state().view, ViewMode::ResourceDetail);
+    let detail = app.state().selected_resource_detail.clone().unwrap();
+    assert!(detail.id.ends_with("/policyExemptions/old"));
+    assert_eq!(detail.subscription_id, "s1");
+
+    // A resource's Policy tab: the Exempt row names the exemption that
+    // applies, and
+    // Enter opens it.
+    {
+        let state = app.state_mut();
+        state.selected_resource_detail = Some(az9s_core::models::Resource {
+            id: KV.into(),
+            name: "kv-app".into(),
+            resource_type: "Microsoft.KeyVault/vaults".into(),
+            location: String::new(),
+            resource_group: "rg-app".into(),
+            subscription_id: "s1".into(),
+            tags: Default::default(),
+        });
+        let tags = assignment("tags", &mg("root"), false).id;
+        state.resource_policy = Some((KV.into(), vec![state_of(&tags)]));
+        state.detail_tab = DetailTab::Policy;
+        state.detail_cursor = 0;
+    }
+    // The vault's own exemption expired, so it no longer exempts: the
+    // subscription's still-active one does.
+    let text = screen(&mut app);
+    assert!(
+        text.contains("exemption Exempt soon, expires in 10 days"),
+        "{text}"
+    );
+    press(&mut app, KeyCode::Enter).await;
+    assert!(app
+        .state()
+        .selected_resource_detail
+        .as_ref()
+        .unwrap()
+        .id
+        .ends_with("/policyExemptions/soon"));
+}
+
+fn state_of(assignment: &str) -> PolicyState {
+    state(KV, assignment, "require-tag", "Exempt")
 }

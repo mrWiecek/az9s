@@ -127,7 +127,13 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   tree's column, `compliance_rows` ranks them for `:compliance`, and
   `policy_summary` falls back to it until the scope's own summary arrives.
   It is a separate load kind so it never cancels, or is cancelled by, the
-  policy view's summary. Per-subscription rows add up exactly, so management groups can be
+  policy view's summary.
+- Exemptions: `LoadRequest::PolicyExemptions` (tenant-wide, cached as
+  `policy_exemptions:<tenant>`) into `PolicyExemption`. `:exemption` lists
+  those `within` a scope (`AppState::exemption_rows`, by `Expiry`); the
+  Policy tab finds the exemption behind an Exempt state with
+  `AppState::exemption_for` (covers the state, not expired, most specific
+  scope). Per-subscription rows add up exactly, so management groups can be
   rolled up from them.
   The drill-down is not cached (policy states change often):
   `App::open_non_compliant` loads `LoadRequest::PolicyStates` (one
