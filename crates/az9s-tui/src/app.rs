@@ -3,8 +3,10 @@ use crate::event::Event;
 use crate::ui::search;
 use crate::{Command, CommandKind, Scope};
 use anyhow::Result;
+use az9s_core::complete;
 use az9s_core::detail;
 use az9s_core::loader::{LoadReceiver, LoadRequest, LoadResult};
+use az9s_core::palette::PaletteAction;
 use az9s_core::query::ResourceQuery;
 use az9s_core::scope_tree::TreeRowKind;
 use az9s_core::state::{DetailTab, NavigationContext, ViewMode};
@@ -140,6 +142,11 @@ impl TuiApp {
             return self.handle_filter_key(key).await;
         }
 
+        // The command palette takes every key while open
+        if self.state().palette.is_some() {
+            return self.handle_palette_key(key).await;
+        }
+
         // Typing a search in the detail view (after `/`)
         if self.state().detail_search_input.is_some() {
             self.handle_search_key(key);
@@ -158,6 +165,12 @@ impl TuiApp {
                     info!("Quit requested");
                     self.should_quit = true;
                     return Ok(false);
+                }
+                KeyCode::Char('p') => {
+                    debug!("Open the command palette");
+                    let palette = az9s_core::palette::Palette::open(self.state());
+                    self.state_mut().palette = Some(palette);
+                    return Ok(true);
                 }
                 KeyCode::Char('r') => {
                     debug!("Force refresh requested");
@@ -284,12 +297,135 @@ impl TuiApp {
                 self.state_mut().command_pop();
                 Ok(true)
             }
+            // Autocomplete: Tab takes the highlighted suggestion; ↑/↓ pick.
+            KeyCode::Tab => {
+                let state = self.state();
+                let completion = complete::complete(&state.command_input, state);
+                if let Some(s) = completion
+                    .items
+                    .get(state.command_selection)
+                    .or(completion.items.first())
+                {
+                    let input = complete::apply(&state.command_input, completion.start, &s.text);
+                    let state = self.state_mut();
+                    state.command_input = input;
+                    state.command_selection = 0;
+                }
+                Ok(true)
+            }
+            KeyCode::Down | KeyCode::Up => {
+                let state = self.state();
+                let n = complete::complete(&state.command_input, state).items.len();
+                if n > 0 {
+                    let step = if key.code == KeyCode::Down { 1 } else { n - 1 };
+                    let state = self.state_mut();
+                    state.command_selection = (state.command_selection + step) % n;
+                }
+                Ok(true)
+            }
             KeyCode::Char(c) => {
                 self.state_mut().command_push(c);
                 Ok(true)
             }
             _ => Ok(true),
         }
+    }
+
+    /// Keys while the palette is open: type to search, ↑/↓ (or Ctrl+P/N)
+    /// to choose, Enter to go, Esc to close.
+    async fn handle_palette_key(&mut self, key: KeyEvent) -> Result<bool> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let Some(palette) = self.state_mut().palette.as_mut() else {
+            return Ok(true);
+        };
+        match key.code {
+            KeyCode::Esc => self.state_mut().palette = None,
+            KeyCode::Enter => {
+                let action = palette.chosen().map(|r| r.item.action.clone());
+                self.state_mut().palette = None;
+                if let Some(action) = action {
+                    self.run_palette_action(action).await?;
+                }
+            }
+            KeyCode::Down => palette.select(1),
+            KeyCode::Up => palette.select(-1),
+            KeyCode::Char('n') if ctrl => palette.select(1),
+            KeyCode::Char('p') if ctrl => palette.select(-1),
+            KeyCode::Char('c') if ctrl => {
+                self.should_quit = true;
+                return Ok(false);
+            }
+            KeyCode::Backspace => {
+                let mut query = palette.query.clone();
+                query.pop();
+                palette.set_query(query);
+            }
+            KeyCode::Char(c) if !ctrl => {
+                let query = format!("{}{c}", palette.query);
+                palette.set_query(query);
+            }
+            _ => {}
+        }
+        Ok(true)
+    }
+
+    /// Go where a palette item points. Esc afterwards returns to where the
+    /// palette was opened.
+    async fn run_palette_action(&mut self, action: PaletteAction) -> Result<()> {
+        match action {
+            PaletteAction::Command(command) => self.execute_command(&command).await?,
+            PaletteAction::Help => self.state_mut().toggle_help(),
+            PaletteAction::Subscription(id) => {
+                self.push_current_context(None);
+                let sub = self
+                    .state()
+                    .subscriptions
+                    .iter()
+                    .find(|s| s.id == id)
+                    .cloned();
+                let state = self.state_mut();
+                state.selected_subscription = sub;
+                state.scope_group = None;
+                self.show_resource_groups(vec![id], false);
+            }
+            PaletteAction::ManagementGroup(group) => {
+                let ids = self.enabled_subscriptions_under(Some(&group));
+                if ids.is_empty() {
+                    self.state_mut().notice =
+                        Some("No enabled subscriptions under that management group".into());
+                    return Ok(());
+                }
+                self.push_current_context(None);
+                let state = self.state_mut();
+                state.scope_group = Some(group);
+                state.selected_subscription = None;
+                self.show_resource_groups(ids, true);
+            }
+            PaletteAction::ResourceGroup {
+                subscription_id,
+                name,
+            } => {
+                self.push_current_context(None);
+                let sub = self
+                    .state()
+                    .subscriptions
+                    .iter()
+                    .find(|s| s.id.eq_ignore_ascii_case(&subscription_id))
+                    .cloned();
+                let state = self.state_mut();
+                state.selected_subscription = sub;
+                state.scope_group = None;
+                self.show_resources(vec![subscription_id], Some(name), false);
+            }
+            PaletteAction::Resource(id) => {
+                let resource = self.state().resources.iter().find(|r| r.id == id).cloned();
+                if let Some(resource) = resource {
+                    self.push_current_context(Some(resource.resource_group.clone()));
+                    self.core.open_resource_detail(resource);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Execute a parsed command

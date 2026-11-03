@@ -63,7 +63,8 @@ az9s --timings                             # launch, print a timing summary on e
 | `Space`, `l`/`→`, `h`/`←` | Tree: open/close a group (`h` on a closed row goes to the parent) |
 | `Esc` / `Backspace` | Back, clear filter, or dismiss error |
 | `/` | Filter the list; in the detail view, search like Vim (`n`/`N` next/previous) |
-| `:` | Command mode |
+| `:` | Command mode; suggestions as you type, `Tab` completes |
+| `Ctrl+P` | Go to anything: fuzzy search over commands, subscriptions, management groups and the loaded resource groups and resources |
 | `r` | Refresh |
 | `y` | Copy the selected item's Azure ID (works over SSH; in tmux enable `set-clipboard`) |
 | `c` | Copy the current view: all filtered rows of a list (tab-separated, pastes into a spreadsheet), or the detail view's tab (Overview, Tags, JSON) |

@@ -59,6 +59,12 @@ pub struct AppState {
     /// Command input buffer
     pub command_input: String,
 
+    /// Selected autocomplete suggestion in command mode
+    pub command_selection: usize,
+
+    /// The command palette (Ctrl+P), while open
+    pub palette: Option<crate::palette::Palette>,
+
     /// Help screen state
     pub help_open: bool,
 
@@ -792,6 +798,7 @@ impl AppState {
     pub fn enter_command_mode(&mut self) {
         self.command_mode = true;
         self.command_input.clear();
+        self.command_selection = 0;
     }
 
     /// Exit command mode
@@ -803,11 +810,13 @@ impl AppState {
     /// Add character to command input
     pub fn command_push(&mut self, c: char) {
         self.command_input.push(c);
+        self.command_selection = 0;
     }
 
     /// Remove last character from command input
     pub fn command_pop(&mut self) {
         self.command_input.pop();
+        self.command_selection = 0;
     }
 }
 

@@ -1,9 +1,12 @@
 pub mod app;
 pub mod cache;
+pub mod complete;
 pub mod detail;
 pub mod export;
+pub mod fuzzy;
 pub mod loader;
 pub mod models;
+pub mod palette;
 pub mod query;
 pub mod resource_type;
 pub mod scope_tree;

@@ -105,6 +105,14 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   in one memoized pass; `AppState::type_summary` counts types and
   `AppState::tag_summary` counts tag key/value pairs (each memoized per list
   and query).
+- `fuzzy.rs`: fzf-style fuzzy matching (in-order characters; contiguous
+  runs, word starts and early matches score higher; several words must all
+  match).
+- `palette.rs`: the `Ctrl+P` palette: items from commands and loaded data,
+  each with a `PaletteAction`; `Palette` snapshots the items when opened
+  and re-searches on each keystroke.
+- `complete.rs`: `:` autocomplete: suggestions for the word being typed
+  (commands, scope, filter keys, and values from loaded data) and `apply`.
 - `export.rs`: `view_text`, what `c` copies: a list's filtered rows as TSV
   with a header, the tree or type summary rows, or the detail view's tab.
 - `resource_type.rs`: short aliases for resource types (`vm`, `vnet`, …),

@@ -16,7 +16,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, StatefulWidget, Tabs, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, StatefulWidget, Tabs, Wrap},
     Frame,
 };
 use status_bar::StatusBar;
@@ -44,6 +44,16 @@ pub fn draw(f: &mut Frame, app: &mut TuiApp) -> Result<()> {
     draw_content(f, chunks[1], app)?;
     draw_status_bar(f, chunks[2], app);
     draw_footer(f, chunks[3], app);
+
+    // Autocomplete suggestions just above the command line
+    if app.state().command_mode {
+        draw_command_suggestions(f, chunks[3], app);
+    }
+
+    // Command palette
+    if app.state().palette.is_some() {
+        draw_palette(f, f.size(), app);
+    }
 
     // Draw error overlay if present
     if app.state().error.is_some() {
@@ -925,13 +935,164 @@ fn draw_logs(f: &mut Frame, area: Rect, _app: &TuiApp) -> Result<()> {
     Ok(())
 }
 
+/// Suggestions for the `:` command being typed, in a box that sits on top
+/// of the footer and grows upwards.
+fn draw_command_suggestions(f: &mut Frame, footer: Rect, app: &TuiApp) {
+    let state = app.state();
+    let completion = az9s_core::complete::complete(&state.command_input, state);
+    if completion.items.is_empty() {
+        return;
+    }
+    const VISIBLE: usize = 8;
+    let height = completion.items.len().min(VISIBLE) as u16 + 2;
+    let width = footer.width.min(80);
+    let area = Rect {
+        x: footer.x,
+        y: footer.y.saturating_sub(height),
+        width,
+        height: height.min(footer.y),
+    };
+    let selected = state.command_selection.min(completion.items.len() - 1);
+    let first = selected.saturating_sub(VISIBLE - 1);
+    let text_width = completion
+        .items
+        .iter()
+        .map(|s| s.text.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(40)
+        + 2;
+    let lines: Vec<Line> = completion
+        .items
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(VISIBLE)
+        .map(|(i, s)| {
+            let style = if i == selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            Line::from(vec![
+                Span::styled(cell(&s.text, text_width), style),
+                Span::styled(s.detail.clone(), Style::default().fg(Color::DarkGray)),
+            ])
+        })
+        .collect();
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(format!(
+            " {} suggestion{} · Tab completes · ↑↓ choose ",
+            completion.items.len(),
+            if completion.items.len() == 1 { "" } else { "s" }
+        ))),
+        area,
+    );
+}
+
+/// The command palette: a search line and the best matches, with the
+/// matched characters highlighted.
+fn draw_palette(f: &mut Frame, area: Rect, app: &TuiApp) {
+    let Some(palette) = &app.state().palette else {
+        return;
+    };
+    let width = (area.width * 7 / 10).max(40).min(area.width);
+    let height = (area.height * 6 / 10).max(10).min(area.height);
+    let rect = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 4,
+        width,
+        height,
+    };
+    f.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(format!(
+            " Go to · {} match{} · Enter go · Esc close ",
+            palette.results.len(),
+            if palette.results.len() == 1 { "" } else { "es" }
+        ));
+    let inner = block.inner(rect);
+    f.render_widget(block, rect);
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("{}_", palette.query),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+    ];
+    let visible = (inner.height as usize).saturating_sub(2);
+    let first = palette.selected.saturating_sub(visible.saturating_sub(1));
+    let label_width = (inner.width as usize / 2).max(20);
+    for (i, result) in palette.results.iter().enumerate().skip(first).take(visible) {
+        let selected = i == palette.selected;
+        let base = if selected {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let mut spans = vec![Span::styled(
+            format!("{:<4}", result.item.kind.tag()),
+            if selected {
+                base
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        )];
+        // The label, with matched characters highlighted, cut to fit.
+        let label = cell(&result.item.label, label_width);
+        for (j, ch) in label.chars().enumerate() {
+            let style = if result.positions.contains(&j) {
+                base.fg(if selected {
+                    Color::Black
+                } else {
+                    Color::Yellow
+                })
+                .add_modifier(Modifier::BOLD)
+            } else {
+                base
+            };
+            spans.push(Span::styled(ch.to_string(), style));
+        }
+        spans.push(Span::styled(
+            result.item.detail.clone(),
+            if selected {
+                base
+            } else {
+                Style::default().fg(Color::DarkGray)
+            },
+        ));
+        lines.push(Line::from(spans));
+    }
+    if palette.results.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Nothing matches. Only loaded data is searched: run :res all first to find any resource.",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
 /// Draw the footer with keybindings or command input
 fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
     // If in command mode, show command input
     if app.state().command_mode {
         let command_text = format!(":{}_", app.state().command_input);
         let footer = Paragraph::new(command_text)
-            .block(Block::default().borders(Borders::ALL).title("Command"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Command · Tab completes · Enter runs · Esc cancels"),
+            )
             .style(Style::default().fg(Color::Cyan));
         f.render_widget(footer, area);
         return;
@@ -967,6 +1128,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("Enter", "Resource Groups"),
                 ("/", "Filter"),
                 (":", "Command"),
+                ("^P", "Go to"),
                 ("?", "Help"),
                 ("r", "Refresh"),
                 ("q", "Quit"),
@@ -978,6 +1140,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("Enter", "Select"),
                 ("/", "Filter"),
                 (":", "Command"),
+                ("^P", "Go to"),
                 ("?", "Help"),
                 ("r", "Refresh"),
                 ("q", "Quit"),
@@ -989,6 +1152,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("Enter", "View Resources"),
                 ("/", "Filter"),
                 (":", "Command"),
+                ("^P", "Go to"),
                 ("?", "Help"),
                 ("r", "Refresh"),
                 ("Esc", "Back"),
@@ -1001,6 +1165,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("Enter", "Details"),
                 ("/", "Filter"),
                 (":", "Command"),
+                ("^P", "Go to"),
                 ("?", "Help"),
                 ("r", "Refresh"),
                 ("Esc", "Back"),
@@ -1012,6 +1177,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("/", "Filter"),
                 ("c", "Copy"),
                 (":", "Command"),
+                ("^P", "Go to"),
                 ("?", "Help"),
                 ("r", "Refresh"),
                 ("Esc", "Back"),
@@ -1022,6 +1188,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("Enter", "List Resources"),
                 ("/", "Filter"),
                 (":", "Command"),
+                ("^P", "Go to"),
                 ("?", "Help"),
                 ("r", "Refresh"),
                 ("Esc", "Back"),
@@ -1043,6 +1210,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("Enter", "Select"),
                 ("/", "Filter"),
                 (":", "Command"),
+                ("^P", "Go to"),
                 ("?", "Help"),
                 ("Esc", "Back"),
                 ("r", "Refresh"),
