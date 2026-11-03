@@ -51,6 +51,23 @@ mod tests {
         }
     }
 
+    /// The bug this module fixes, shown on GitHub's Windows runners: starting
+    /// `az` by bare name (what az9s did before) fails there, although the
+    /// Azure CLI is installed and `az_command` starts it.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn on_windows_bare_az_is_not_found() {
+        if std::env::var_os("GITHUB_ACTIONS").is_none() {
+            return;
+        }
+        let bare = Command::new("az").arg("--version").output().await;
+        assert_eq!(
+            bare.map(|_| ()).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound,
+            "Command::new(\"az\") can't start az.cmd"
+        );
+    }
+
     #[test]
     fn not_found_is_explained() {
         let e = std::io::Error::from(std::io::ErrorKind::NotFound);
