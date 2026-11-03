@@ -171,7 +171,7 @@ Work items, in order:
 - [x] `y` copies the resource ID, `o` opens the resource in the Azure Portal.
 - [x] Filters: `:res type=Microsoft.Compute/virtualMachines`, `loc=westeurope`,
       `tag=env:prod`, and a resource-type summary view (`:type`).
-- [ ] A real command palette with fuzzy search over commands and resources, and
+- [x] A real command palette with fuzzy search over commands and resources, and
       autocomplete for `:` commands.
 - [ ] Config file `~/.config/az9s/config.toml` for default subscription, refresh
       interval, theme, and read-only mode.

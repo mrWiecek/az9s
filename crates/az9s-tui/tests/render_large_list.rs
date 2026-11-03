@@ -262,3 +262,28 @@ fn long_names_are_cut_before_the_next_column() {
     );
     assert!(!text.contains("0001"));
 }
+
+/// The palette over 100k resources: opening it, and each keystroke's search.
+/// Ignored by default (wall clock); run with `just perf`.
+#[test]
+#[ignore]
+fn perf_palette_with_100k_resources() {
+    use az9s_core::palette::Palette;
+    let app = app_with_resources(100_000);
+    let start = Instant::now();
+    let mut palette = Palette::open(app.state());
+    let open = start.elapsed();
+
+    let mut worst = Duration::ZERO;
+    let mut query = String::new();
+    for c in "vm0999".chars() {
+        query.push(c);
+        let start = Instant::now();
+        palette.set_query(query.clone());
+        worst = worst.max(start.elapsed());
+    }
+    assert_eq!(palette.chosen().unwrap().item.label, "vm-099900");
+    println!("palette, 100k resources: open {open:?}, slowest keystroke {worst:?}");
+    assert!(open < Duration::from_millis(250), "open {open:?}");
+    assert!(worst < Duration::from_millis(100), "keystroke {worst:?}");
+}

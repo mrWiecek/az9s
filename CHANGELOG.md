@@ -12,6 +12,24 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-03
+
+### Added
+- **Command palette: `Ctrl+P`.** One fuzzy search over commands,
+  subscriptions, management groups, and the loaded resource groups and
+  resources. Type a few letters (`kvprod` finds `kv-prod-weu`; several
+  words must all match), `↑`/`↓` choose, `Enter` goes there: a command
+  runs, a subscription or management group opens its resource groups, a
+  resource group its resources, a resource its detail view. `Esc` from
+  there returns to where the palette was opened. Matched letters are
+  highlighted. It searches what is loaded, so after `:res all` it finds any
+  resource (100k resources: about 30 ms to open, 25 ms per keystroke).
+- **Autocomplete for `:` commands.** Suggestions appear above the command
+  line as you type: command names, then `all` and subscription names, then
+  filter keys, then values from what is loaded: aliases after `type=`,
+  locations after `loc=`, tag keys after `tag=` and that key's values after
+  `tag=key=`. `Tab` completes, `↑`/`↓` choose.
+
 ## [0.7.0] - 2026-11-03
 
 ### Added
@@ -347,7 +365,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/mrWiecek/az9s/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/mrWiecek/az9s/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mrWiecek/az9s/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/mrWiecek/az9s/compare/v0.4.0...v0.5.0

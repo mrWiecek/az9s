@@ -169,6 +169,15 @@ pub fn display_with_full(resource_type: &str) -> String {
     }
 }
 
+/// Every known alias with its full type, sorted by alias (for autocomplete
+/// when no resources are loaded).
+pub fn known_aliases() -> Vec<(&'static str, &'static str)> {
+    let mut all: Vec<(&'static str, &'static str)> =
+        TYPE_LABELS.iter().map(|(t, a)| (*a, *t)).collect();
+    all.sort();
+    all
+}
+
 /// Whether `needle` (lowercase) is in the type or its short label.
 pub fn type_contains(resource_type: &str, needle_lower: &str) -> bool {
     resource_type.to_ascii_lowercase().contains(needle_lower)

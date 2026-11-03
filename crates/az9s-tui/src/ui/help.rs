@@ -27,7 +27,15 @@ pub fn help_lines() -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         )),
         l(""),
+        heading("Go to anything (Ctrl+P)"),
+        l("  Ctrl+P    fuzzy search commands, subscriptions, management groups, and the"),
+        l("            loaded resource groups and resources: type a few letters (kvprod"),
+        l("            finds kv-prod-weu), ↑/↓ choose, Enter goes there, Esc closes."),
+        l("            Only loaded data is searched: after :res all, every resource."),
+        l(""),
         heading("Commands (type : then the command, Enter runs it)"),
+        l("  Suggestions appear as you type: commands, scopes, filter keys, and values"),
+        l("  from what's loaded (type=, loc=, tag=key=…). Tab completes, ↑/↓ choose."),
         l("  :mg                                Management group tree (the start view)"),
         l("  :sub                               Subscriptions"),
         l("  :rg   [scope] [loc=…] [tag=…]      Resource groups"),
@@ -154,8 +162,22 @@ mod tests {
     fn help_documents_every_command_filter_and_key() {
         let text: String = help_lines().iter().map(|l| l.to_string() + "\n").collect();
         for needle in [
-            ":mg", ":sub", ":rg", ":res", ":type", "type=", "loc=", "tag=", "Examples", "  y ",
-            "  c ", "  o ", "/text",
+            ":mg",
+            ":sub",
+            ":rg",
+            ":res",
+            ":type",
+            ":tag",
+            "type=",
+            "loc=",
+            "tag=",
+            "Examples",
+            "Ctrl+P",
+            "Tab completes",
+            "  y ",
+            "  c ",
+            "  o ",
+            "/text",
         ] {
             assert!(text.contains(needle), "help lacks {needle:?}");
         }
