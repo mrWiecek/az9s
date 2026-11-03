@@ -192,7 +192,9 @@ Work items, in order:
       first. `Enter` opens the assignment's details (v0.12.0).
 - [ ] `:assignment` and `:exemption` commands; browse definitions and initiatives
       (set definitions).
-- [ ] Compliance summary per scope (totals across assignments).
+- [x] Compliance summary per scope (totals across assignments): % of evaluated
+      resources compliant, non-compliant resources (each counted once),
+      subscriptions and assignments affected, at the top of `:policy` (v0.14.0).
 - [x] Drill down: assignment → non-compliant resources (with the failing
       policies) → resource detail. Also the reverse: the detail view's Policy
       tab lists the resource's policy states (v0.13.0).

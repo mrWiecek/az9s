@@ -117,6 +117,57 @@ pub fn compliance_from_rows(rows: &[Value]) -> HashMap<String, Compliance> {
         .collect()
 }
 
+/// Resources evaluated, and those non-compliant with at least one policy,
+/// per subscription (lowercase ID), from rows of
+/// `resource_graph::compliance_summary_query`.
+pub fn subscription_compliance_from_rows(rows: &[Value]) -> HashMap<String, Compliance> {
+    rows.iter()
+        .filter_map(|row| {
+            let id = row.get("subscription")?.as_str()?.to_ascii_lowercase();
+            let num = |key: &str| row.get(key).and_then(Value::as_u64).unwrap_or(0);
+            Some((
+                id,
+                Compliance {
+                    non_compliant: num("nonCompliant"),
+                    total: num("resources"),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// The compliance of a whole scope, summed from its subscriptions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ComplianceSummary {
+    /// Distinct resources evaluated / non-compliant with at least one policy
+    pub resources: Compliance,
+    /// Subscriptions with at least one non-compliant resource
+    pub subscriptions_affected: usize,
+    /// Subscriptions with evaluated resources
+    pub subscriptions: usize,
+}
+
+impl ComplianceSummary {
+    pub fn from_subscriptions(by_subscription: &HashMap<String, Compliance>) -> Self {
+        let mut summary = Self::default();
+        for c in by_subscription.values().filter(|c| c.total > 0) {
+            summary.resources.total += c.total;
+            summary.resources.non_compliant += c.non_compliant;
+            summary.subscriptions += 1;
+            summary.subscriptions_affected += usize::from(c.non_compliant > 0);
+        }
+        summary
+    }
+
+    /// Share of evaluated resources that are compliant, in percent (`None`
+    /// when nothing was evaluated).
+    pub fn percent_compliant(&self) -> Option<f64> {
+        let r = self.resources;
+        (r.total > 0)
+            .then(|| 100.0 * (r.total - r.non_compliant.min(r.total)) as f64 / r.total as f64)
+    }
+}
+
 /// One policy evaluation: a resource against one policy of an assignment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyState {
@@ -439,6 +490,34 @@ mod tests {
         let all = assignments();
         let found = applicable(&all, &PolicyScope::Subscription("sub-c".into()), None);
         assert_eq!(names(&found), ["on-sub-c"]);
+    }
+
+    #[test]
+    fn compliance_summary_sums_subscriptions() {
+        let rows = vec![
+            serde_json::json!({"subscription": "S1", "resources": 100, "nonCompliant": 10}),
+            serde_json::json!({"subscription": "s2", "resources": 50, "nonCompliant": 0}),
+            serde_json::json!({"subscription": "s3", "resources": 0, "nonCompliant": 0}),
+            serde_json::json!({"resources": 5}),
+        ];
+        let by_sub = subscription_compliance_from_rows(&rows);
+        assert_eq!(by_sub.len(), 3, "rows without a subscription are skipped");
+        assert_eq!(by_sub["s1"].total, 100, "keys are lowercase");
+        let summary = ComplianceSummary::from_subscriptions(&by_sub);
+        assert_eq!(
+            summary.resources,
+            Compliance {
+                non_compliant: 10,
+                total: 150
+            }
+        );
+        assert_eq!(
+            (summary.subscriptions, summary.subscriptions_affected),
+            (2, 1),
+            "subscriptions without evaluated resources don't count"
+        );
+        assert!((summary.percent_compliant().unwrap() - 93.33).abs() < 0.01);
+        assert_eq!(ComplianceSummary::default().percent_compliant(), None);
     }
 
     #[test]

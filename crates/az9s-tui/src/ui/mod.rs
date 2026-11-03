@@ -645,7 +645,14 @@ fn draw_policy(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     let compliance_width = 22;
     let origin_width = 30;
     let name_col = name_width(area.width, 3 + compliance_width + 14 + origin_width, 70);
-    let viewport = area.height.saturating_sub(2) as usize;
+    // Inside the border: the compliance summary, then the list.
+    let inner = Block::default().borders(Borders::ALL).inner(area);
+    let parts = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+    let summary = compliance_summary_line(state, &rows);
+    let viewport = parts[1].height as usize;
     let mut list_state = state.list_state.clone();
     let visible = list_state.visible_range(rows.len(), viewport);
     let items: Vec<_> = rows[visible.clone()]
@@ -703,16 +710,101 @@ fn draw_policy(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
             if rows.len() == 1 { "" } else { "s" }
         )
     };
-    let list = SelectableList::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(theme().selection());
+    f.render_widget(Block::default().borders(Borders::ALL).title(title), area);
+    f.render_widget(Paragraph::new(summary), parts[0]);
+    let list = SelectableList::new(items).highlight_style(theme().selection());
     let mut widget_state = SelectableListState {
         selected: list_state.selected - visible.start,
         offset: 0,
     };
-    list.render(area, f.buffer_mut(), &mut widget_state);
+    list.render(parts[1], f.buffer_mut(), &mut widget_state);
     app.state_mut().list_state = list_state;
     Ok(())
+}
+
+/// The policy view's first line: how compliant the scope is overall.
+fn compliance_summary_line(
+    state: &AppState,
+    rows: &[az9s_core::state::PolicyRow],
+) -> Line<'static> {
+    let t = theme();
+    let label = Span::styled(
+        "Compliance ",
+        Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+    );
+    let Some(summary) = state.policy_summary() else {
+        let text = if state.loading {
+            "loading…"
+        } else {
+            "no data"
+        };
+        return Line::from(vec![
+            label,
+            Span::styled(text, Style::default().fg(t.muted)),
+        ]);
+    };
+    let Some(percent) = summary.percent_compliant() else {
+        return Line::from(vec![
+            label,
+            Span::styled(
+                "no evaluated resources yet (Azure evaluates policy about once a day)",
+                Style::default().fg(t.muted),
+            ),
+        ]);
+    };
+    let r = summary.resources;
+    let good = r.non_compliant == 0;
+    let mut spans = vec![
+        label,
+        Span::styled(
+            format!("{percent:.1}%"),
+            Style::default()
+                .fg(if good { t.ok } else { t.error })
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                "  ·  {} of {} resources non-compliant",
+                grouped(r.non_compliant),
+                grouped(r.total)
+            ),
+            Style::default().fg(t.text),
+        ),
+    ];
+    if summary.subscriptions > 1 {
+        spans.push(Span::styled(
+            format!(
+                "  ·  {} of {} subscriptions affected",
+                summary.subscriptions_affected, summary.subscriptions
+            ),
+            Style::default().fg(t.text),
+        ));
+    }
+    let failing = rows
+        .iter()
+        .filter(|r| r.compliance.is_some_and(|c| c.non_compliant > 0))
+        .count();
+    spans.push(Span::styled(
+        format!(
+            "  ·  {failing} of {} assignments with non-compliant resources",
+            rows.len()
+        ),
+        Style::default().fg(t.muted),
+    ));
+    Line::from(spans)
+}
+
+/// A count with thousands separators: 12345 → "12,345".
+fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Draw the tenants to switch to (`:ctx`)
@@ -1598,5 +1690,13 @@ mod tests {
     #[test]
     fn test_ui_module_exists() {
         // Basic test to ensure module compiles
+    }
+
+    #[test]
+    fn counts_get_thousands_separators() {
+        assert_eq!(super::grouped(0), "0");
+        assert_eq!(super::grouped(999), "999");
+        assert_eq!(super::grouped(1000), "1,000");
+        assert_eq!(super::grouped(1234567), "1,234,567");
     }
 }

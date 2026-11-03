@@ -19,7 +19,7 @@ works for Kubernetes.
 | Management group tree → subscriptions → resource groups → resources → detail (Overview, Tags, Policy, JSON) | Command palette, config file, `:ctx` (M2) |
 | Resource groups across a whole management group, or all subscriptions (`:rg all`, `:res all`) via Azure Resource Graph | Azure Policy at management-group scope: assignments, compliance, exemptions (M3) |
 | Instant views from a local cache, refreshed in the background, with data age in the status bar | Safe actions: VM start/stop, restarts, tags, delete, policy scans (M4) |
-| Policy assignments per scope with inheritance and compliance (`:policy`); drill down to non-compliant resources, and each resource's policy states | Compliance roll-up, exemptions (M3) |
+| Policy assignments per scope with inheritance and compliance (`:policy`); compliance summary per scope; drill down to non-compliant resources, and each resource's policy states | Compliance roll-up, exemptions (M3) |
 | Filters (`type=`, `loc=`, `tag=`), a resource-type summary (`:type`), `/` text filter, `y` copy ID, `o` open in Portal, vim keys | AKS, Key Vault, logs, themes (M5) |
 
 ## Requirements
@@ -79,7 +79,7 @@ az9s --timings                             # launch, print a timing summary on e
 
 | Command | Shows |
 |---|---|
-| `:policy [all\|<sub>]` | Policy assignments that apply there (assigned or inherited from management groups), with non-compliant resource counts, worst first. `Enter`: the assignment's non-compliant resources; `d`: the assignment itself |
+| `:policy [all\|<sub>]` | Policy assignments that apply there (assigned or inherited from management groups), with non-compliant resource counts, worst first, under a compliance summary for the scope (% compliant, non-compliant resources, subscriptions and assignments affected). `Enter`: the assignment's non-compliant resources; `d`: the assignment itself |
 | `:ctx [all\|<tenant>]` | Tenants you can use (`Enter` switches), or switch by name, domain or ID; `all` returns to the default login |
 | `:mg` | Management group tree (the start view) |
 | `:sub` | Subscriptions |

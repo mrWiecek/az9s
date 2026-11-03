@@ -117,7 +117,12 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   ancestors in the management group tree (`Origin::Here` / `Inherited`);
   `assigned_below` counts those further down. `App::open_policy` loads
   `LoadRequest::PolicyAssignments` (tenant-wide) and
-  `LoadRequest::PolicyCompliance { scope }`, both cached as documents.
+  `LoadRequest::PolicyCompliance { scope }`, both cached as documents, and
+  `LoadRequest::ComplianceSummary { scope }`: distinct resources evaluated /
+  non-compliant per subscription (cached as `compliance_summary:<scope>`),
+  summed by `ComplianceSummary::from_subscriptions` for the view's first
+  line. Per-subscription rows add up exactly, so management groups can be
+  rolled up from them.
   The drill-down is not cached (policy states change often):
   `App::open_non_compliant` loads `LoadRequest::PolicyStates` (one
   assignment's non-compliant states in the policy scope), shown one row per

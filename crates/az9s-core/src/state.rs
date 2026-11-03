@@ -80,6 +80,13 @@ pub struct AppState {
         HashMap<String, crate::policy::Compliance>,
     )>,
 
+    /// Resources evaluated / non-compliant per subscription (lowercase ID)
+    /// in a scope, for the compliance summary
+    pub compliance_summary: Option<(
+        crate::policy::PolicyScope,
+        HashMap<String, crate::policy::Compliance>,
+    )>,
+
     /// The scope the policy view shows
     pub policy_scope: Option<crate::policy::PolicyScope>,
 
@@ -625,6 +632,13 @@ impl AppState {
             return None;
         }
         self.policy_rows().into_iter().nth(self.list_state.selected)
+    }
+
+    /// The compliance summary of the policy view's scope, once loaded.
+    pub fn policy_summary(&self) -> Option<crate::policy::ComplianceSummary> {
+        let scope = self.policy_scope.as_ref()?;
+        let (s, by_subscription) = self.compliance_summary.as_ref()?;
+        (s == scope).then(|| crate::policy::ComplianceSummary::from_subscriptions(by_subscription))
     }
 
     /// Rows of the non-compliant view: one per resource, `/` narrows by
