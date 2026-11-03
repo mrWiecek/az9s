@@ -12,7 +12,7 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-## [0.6.0] - 2026-11-02
+## [0.7.0] - 2026-11-03
 
 ### Added
 - **Tags view: `:tag [all|<sub>] [filters]`.** Lists every tag on the
@@ -29,6 +29,10 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
   ("search hit BOTTOM, continuing at TOP"); the status bar shows "match 3
   of 12". Lowercase ignores case, a capital letter makes it exact
   (smartcase). `Esc` clears the highlights, then goes back.
+
+## [0.6.0] - 2026-11-02
+
+### Added
 - **`c` copies the current view**, in every view:
   - lists (subscriptions, resource groups, resources): every row that passes
     the filters, not only the rows on screen, tab-separated with a header,
@@ -343,7 +347,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/mrWiecek/az9s/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mrWiecek/az9s/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/mrWiecek/az9s/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mrWiecek/az9s/compare/v0.3.1...v0.4.0
