@@ -84,6 +84,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "policy all",
         "Policy assignments and compliance for the whole tenant",
     ),
+    (
+        "compliance all",
+        "Subscriptions ranked by non-compliant resources",
+    ),
     ("ctx", "Switch tenant"),
 ];
 

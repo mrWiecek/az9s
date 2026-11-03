@@ -193,6 +193,7 @@ impl App {
         state.clear_navigation();
         state.filter.clear();
         state.freshness.clear();
+        state.compliance_rollup = None;
         state.set_loading(false);
         match state.config.start {
             StartView::Sub => {
@@ -215,6 +216,23 @@ impl App {
         match &self.state.tenant {
             Some(tenant) => format!("policy_assignments:{}", tenant.to_ascii_lowercase()),
             None => "policy_assignments".into(),
+        }
+    }
+
+    /// Cache key of the compliance roll-up for the current tenant.
+    fn rollup_key(&self) -> String {
+        match &self.state.tenant {
+            Some(tenant) => format!("compliance_rollup:{}", tenant.to_ascii_lowercase()),
+            None => "compliance_rollup".into(),
+        }
+    }
+
+    /// Load the tenant's compliance per subscription (cached first), for the
+    /// tree's compliance column and `:compliance`. Needs Resource Graph
+    /// access at the tenant root, like `:policy all`.
+    pub fn load_compliance_rollup(&mut self) {
+        if !self.pending.contains_key(&LoadKind::ComplianceRollup) {
+            self.request(LoadRequest::ComplianceRollup);
         }
     }
 
@@ -311,6 +329,8 @@ impl App {
         self.state.view = ViewMode::ManagementGroupTree;
         self.state.list_state.reset();
         self.request(LoadRequest::ScopeTree);
+        // The tree's compliance column.
+        self.load_compliance_rollup();
     }
 
     /// Show `resource` in the detail view now and load its full document
@@ -391,6 +411,12 @@ impl App {
             | LoadRequest::Tenants
             | LoadRequest::PolicyStates { .. }
             | LoadRequest::ResourcePolicy { .. } => return,
+            LoadRequest::ComplianceRollup => repo.document(&self.rollup_key()).map(|doc| match doc
+                .and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at)))
+            {
+                Some((counts, at)) => (LoadedData::ComplianceRollup(counts), Some(at)),
+                None => (LoadedData::ComplianceRollup(Default::default()), None),
+            }),
             LoadRequest::PolicyAssignments => {
                 repo.document(&self.policy_key()).map(|doc| {
                     match doc.and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at))) {
@@ -490,6 +516,7 @@ impl App {
             LoadKind::ResourceDetail => usize::from(self.state.resource_document.is_some()),
             LoadKind::Tenants => self.state.tenants.len(),
             LoadKind::PolicyAssignments => self.state.policy_assignments.len(),
+            LoadKind::ComplianceRollup => usize::from(self.state.compliance_rollup.is_some()),
             LoadKind::PolicyCompliance => usize::from(self.state.policy_compliance.is_some()),
             LoadKind::ComplianceSummary => usize::from(self.state.compliance_summary.is_some()),
             LoadKind::PolicyStates => self.state.policy_states.len(),
@@ -527,6 +554,13 @@ impl App {
             }
             Err(e) if staged => self.state.notice = Some(format!("{e}; showing cached data")),
             Err(e) if kind == LoadKind::ScopeTree => self.fall_back_to_subscriptions(&e),
+            // The tree's compliance column is optional: no popup for it.
+            Err(e)
+                if kind == LoadKind::ComplianceRollup
+                    && self.state.view != ViewMode::ComplianceRanking =>
+            {
+                warn!("Compliance roll-up unavailable: {}", e)
+            }
             Err(e) => self.state.set_error(Some(e)),
         }
         self.state.set_loading(self.loader.is_loading());
@@ -604,6 +638,12 @@ impl App {
                 // enough. Otherwise the list is empty or incomplete: error.
                 if kind == LoadKind::ScopeTree && !pending.staged {
                     self.fall_back_to_subscriptions(&e);
+                } else if kind == LoadKind::ComplianceRollup
+                    && self.state.view != ViewMode::ComplianceRanking
+                {
+                    // Only the tree's compliance column is missing: users
+                    // without tenant-wide access already got a notice.
+                    warn!("Compliance roll-up unavailable: {}", e);
                 } else if kind == LoadKind::ComplianceSummary && !pending.staged {
                     // The assignments are still useful without the totals.
                     self.state.notice = Some(format!("Compliance summary unavailable: {e}"));
@@ -649,6 +689,7 @@ impl App {
             LoadedData::ScopeTree(tree) => self.state.set_scope_tree(tree),
             LoadedData::Tenants(tenants) => self.state.tenants = tenants,
             LoadedData::PolicyAssignments(items) => self.state.policy_assignments = items,
+            LoadedData::ComplianceRollup(counts) => self.state.compliance_rollup = Some(counts),
             LoadedData::PolicyCompliance(scope, counts) => {
                 self.state.policy_compliance = Some((scope, counts))
             }
@@ -694,6 +735,16 @@ impl App {
             LoadRequest::Tenants
             | LoadRequest::PolicyStates { .. }
             | LoadRequest::ResourcePolicy { .. } => return,
+            LoadRequest::ComplianceRollup => match &self.state.compliance_rollup {
+                Some(counts) => match serde_json::to_string(counts) {
+                    Ok(value) => WriteJob::Document {
+                        key: self.rollup_key(),
+                        value,
+                    },
+                    Err(_) => return,
+                },
+                None => return,
+            },
             LoadRequest::PolicyAssignments => {
                 match serde_json::to_string(&self.state.policy_assignments) {
                     Ok(value) => WriteJob::Document {
@@ -798,6 +849,7 @@ fn view_of(kind: LoadKind) -> ViewMode {
         LoadKind::PolicyAssignments | LoadKind::PolicyCompliance | LoadKind::ComplianceSummary => {
             ViewMode::PolicyAssignments
         }
+        LoadKind::ComplianceRollup => ViewMode::ComplianceRanking,
     }
 }
 

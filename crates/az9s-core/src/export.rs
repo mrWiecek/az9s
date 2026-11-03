@@ -111,6 +111,33 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
                 ),
             )
         }
+        ViewMode::ComplianceRanking => {
+            let rows = state.compliance_rows();
+            let lines = rows.iter().map(|r| {
+                let c = r.compliance;
+                let percent = crate::policy::ComplianceSummary::from_subscriptions(
+                    &std::collections::HashMap::from([(r.subscription_id.clone(), c)]),
+                )
+                .percent_compliant()
+                .map(|p| format!("{p:.1}"))
+                .unwrap_or_default();
+                tsv(&[
+                    &r.name,
+                    &c.non_compliant.to_string(),
+                    &c.total.to_string(),
+                    &percent,
+                    &r.group,
+                    &r.subscription_id,
+                ])
+            });
+            (
+                count(rows.len(), "subscription"),
+                with_header(
+                    "subscription\tnon-compliant\tevaluated\tcompliant %\tmanagement group\tid",
+                    lines,
+                ),
+            )
+        }
         ViewMode::TenantList => {
             let rows = state.tenant_rows();
             let lines = rows.iter().filter_map(|r| {

@@ -12,6 +12,22 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-03
+
+### Added
+- **Compliance in the management group tree.** Every management group and
+  subscription shows its compliance: the share of evaluated resources that
+  comply with every policy and how many don't (e.g. "92.4% · 140
+  non-compliant"), red below 80%, green when all comply. Groups add up
+  their subscriptions. One Resource Graph query for the whole tenant,
+  loaded in the background with the tree and cached.
+- **`:compliance [all|<mg>]`** ranks subscriptions by non-compliant
+  resources, worst first, with their management group; those without
+  evaluated resources come last. `Enter` opens `:policy` for the
+  subscription; `/`, `c`, `y` and `o` work as in other lists.
+- The `:policy` summary line shows at once from that data while the
+  scope's own numbers load.
+
 ## [0.15.0] - 2026-11-03
 
 ### Added
@@ -493,7 +509,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/mrWiecek/az9s/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/mrWiecek/az9s/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/mrWiecek/az9s/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/mrWiecek/az9s/compare/v0.12.1...v0.13.0

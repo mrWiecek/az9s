@@ -198,8 +198,11 @@ Work items, in order:
 - [x] Drill down: assignment → non-compliant resources (with the failing
       policies) → resource detail. Also the reverse: the detail view's Policy
       tab lists the resource's policy states (v0.13.0).
-- [ ] Compliance roll-up across the management-group tree: which subscriptions and
-      resource groups have the most non-compliant resources.
+- [x] Compliance roll-up across the management-group tree: every group and
+      subscription in the tree shows its compliance (groups add up their
+      subscriptions); `:compliance [all|<mg>]` ranks subscriptions by
+      non-compliant resources (v0.16.0).
+- [ ] The same per resource group (within a subscription).
 - [ ] List exemptions (with expiry) and remediation tasks, read-only.
 - Policy *actions* (trigger a compliance scan, create or extend exemptions, start
   remediation) come in M4 on top of the action framework.

@@ -91,6 +91,14 @@ pub struct AppState {
         HashMap<String, crate::policy::Compliance>,
     )>,
 
+    /// Resources evaluated / non-compliant per subscription (lowercase ID)
+    /// across the tenant: the tree's compliance column and `:compliance`
+    pub compliance_rollup: Option<HashMap<String, crate::policy::Compliance>>,
+
+    /// The management group `:compliance` ranks the subscriptions of
+    /// (`None`: the whole tenant)
+    pub compliance_group: Option<String>,
+
     /// The scope the policy view shows
     pub policy_scope: Option<crate::policy::PolicyScope>,
 
@@ -221,6 +229,18 @@ pub struct PolicyRow {
     pub compliance: Option<crate::policy::Compliance>,
 }
 
+/// One row of `:compliance`: a subscription and its compliance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComplianceRow {
+    /// Lowercase subscription ID
+    pub subscription_id: String,
+    pub name: String,
+    /// The management group the subscription is in (display name)
+    pub group: String,
+    /// Resources evaluated / non-compliant (zero: not evaluated)
+    pub compliance: crate::policy::Compliance,
+}
+
 /// One row of the tenant view (`:ctx`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TenantRow {
@@ -276,6 +296,8 @@ pub enum ViewMode {
     PolicyAssignments,
     /// Non-compliant resources of one policy assignment
     PolicyNonCompliant,
+    /// Subscriptions ranked by non-compliant resources (`:compliance`)
+    ComplianceRanking,
     ResourceDetail,
     Logs,
 }
@@ -443,6 +465,7 @@ impl AppState {
             ViewMode::TenantList => self.tenant_rows().len(),
             ViewMode::PolicyAssignments => self.policy_rows().len(),
             ViewMode::PolicyNonCompliant => self.non_compliant_rows().len(),
+            ViewMode::ComplianceRanking => self.compliance_rows().len(),
             ViewMode::ManagementGroupTree => self.tree_rows().len(),
             _ => 0,
         }
@@ -638,11 +661,137 @@ impl AppState {
         self.policy_rows().into_iter().nth(self.list_state.selected)
     }
 
-    /// The compliance summary of the policy view's scope, once loaded.
+    /// The compliance summary of the policy view's scope, once loaded (or
+    /// worked out from the tenant's roll-up meanwhile).
     pub fn policy_summary(&self) -> Option<crate::policy::ComplianceSummary> {
+        use crate::policy::{ComplianceSummary, PolicyScope};
         let scope = self.policy_scope.as_ref()?;
-        let (s, by_subscription) = self.compliance_summary.as_ref()?;
-        (s == scope).then(|| crate::policy::ComplianceSummary::from_subscriptions(by_subscription))
+        if let Some((_, by_subscription)) =
+            self.compliance_summary.as_ref().filter(|(s, _)| s == scope)
+        {
+            return Some(ComplianceSummary::from_subscriptions(by_subscription));
+        }
+        match scope {
+            PolicyScope::Subscription(id) => self
+                .subscription_compliance(id)
+                .map(|c| ComplianceSummary::from_subscriptions(&HashMap::from([(id.clone(), c)]))),
+            PolicyScope::Group(group) => self.group_compliance(group),
+        }
+    }
+
+    /// A subscription's compliance from the tenant's roll-up.
+    pub fn subscription_compliance(&self, id: &str) -> Option<crate::policy::Compliance> {
+        let rollup = self.compliance_rollup.as_ref()?;
+        Some(
+            rollup
+                .get(&id.to_ascii_lowercase())
+                .copied()
+                .unwrap_or_default(),
+        )
+    }
+
+    /// A management group's compliance: its subscriptions' from the
+    /// tenant's roll-up, added up.
+    pub fn group_compliance(&self, group: &str) -> Option<crate::policy::ComplianceSummary> {
+        let rollup = self.compliance_rollup.as_ref()?;
+        let tree = self.scope_tree.as_ref()?;
+        let subscriptions: HashMap<String, crate::policy::Compliance> = tree
+            .subscriptions_under(group, &self.subscriptions)
+            .into_iter()
+            .map(|id| {
+                let c = rollup.get(&id).copied().unwrap_or_default();
+                (id, c)
+            })
+            .collect();
+        Some(crate::policy::ComplianceSummary::from_subscriptions(
+            &subscriptions,
+        ))
+    }
+
+    /// Rows of `:compliance`: the subscriptions of the management group (or
+    /// tenant), most non-compliant resources first, then lowest compliance;
+    /// those without evaluated resources last. `/` narrows by name, ID or
+    /// management group.
+    pub fn compliance_rows(&self) -> Vec<ComplianceRow> {
+        let Some(rollup) = &self.compliance_rollup else {
+            return vec![];
+        };
+        let ids: Vec<String> = match (&self.compliance_group, &self.scope_tree) {
+            (Some(group), Some(tree)) => tree.subscriptions_under(group, &self.subscriptions),
+            _ => self
+                .subscriptions
+                .iter()
+                .filter(|s| self.in_tenant(s))
+                .map(|s| s.id.to_ascii_lowercase())
+                .collect(),
+        };
+        let parent_of = |id: &str| -> String {
+            self.scope_tree
+                .as_ref()
+                .and_then(|t| {
+                    let node = t
+                        .subscriptions
+                        .iter()
+                        .find(|s| s.id.eq_ignore_ascii_case(id))?;
+                    Some(
+                        t.label_of(&node.parent)
+                            .map(str::to_string)
+                            .unwrap_or_else(|| node.parent.clone()),
+                    )
+                })
+                .unwrap_or_default()
+        };
+        let mut rows: Vec<ComplianceRow> = ids
+            .into_iter()
+            .map(|id| {
+                let name = self
+                    .subscriptions
+                    .iter()
+                    .find(|s| s.id.eq_ignore_ascii_case(&id))
+                    .map(|s| s.name.clone())
+                    .unwrap_or_else(|| id.clone());
+                ComplianceRow {
+                    compliance: rollup.get(&id).copied().unwrap_or_default(),
+                    group: parent_of(&id),
+                    name,
+                    subscription_id: id,
+                }
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            let (ca, cb) = (a.compliance, b.compliance);
+            (cb.total > 0)
+                .cmp(&(ca.total > 0))
+                .then(cb.non_compliant.cmp(&ca.non_compliant))
+                .then_with(|| {
+                    let pct = |c: crate::policy::Compliance| {
+                        c.non_compliant as f64 / c.total.max(1) as f64
+                    };
+                    pct(cb).total_cmp(&pct(ca))
+                })
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        if self.filter.is_empty() {
+            return rows;
+        }
+        let needle = self.filter.to_ascii_lowercase();
+        rows.into_iter()
+            .filter(|r| {
+                contains_ignore_ascii_case(&r.name, &needle)
+                    || contains_ignore_ascii_case(&r.subscription_id, &needle)
+                    || contains_ignore_ascii_case(&r.group, &needle)
+            })
+            .collect()
+    }
+
+    /// The selected row of `:compliance`.
+    pub fn selected_compliance_row(&self) -> Option<ComplianceRow> {
+        if self.view != ViewMode::ComplianceRanking {
+            return None;
+        }
+        self.compliance_rows()
+            .into_iter()
+            .nth(self.list_state.selected)
     }
 
     /// Rows of the non-compliant view: one per resource, `/` narrows by
@@ -997,6 +1146,9 @@ impl AppState {
             ViewMode::SubscriptionList => self
                 .selected_subscription()
                 .map(|s| format!("/subscriptions/{}", s.id)),
+            ViewMode::ComplianceRanking => self
+                .selected_compliance_row()
+                .map(|r| format!("/subscriptions/{}", r.subscription_id)),
             ViewMode::ResourceGroupList => self.selected_resource_group().map(|r| r.id.clone()),
             ViewMode::ResourceList => self.selected_resource().map(|r| r.id.clone()),
             ViewMode::ResourceDetail => {
@@ -1068,6 +1220,10 @@ impl AppState {
                 .non_compliant_rows()
                 .iter()
                 .position(|r| r.state.resource_id == id),
+            ViewMode::ComplianceRanking => self
+                .compliance_rows()
+                .iter()
+                .position(|r| format!("/subscriptions/{}", r.subscription_id) == id),
             _ => None,
         };
         if let Some(i) = position {
@@ -1576,5 +1732,95 @@ mod tests {
         state.exit_command_mode();
         assert!(!state.command_mode);
         assert!(state.command_input.is_empty());
+    }
+
+    #[test]
+    fn compliance_rolls_up_the_tree() {
+        use crate::policy::{Compliance, PolicyScope};
+        use crate::scope_tree::{GroupNode, ScopeTree, SubscriptionNode};
+        let mut state = AppState::new();
+        let sub = |id: &str| Subscription {
+            id: id.into(),
+            name: format!("name-{id}"),
+            state: "Enabled".into(),
+            tenant_id: "root".into(),
+        };
+        state.subscriptions = vec![sub("a"), sub("b"), sub("c")];
+        state.scope_tree = Some(ScopeTree {
+            root: "root".into(),
+            root_display_name: "Tenant Root Group".into(),
+            groups: vec![GroupNode {
+                name: "corp".into(),
+                display_name: "Corp".into(),
+                parent: "root".into(),
+            }],
+            subscriptions: vec![
+                SubscriptionNode {
+                    id: "a".into(),
+                    display_name: "a".into(),
+                    parent: "corp".into(),
+                },
+                SubscriptionNode {
+                    id: "b".into(),
+                    display_name: "b".into(),
+                    parent: "corp".into(),
+                },
+                SubscriptionNode {
+                    id: "c".into(),
+                    display_name: "c".into(),
+                    parent: "root".into(),
+                },
+            ],
+        });
+        assert!(state.group_compliance("corp").is_none(), "not loaded yet");
+        state.compliance_rollup = Some(HashMap::from([
+            (
+                "a".to_string(),
+                Compliance {
+                    non_compliant: 5,
+                    total: 10,
+                },
+            ),
+            (
+                "b".to_string(),
+                Compliance {
+                    non_compliant: 5,
+                    total: 100,
+                },
+            ),
+        ]));
+        let corp = state.group_compliance("corp").unwrap();
+        assert_eq!(
+            corp.resources,
+            Compliance {
+                non_compliant: 10,
+                total: 110
+            }
+        );
+        assert_eq!((corp.subscriptions, corp.subscriptions_affected), (2, 2));
+        assert_eq!(state.group_compliance("root").unwrap().resources.total, 110);
+        assert_eq!(
+            state.subscription_compliance("C"),
+            Some(Compliance::default())
+        );
+
+        // Same non-compliant count: the lower compliance ranks first.
+        state.view = ViewMode::ComplianceRanking;
+        let ids: Vec<String> = state
+            .compliance_rows()
+            .into_iter()
+            .map(|r| r.subscription_id)
+            .collect();
+        assert_eq!(ids, ["a", "b", "c"]);
+        state.filter = "corp".into();
+        assert_eq!(
+            state.compliance_rows().len(),
+            2,
+            "filter by management group"
+        );
+
+        // The policy view's summary falls back to the roll-up.
+        state.policy_scope = Some(PolicyScope::Group("corp".into()));
+        assert_eq!(state.policy_summary().unwrap().resources.non_compliant, 10);
     }
 }
