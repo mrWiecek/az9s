@@ -101,6 +101,25 @@ impl Fetcher for Azure {
                     ],
                 ))
             }
+            LoadRequest::ComplianceSummary { scope } => Ok(LoadedData::ComplianceSummary(
+                scope,
+                HashMap::from([
+                    (
+                        "s1".to_string(),
+                        Compliance {
+                            non_compliant: 12,
+                            total: 1500,
+                        },
+                    ),
+                    (
+                        "s2".to_string(),
+                        Compliance {
+                            non_compliant: 0,
+                            total: 100,
+                        },
+                    ),
+                ]),
+            )),
             _ => Err("not in this test".into()),
         };
         async move {
@@ -185,12 +204,20 @@ async fn policy_for_the_highlighted_subscription_with_inheritance() {
         app.state().policy_scope,
         Some(PolicyScope::Subscription("s1".into()))
     );
-    app.apply_load(loads.recv().await.unwrap());
-    app.apply_load(loads.recv().await.unwrap());
+    for _ in 0..3 {
+        app.apply_load(loads.recv().await.unwrap()); // assignments, compliance, summary
+    }
 
     let text = screen(&mut app);
     assert!(text.contains("Policy · prod (3 assignments)"), "{text}");
     assert!(text.contains("12 / 40 non-compliant"), "{text}");
+    assert!(
+        text.contains(
+            "Compliance 99.2%  ·  12 of 1,600 resources non-compliant  ·  1 of 2 subscriptions \
+             affected  ·  1 of 3 assignments with non-compliant resources"
+        ),
+        "{text}"
+    );
     assert!(
         text.contains("from Platform") && text.contains("from Tenant Root Group"),
         "{text}"
@@ -220,8 +247,9 @@ async fn drill_down_from_assignment_to_non_compliant_resource_and_back() {
     let (mut app, azure) = setup(true);
     let mut loads = app.take_load_receiver().unwrap();
     command(&mut app, "policy").await;
-    app.apply_load(loads.recv().await.unwrap());
-    app.apply_load(loads.recv().await.unwrap());
+    for _ in 0..3 {
+        app.apply_load(loads.recv().await.unwrap()); // assignments, compliance, summary
+    }
     let baseline = app.state().policy_rows()[0].assignment.clone();
 
     // Enter: the assignment's non-compliant resources in the policy scope.

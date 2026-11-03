@@ -114,6 +114,8 @@ pub fn help_lines() -> Vec<Line<'static>> {
         l("  evaluated resources, worst first; I = initiative, P = single policy."),
         l("  :policy uses where you are (highlighted subscription or management group);"),
         l("  :policy all the whole tenant."),
+        l("  First line: the scope's compliance: % of evaluated resources compliant with"),
+        l("            every policy, how many are not, subscriptions and assignments affected"),
         l("  Enter     the assignment's non-compliant resources in that scope, with the"),
         l("            failing policies; Enter on one opens its detail (Policy tab: 3)"),
         l("  d         the assignment itself (Overview, JSON)"),

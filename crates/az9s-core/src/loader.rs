@@ -10,7 +10,10 @@
 //! for a view the user already left can never overwrite a newer one.
 
 use crate::models::{Resource, ResourceGroup, Subscription};
-use crate::policy::{compliance_from_rows, Compliance, PolicyAssignment, PolicyScope, PolicyState};
+use crate::policy::{
+    compliance_from_rows, subscription_compliance_from_rows, Compliance, PolicyAssignment,
+    PolicyScope, PolicyState,
+};
 use crate::scope_tree::ScopeTree;
 use crate::timing;
 use az9s_azure::management_groups::ManagementGroupClient;
@@ -54,6 +57,10 @@ pub enum LoadRequest {
     PolicyCompliance {
         scope: PolicyScope,
     },
+    /// Resources evaluated / non-compliant per subscription in a scope.
+    ComplianceSummary {
+        scope: PolicyScope,
+    },
     /// Non-compliant policy states of one assignment, for resources in a scope.
     PolicyStates {
         scope: PolicyScope,
@@ -78,6 +85,7 @@ pub enum LoadKind {
     Tenants,
     PolicyAssignments,
     PolicyCompliance,
+    ComplianceSummary,
     PolicyStates,
     ResourcePolicy,
 }
@@ -93,6 +101,7 @@ impl LoadKind {
             LoadKind::Tenants => "tenants",
             LoadKind::PolicyAssignments => "policy assignments",
             LoadKind::PolicyCompliance => "policy compliance",
+            LoadKind::ComplianceSummary => "compliance summary",
             LoadKind::PolicyStates => "non-compliant resources",
             LoadKind::ResourcePolicy => "resource policy states",
         }
@@ -110,6 +119,7 @@ impl LoadRequest {
             LoadRequest::Tenants => LoadKind::Tenants,
             LoadRequest::PolicyAssignments => LoadKind::PolicyAssignments,
             LoadRequest::PolicyCompliance { .. } => LoadKind::PolicyCompliance,
+            LoadRequest::ComplianceSummary { .. } => LoadKind::ComplianceSummary,
             LoadRequest::PolicyStates { .. } => LoadKind::PolicyStates,
             LoadRequest::ResourcePolicy { .. } => LoadKind::ResourcePolicy,
         }
@@ -127,6 +137,8 @@ pub enum LoadedData {
     Tenants(Vec<crate::models::Tenant>),
     PolicyAssignments(Vec<PolicyAssignment>),
     PolicyCompliance(PolicyScope, HashMap<String, Compliance>),
+    /// Per subscription (lowercase ID)
+    ComplianceSummary(PolicyScope, HashMap<String, Compliance>),
     PolicyStates(Vec<PolicyState>),
     /// The resource ID and its policy states.
     ResourcePolicy(String, Vec<PolicyState>),
@@ -414,6 +426,7 @@ impl Fetcher for AzureFetcher {
                 },
                 LoadRequest::PolicyAssignments
                 | LoadRequest::PolicyCompliance { .. }
+                | LoadRequest::ComplianceSummary { .. }
                 | LoadRequest::PolicyStates { .. }
                 | LoadRequest::ResourcePolicy { .. } => FetchOutcome {
                     data: Err("policy needs Resource Graph \
@@ -587,23 +600,38 @@ impl Fetcher for GraphFetcher {
                 }
                 .boxed();
             }
-            LoadRequest::PolicyCompliance { scope } => {
+            LoadRequest::PolicyCompliance { scope } | LoadRequest::ComplianceSummary { scope } => {
                 let graph = self.graph.clone();
                 let scope = scope.clone();
+                let summary = matches!(request, LoadRequest::ComplianceSummary { .. });
                 return async move {
-                    let _t = timing::timer("azure.policy_compliance");
+                    let _t = timing::timer(if summary {
+                        "azure.compliance_summary"
+                    } else {
+                        "azure.policy_compliance"
+                    });
                     let graph_scope = match &scope {
                         PolicyScope::Group(g) => GraphScope::ManagementGroup(g.clone()),
                         PolicyScope::Subscription(s) => GraphScope::Subscriptions(vec![s.clone()]),
                     };
-                    let data = query_all(
-                        &graph,
-                        &resource_graph::policy_compliance_query(),
-                        &graph_scope,
-                    )
-                    .await
-                    .map(|rows| LoadedData::PolicyCompliance(scope, compliance_from_rows(&rows)))
-                    .map_err(|e| e.to_string());
+                    let query = if summary {
+                        resource_graph::compliance_summary_query()
+                    } else {
+                        resource_graph::policy_compliance_query()
+                    };
+                    let data = query_all(&graph, &query, &graph_scope)
+                        .await
+                        .map(|rows| {
+                            if summary {
+                                LoadedData::ComplianceSummary(
+                                    scope,
+                                    subscription_compliance_from_rows(&rows),
+                                )
+                            } else {
+                                LoadedData::PolicyCompliance(scope, compliance_from_rows(&rows))
+                            }
+                        })
+                        .map_err(|e| e.to_string());
                     FetchOutcome {
                         data,
                         failed_subscriptions: vec![],
@@ -747,6 +775,7 @@ impl Fetcher for GraphFetcher {
                 | LoadRequest::Tenants
                 | LoadRequest::PolicyAssignments
                 | LoadRequest::PolicyCompliance { .. }
+                | LoadRequest::ComplianceSummary { .. }
                 | LoadRequest::PolicyStates { .. }
                 | LoadRequest::ResourcePolicy { .. }
                 | LoadRequest::ResourceDetail { .. } => {
@@ -833,6 +862,9 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::PolicyAssignments => LoadedData::PolicyAssignments(vec![]),
         LoadKind::PolicyCompliance => {
             LoadedData::PolicyCompliance(PolicyScope::Group(String::new()), HashMap::new())
+        }
+        LoadKind::ComplianceSummary => {
+            LoadedData::ComplianceSummary(PolicyScope::Group(String::new()), HashMap::new())
         }
         LoadKind::PolicyStates => LoadedData::PolicyStates(vec![]),
         LoadKind::ResourcePolicy => LoadedData::ResourcePolicy(String::new(), vec![]),

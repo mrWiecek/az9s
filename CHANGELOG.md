@@ -12,6 +12,17 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-03
+
+### Added
+- **Compliance summary in `:policy`.** The first line shows how compliant
+  the scope is: the share of evaluated resources that comply with every
+  policy, how many resources are non-compliant (each counted once, however
+  many policies they fail), how many subscriptions are affected (for a
+  management group) and how many assignments have non-compliant resources.
+  Cached like the rest of the view, so it shows at once and refreshes in
+  the background.
+
 ## [0.13.0] - 2026-11-03
 
 ### Added
@@ -465,7 +476,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/mrWiecek/az9s/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/mrWiecek/az9s/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/mrWiecek/az9s/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/mrWiecek/az9s/compare/v0.11.0...v0.12.0

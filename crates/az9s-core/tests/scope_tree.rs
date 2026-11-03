@@ -354,6 +354,10 @@ async fn policy_view_shows_inherited_assignments_with_compliance() {
         let query = body["query"].as_str().unwrap_or_default();
         if query.contains("policyassignments") {
             ok(json!({"totalRecords": 4, "count": 4, "data": rows.clone()}))
+        } else if query.contains("by subscription") {
+            ok(json!({"totalRecords": 1, "count": 1, "data": [
+                {"subscription": "SUB-1", "resources": 12, "nonCompliant": 8}
+            ]}))
         } else if query.contains("policystates") {
             ok(json!({"totalRecords": 2, "count": 2, "data": [
                 {"assignment": sub_a, "total": 10, "nonCompliant": 1},
@@ -409,9 +413,28 @@ async fn policy_view_shows_inherited_assignments_with_compliance() {
     let bodies = requests.lock().unwrap().clone();
     let compliance = bodies
         .iter()
-        .find(|b| b["query"].as_str().unwrap().contains("policystates"))
+        .find(|b| {
+            let q = b["query"].as_str().unwrap();
+            q.contains("policystates") && !q.contains("by subscription")
+        })
         .unwrap();
     assert_eq!(compliance["subscriptions"], json!(["sub-1"]));
+    let totals = bodies
+        .iter()
+        .find(|b| b["query"].as_str().unwrap().contains("by subscription"))
+        .unwrap();
+    assert_eq!(totals["subscriptions"], json!(["sub-1"]));
+
+    // The scope's summary: distinct resources, summed per subscription.
+    let summary = app.state().policy_summary().unwrap();
+    assert_eq!(
+        (summary.resources.total, summary.resources.non_compliant),
+        (12, 8)
+    );
+    assert_eq!(
+        (summary.subscriptions, summary.subscriptions_affected),
+        (1, 1)
+    );
     let assignments = bodies
         .iter()
         .find(|b| b["query"].as_str().unwrap().contains("policyassignments"))
@@ -423,6 +446,10 @@ async fn policy_view_shows_inherited_assignments_with_compliance() {
     assert!(repo.document("policy_assignments").unwrap().is_some());
     assert!(repo
         .document("policy_compliance:/subscriptions/sub-1")
+        .unwrap()
+        .is_some());
+    assert!(repo
+        .document("compliance_summary:/subscriptions/sub-1")
         .unwrap()
         .is_some());
 }

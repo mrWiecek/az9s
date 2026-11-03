@@ -229,8 +229,18 @@ impl App {
         {
             state.policy_compliance = None;
         }
+        if state
+            .compliance_summary
+            .as_ref()
+            .is_some_and(|(s, _)| *s != scope)
+        {
+            state.compliance_summary = None;
+        }
         self.request(LoadRequest::PolicyAssignments);
-        self.request(LoadRequest::PolicyCompliance { scope });
+        self.request(LoadRequest::PolicyCompliance {
+            scope: scope.clone(),
+        });
+        self.request(LoadRequest::ComplianceSummary { scope });
     }
 
     /// Show the resources that are non-compliant with `assignment` in the
@@ -394,6 +404,20 @@ impl App {
                         ),
                     }
                 }),
+            LoadRequest::ComplianceSummary { scope } => repo
+                .document(&format!("compliance_summary:{}", scope.arm_id()))
+                .map(|doc| {
+                    match doc.and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at))) {
+                        Some((counts, at)) => (
+                            LoadedData::ComplianceSummary(scope.clone(), counts),
+                            Some(at),
+                        ),
+                        None => (
+                            LoadedData::ComplianceSummary(scope.clone(), Default::default()),
+                            None,
+                        ),
+                    }
+                }),
             LoadRequest::ScopeTree => repo.document(&tree_key).map(|doc| match doc {
                 Some((json, cached_at)) => match serde_json::from_str(&json) {
                     Ok(tree) => (LoadedData::ScopeTree(tree), Some(cached_at)),
@@ -458,6 +482,7 @@ impl App {
             LoadKind::Tenants => self.state.tenants.len(),
             LoadKind::PolicyAssignments => self.state.policy_assignments.len(),
             LoadKind::PolicyCompliance => usize::from(self.state.policy_compliance.is_some()),
+            LoadKind::ComplianceSummary => usize::from(self.state.compliance_summary.is_some()),
             LoadKind::PolicyStates => self.state.policy_states.len(),
             LoadKind::ResourcePolicy => usize::from(self.state.resource_policy.is_some()),
         }
@@ -567,6 +592,9 @@ impl App {
                 // enough. Otherwise the list is empty or incomplete: error.
                 if kind == LoadKind::ScopeTree && !pending.staged {
                     self.fall_back_to_subscriptions(&e);
+                } else if kind == LoadKind::ComplianceSummary && !pending.staged {
+                    // The assignments are still useful without the totals.
+                    self.state.notice = Some(format!("Compliance summary unavailable: {e}"));
                 } else if kind == LoadKind::ResourcePolicy && !pending.staged {
                     self.state.notice = Some(format!("Policy states unavailable: {e}"));
                 } else if kind == LoadKind::ResourceDetail && !pending.staged {
@@ -611,6 +639,9 @@ impl App {
             LoadedData::PolicyAssignments(items) => self.state.policy_assignments = items,
             LoadedData::PolicyCompliance(scope, counts) => {
                 self.state.policy_compliance = Some((scope, counts))
+            }
+            LoadedData::ComplianceSummary(scope, counts) => {
+                self.state.compliance_summary = Some((scope, counts))
             }
             LoadedData::ResourceDetail(doc) => {
                 self.state.resource_document = Some(doc).filter(|d| !d.is_null())
@@ -664,6 +695,16 @@ impl App {
                 Some((s, counts)) if s == scope => match serde_json::to_string(counts) {
                     Ok(value) => WriteJob::Document {
                         key: format!("policy_compliance:{}", scope.arm_id()),
+                        value,
+                    },
+                    Err(_) => return,
+                },
+                _ => return,
+            },
+            LoadRequest::ComplianceSummary { scope } => match &self.state.compliance_summary {
+                Some((s, counts)) if s == scope => match serde_json::to_string(counts) {
+                    Ok(value) => WriteJob::Document {
+                        key: format!("compliance_summary:{}", scope.arm_id()),
                         value,
                     },
                     Err(_) => return,
@@ -742,7 +783,9 @@ fn view_of(kind: LoadKind) -> ViewMode {
         LoadKind::ResourceDetail | LoadKind::ResourcePolicy => ViewMode::ResourceDetail,
         LoadKind::PolicyStates => ViewMode::PolicyNonCompliant,
         LoadKind::Tenants => ViewMode::TenantList,
-        LoadKind::PolicyAssignments | LoadKind::PolicyCompliance => ViewMode::PolicyAssignments,
+        LoadKind::PolicyAssignments | LoadKind::PolicyCompliance | LoadKind::ComplianceSummary => {
+            ViewMode::PolicyAssignments
+        }
     }
 }
 

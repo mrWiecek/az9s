@@ -566,6 +566,21 @@ pub fn policy_compliance_query() -> String {
         .to_string()
 }
 
+/// KQL counting, per subscription (lowercase ID), the resources that policy
+/// evaluated (`resources`) and those non-compliant with at least one policy
+/// of any assignment (`nonCompliant`). Each resource counts once, however
+/// many policies evaluate it, so the per-subscription rows add up exactly.
+pub fn compliance_summary_query() -> String {
+    "policyresources \
+     | where type =~ 'microsoft.policyinsights/policystates' \
+     | extend resource = tolower(tostring(properties.resourceId)), \
+         subscription = tolower(tostring(properties.subscriptionId)), \
+         nc = iff(tostring(properties.complianceState) =~ 'NonCompliant', 1, 0) \
+     | summarize nc = max(nc) by resource, subscription \
+     | summarize resources = count(), nonCompliant = sum(nc) by subscription"
+        .to_string()
+}
+
 /// KQL for individual policy states (one row per resource, assignment and
 /// policy definition), filtered by `filter` (a KQL `where` condition).
 fn policy_states_query(filter: &str) -> String {
@@ -671,6 +686,16 @@ mod tests {
     use super::*;
     use crate::testing::{error, ok, serve, serve_counting, serve_sequence, Reply, StaticToken};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn compliance_summary_counts_each_resource_once_per_subscription() {
+        let q = compliance_summary_query();
+        assert!(
+            q.contains("summarize nc = max(nc) by resource, subscription"),
+            "{q}"
+        );
+        assert!(q.contains("nonCompliant = sum(nc) by subscription"), "{q}");
+    }
 
     #[test]
     fn policy_state_queries_filter_by_assignment_or_resource() {
