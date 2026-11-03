@@ -27,6 +27,10 @@ start = "mg"
 # 0 turns auto-refresh off; r refreshes by hand.
 refresh_interval = 0
 
+# Tenant (ID) to start in, as if you typed :ctx <id>. Without it az9s uses
+# the Azure CLI's default login and lists every tenant's subscriptions.
+# tenant = "00000000-0000-0000-0000-000000000000"
+
 # Read-only mode: actions that change Azure (planned, M4) are disabled.
 # The status bar shows RO while it is on.
 read_only = true
@@ -46,6 +50,8 @@ pub enum StartView {
 pub struct Config {
     pub start: StartView,
     pub default_subscription: Option<String>,
+    /// Tenant ID to start in (`:ctx`).
+    pub tenant: Option<String>,
     /// Seconds; 0 = off, otherwise at least [`MIN_REFRESH_SECS`].
     pub refresh_interval: u64,
     pub read_only: bool,
@@ -56,6 +62,7 @@ impl Default for Config {
         Self {
             start: StartView::Mg,
             default_subscription: None,
+            tenant: None,
             refresh_interval: 0,
             read_only: true,
         }
@@ -96,10 +103,9 @@ impl Config {
         if config.refresh_interval > 0 {
             config.refresh_interval = config.refresh_interval.max(MIN_REFRESH_SECS);
         }
-        config.default_subscription = config
-            .default_subscription
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        let clean = |s: Option<String>| s.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        config.default_subscription = clean(config.default_subscription);
+        config.tenant = clean(config.tenant).map(|t| t.to_ascii_lowercase());
         Ok(config)
     }
 
@@ -161,6 +167,8 @@ mod tests {
         .unwrap();
         assert_eq!(config.start, StartView::Sub);
         assert_eq!(config.default_subscription.as_deref(), Some("prod"));
+        let with_tenant = Config::parse("tenant = \" AB-CD \"").unwrap();
+        assert_eq!(with_tenant.tenant.as_deref(), Some("ab-cd"));
         assert_eq!(
             config.refresh_interval, MIN_REFRESH_SECS,
             "raised to the minimum"

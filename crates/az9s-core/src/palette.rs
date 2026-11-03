@@ -79,6 +79,7 @@ const COMMANDS: &[(&str, &str)] = &[
         "tag all",
         "Tags and how many resources carry them, every subscription",
     ),
+    ("ctx", "Switch tenant"),
 ];
 
 /// Everything the palette can find, in the order shown for an empty query.
@@ -113,7 +114,8 @@ pub fn items(state: &AppState) -> Vec<PaletteItem> {
             action: PaletteAction::ManagementGroup(g.name.clone()),
         }));
     }
-    items.extend(state.subscriptions.iter().map(|s| PaletteItem {
+    let in_tenant = state.subscriptions.iter().filter(|s| state.in_tenant(s));
+    items.extend(in_tenant.map(|s| PaletteItem {
         kind: PaletteKind::Subscription,
         label: s.name.clone(),
         detail: format!("{} · {}", s.id, s.state),

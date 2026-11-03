@@ -35,6 +35,72 @@ pub trait TokenSource: Send + Sync {
     fn token(&self) -> BoxFuture<'_, Result<String>>;
 }
 
+/// Tokens for one tenant from the Azure CLI:
+/// `az account get-access-token --tenant <id>`. Used after `:ctx` switches
+/// to a tenant other than the CLI's default. The CLI must be logged in to
+/// that tenant (`az login --tenant <id>` once, if it says so).
+pub struct CliTenantTokenSource {
+    pub tenant: String,
+    /// The CLI to run (tests point this at a fake).
+    pub program: String,
+}
+
+impl CliTenantTokenSource {
+    pub fn new(tenant: impl Into<String>) -> Self {
+        Self {
+            tenant: tenant.into(),
+            program: "az".into(),
+        }
+    }
+}
+
+impl TokenSource for CliTenantTokenSource {
+    fn token(&self) -> BoxFuture<'_, Result<String>> {
+        async move {
+            let _t = timing::timer("azure.token");
+            let output = tokio::process::Command::new(&self.program)
+                .args([
+                    "account",
+                    "get-access-token",
+                    "--resource",
+                    "https://management.azure.com/",
+                    "--tenant",
+                    &self.tenant,
+                    "--query",
+                    "accessToken",
+                    "--output",
+                    "tsv",
+                ])
+                .output()
+                .await
+                .map_err(|e| {
+                    AzureError::AuthenticationFailed(format!("could not run the Azure CLI: {e}"))
+                })?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let first = stderr
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("unknown error")
+                    .trim()
+                    .to_string();
+                return Err(AzureError::AuthenticationFailed(format!(
+                    "no token for tenant {} ({first}); try `az login --tenant {}`",
+                    self.tenant, self.tenant
+                )));
+            }
+            let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if token.is_empty() {
+                return Err(AzureError::AuthenticationFailed(
+                    "the Azure CLI returned an empty token".into(),
+                ));
+            }
+            Ok(token)
+        }
+        .boxed()
+    }
+}
+
 /// Tokens from an Azure SDK credential (e.g. the Azure CLI credential).
 pub struct CredentialTokenSource(pub Arc<dyn TokenCredential>);
 
@@ -532,6 +598,44 @@ mod tests {
         assert_eq!(
             resource_detail_query("/subscriptions/s/x/it's"),
             r"resources | where id =~ '/subscriptions/s/x/it\'s' | limit 1"
+        );
+    }
+
+    /// A fake `az` script that prints its arguments, or fails.
+    #[cfg(unix)]
+    fn fake_cli(dir: &std::path::Path, ok: bool) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(if ok { "az-ok" } else { "az-fail" });
+        let body = if ok {
+            "#!/bin/sh\necho \"token-for $*\"\n"
+        } else {
+            "#!/bin/sh\necho 'AADSTS50076: interaction required' >&2\nexit 1\n"
+        };
+        std::fs::write(&path, body).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tenant_tokens_come_from_the_cli_for_that_tenant() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = CliTenantTokenSource {
+            tenant: "t-2".into(),
+            program: fake_cli(dir.path(), true),
+        };
+        let token = source.token().await.unwrap();
+        assert!(token.contains("--tenant t-2"), "{token}");
+        assert!(token.contains("get-access-token"));
+
+        let failing = CliTenantTokenSource {
+            tenant: "t-2".into(),
+            program: fake_cli(dir.path(), false),
+        };
+        let e = failing.token().await.unwrap_err().to_string();
+        assert!(
+            e.contains("AADSTS50076") && e.contains("az login --tenant t-2"),
+            "{e}"
         );
     }
 

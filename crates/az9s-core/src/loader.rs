@@ -45,6 +45,8 @@ pub enum LoadRequest {
         resource_id: String,
         subscription_id: String,
     },
+    /// The tenants the user can access, with names.
+    Tenants,
 }
 
 /// Which list a request fills. One request per kind is in flight at a time.
@@ -55,6 +57,7 @@ pub enum LoadKind {
     Resources,
     ScopeTree,
     ResourceDetail,
+    Tenants,
 }
 
 impl LoadKind {
@@ -65,6 +68,7 @@ impl LoadKind {
             LoadKind::Resources => "resources",
             LoadKind::ScopeTree => "management group tree",
             LoadKind::ResourceDetail => "resource details",
+            LoadKind::Tenants => "tenants",
         }
     }
 }
@@ -77,6 +81,7 @@ impl LoadRequest {
             LoadRequest::Resources { .. } => LoadKind::Resources,
             LoadRequest::ScopeTree => LoadKind::ScopeTree,
             LoadRequest::ResourceDetail { .. } => LoadKind::ResourceDetail,
+            LoadRequest::Tenants => LoadKind::Tenants,
         }
     }
 }
@@ -89,6 +94,7 @@ pub enum LoadedData {
     ScopeTree(ScopeTree),
     /// A resource's document (`Null` only as an empty placeholder).
     ResourceDetail(serde_json::Value),
+    Tenants(Vec<crate::models::Tenant>),
 }
 
 /// Outcome of a fetch: the data (or an error), plus the subscriptions that
@@ -188,6 +194,15 @@ impl Loader {
             next_generation: 0,
             in_flight: HashMap::new(),
         }
+    }
+
+    /// Use `fetcher` from now on (e.g. after switching tenant). Aborts every
+    /// request in flight; their results would belong to the old tenant.
+    pub fn replace_fetcher(&mut self, fetcher: Option<Arc<dyn Fetcher>>) {
+        for (_, (_, handle)) in self.in_flight.drain() {
+            handle.abort();
+        }
+        self.fetcher = fetcher;
     }
 
     /// The receiving end of the result channel. Can be taken once.
@@ -357,6 +372,11 @@ impl Fetcher for AzureFetcher {
                     failed_subscriptions: Vec::new(),
                     notice: None,
                 },
+                LoadRequest::Tenants => FetchOutcome {
+                    data: Err("tenant names are not available with AZ9S_BACKEND=arm".into()),
+                    failed_subscriptions: Vec::new(),
+                    notice: None,
+                },
             }
         }
         .boxed()
@@ -480,6 +500,36 @@ impl Fetcher for GraphFetcher {
             }
             .boxed();
         }
+        if request == LoadRequest::Tenants {
+            let client = self.management_groups.clone();
+            return async move {
+                let data = match client {
+                    Some(client) => client
+                        .tenants()
+                        .await
+                        .map(|tenants| {
+                            LoadedData::Tenants(
+                                tenants
+                                    .into_iter()
+                                    .map(|t| crate::models::Tenant {
+                                        id: t.id,
+                                        name: t.display_name,
+                                        domain: t.default_domain,
+                                    })
+                                    .collect(),
+                            )
+                        })
+                        .map_err(|e| e.to_string()),
+                    None => Err("management groups are not configured".into()),
+                };
+                FetchOutcome {
+                    data,
+                    failed_subscriptions: vec![],
+                    notice: None,
+                }
+            }
+            .boxed();
+        }
         if request == LoadRequest::ScopeTree {
             let tree = Self::scope_tree(
                 self.graph.clone(),
@@ -515,6 +565,7 @@ impl Fetcher for GraphFetcher {
                 ),
                 LoadRequest::Subscriptions
                 | LoadRequest::ScopeTree
+                | LoadRequest::Tenants
                 | LoadRequest::ResourceDetail { .. } => {
                     unreachable!("handled above")
                 }
@@ -595,6 +646,7 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::Resources => LoadedData::Resources(vec![]),
         LoadKind::ScopeTree => LoadedData::ScopeTree(ScopeTree::default()),
         LoadKind::ResourceDetail => LoadedData::ResourceDetail(serde_json::Value::Null),
+        LoadKind::Tenants => LoadedData::Tenants(vec![]),
     }
 }
 

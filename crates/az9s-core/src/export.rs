@@ -63,6 +63,20 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
                 with_header("count\talias\ttype", lines),
             )
         }
+        ViewMode::TenantList => {
+            let rows = state.tenant_rows();
+            let lines = rows.iter().filter_map(|r| {
+                let id = r.id.as_deref()?;
+                Some(tsv(&[
+                    &r.name,
+                    r.domain.as_deref().unwrap_or(""),
+                    id,
+                    &r.subscriptions.to_string(),
+                ]))
+            });
+            let lines = with_header("name\tdomain\tid\tsubscriptions", lines);
+            (count(lines.len().saturating_sub(1), "tenant"), lines)
+        }
         ViewMode::TagSummary => {
             let rows = state.tag_summary();
             let lines = rows

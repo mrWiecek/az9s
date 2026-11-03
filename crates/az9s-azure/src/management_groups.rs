@@ -17,6 +17,16 @@ use tracing::warn;
 const API_VERSION: &str = "2020-05-01";
 const MAX_RETRIES: u32 = 4;
 
+/// A tenant the signed-in identity can access.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TenantInfo {
+    pub id: String,
+    pub display_name: String,
+    pub default_domain: Option<String>,
+}
+
+const TENANTS_API_VERSION: &str = "2022-12-01";
+
 /// What a node in the hierarchy is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
@@ -87,6 +97,41 @@ impl ManagementGroupClient {
             }
         }
         Ok(nodes)
+    }
+
+    /// The tenants the signed-in identity can access, with their names
+    /// (`GET /tenants`, paged by `nextLink`).
+    pub async fn tenants(&self) -> Result<Vec<TenantInfo>> {
+        let _t = timing::timer("azure.tenants");
+        let mut url = format!(
+            "{}/tenants?api-version={}",
+            self.endpoint, TENANTS_API_VERSION
+        );
+        let mut tenants = Vec::new();
+        loop {
+            let page = self.get(&url).await?;
+            if let Some(items) = page.get("value").and_then(Value::as_array) {
+                tenants.extend(items.iter().filter_map(|item| {
+                    let id = item.get("tenantId").and_then(Value::as_str)?.to_string();
+                    let text = |key: &str| {
+                        item.get(key)
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                    };
+                    Some(TenantInfo {
+                        display_name: text("displayName").unwrap_or_else(|| id.clone()),
+                        default_domain: text("defaultDomain"),
+                        id,
+                    })
+                }));
+            }
+            match page.get("nextLink").and_then(Value::as_str) {
+                Some(next) if !next.is_empty() => url = next.to_string(),
+                _ => break,
+            }
+        }
+        Ok(tenants)
     }
 
     async fn get(&self, url: &str) -> Result<Value> {
@@ -214,6 +259,35 @@ mod tests {
 
     fn client(endpoint: &str) -> ManagementGroupClient {
         ManagementGroupClient::with_endpoint(endpoint, Arc::new(StaticToken("t".into())))
+    }
+
+    #[tokio::test]
+    async fn tenants_are_listed_with_names_and_domains() {
+        let (endpoint, _) = serve_paths(|path, _| {
+            assert!(path.starts_with("/tenants?api-version="), "{path}");
+            ok(json!({"value": [
+                {"tenantId": "t-1", "displayName": "Contoso", "defaultDomain": "contoso.onmicrosoft.com"},
+                {"tenantId": "t-2"},
+                {"displayName": "no id: skipped"}
+            ]}))
+        })
+        .await;
+        let tenants = client(&endpoint).tenants().await.unwrap();
+        assert_eq!(
+            tenants,
+            [
+                TenantInfo {
+                    id: "t-1".into(),
+                    display_name: "Contoso".into(),
+                    default_domain: Some("contoso.onmicrosoft.com".into()),
+                },
+                TenantInfo {
+                    id: "t-2".into(),
+                    display_name: "t-2".into(),
+                    default_domain: None,
+                },
+            ]
+        );
     }
 
     #[tokio::test]

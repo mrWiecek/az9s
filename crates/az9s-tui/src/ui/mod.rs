@@ -97,6 +97,7 @@ fn draw_content(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         ViewMode::ResourceList => draw_resource_list(f, area, app),
         ViewMode::ResourceTypeSummary => draw_type_summary(f, area, app),
         ViewMode::TagSummary => draw_tag_summary(f, area, app),
+        ViewMode::TenantList => draw_tenant_list(f, area, app),
         ViewMode::ResourceDetail => draw_resource_detail(f, area, app),
         ViewMode::Logs => draw_logs(f, area, app),
     }
@@ -498,6 +499,71 @@ fn draw_type_summary(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> 
         format!(
             "Resource Types ({}, {total} resources){scope} - Enter lists them",
             rows.len()
+        )
+    };
+    let list = SelectableList::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
+    let mut widget_state = SelectableListState {
+        selected: list_state.selected - visible.start,
+        offset: 0,
+    };
+    list.render(area, f.buffer_mut(), &mut widget_state);
+    app.state_mut().list_state = list_state;
+    Ok(())
+}
+
+/// Draw the tenants to switch to (`:ctx`)
+fn draw_tenant_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
+    let rows = app.state().tenant_rows();
+    let state = app.state();
+    let name_col = name_width(area.width, 2 + 36 + 2 + 12 + 30, 40);
+    let viewport = area.height.saturating_sub(2) as usize;
+    let mut list_state = state.list_state.clone();
+    let visible = list_state.visible_range(rows.len(), viewport);
+    let items: Vec<_> = rows[visible.clone()]
+        .iter()
+        .map(|r| {
+            let marker = if r.current { "● " } else { "  " };
+            list_item_spans(vec![
+                Span::styled(marker, Style::default().fg(Color::Green)),
+                Span::styled(
+                    cell(&r.name, name_col),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    cell(&format!("{} subscriptions", r.subscriptions), 18),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::styled(
+                    cell(r.domain.as_deref().unwrap_or(""), 32),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::styled(
+                    r.id.clone().unwrap_or_default(),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])
+        })
+        .collect();
+    let names_note = if state.tenants.is_empty() && state.loading {
+        " · loading names…"
+    } else {
+        ""
+    };
+    let title = if state.filter_mode {
+        format!("Tenants ({}) - Filter: {}_", rows.len(), state.filter)
+    } else {
+        format!(
+            "Tenants ({}){names_note} - Enter switches · ● current",
+            rows.len().saturating_sub(1)
         )
     };
     let list = SelectableList::new(items)
@@ -1169,6 +1235,16 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("?", "Help"),
                 ("r", "Refresh"),
                 ("Esc", "Back"),
+                ("q", "Quit"),
+            ],
+            ViewMode::TenantList => vec![
+                ("↑↓/jk", "Navigate"),
+                ("Enter", "Switch"),
+                ("/", "Filter"),
+                (":", "Command"),
+                ("^P", "Go to"),
+                ("?", "Help"),
+                ("r", "Refresh"),
                 ("q", "Quit"),
             ],
             ViewMode::TagSummary => vec![

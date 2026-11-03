@@ -10,6 +10,14 @@ pub struct Subscription {
     pub tenant_id: String,
 }
 
+/// An Entra ID tenant (directory) the user can access.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tenant {
+    pub id: String,
+    pub name: String,
+    pub domain: Option<String>,
+}
+
 /// Azure resource group
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceGroup {

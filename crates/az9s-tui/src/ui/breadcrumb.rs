@@ -22,6 +22,15 @@ impl Breadcrumb {
                 .add_modifier(Modifier::BOLD),
         )];
 
+        // The tenant, once one is chosen with :ctx
+        if let Some(tenant) = state.tenant_label() {
+            spans.push(Span::raw(" > "));
+            spans.push(Span::styled(
+                format!("[{}]", Self::truncate(&tenant, 30)),
+                Style::default().fg(Color::Magenta),
+            ));
+        }
+
         // Add the scope: a management group (cross-subscription lists opened
         // from the tree) or the selected subscription.
         let group = state
@@ -79,6 +88,7 @@ impl Breadcrumb {
             ViewMode::ResourceList => "Resources",
             ViewMode::ResourceTypeSummary => "Resource Types",
             ViewMode::TagSummary => "Tags",
+            ViewMode::TenantList => "Tenants",
             ViewMode::ResourceDetail => "Resource Detail",
             ViewMode::Logs => "Logs",
         }
