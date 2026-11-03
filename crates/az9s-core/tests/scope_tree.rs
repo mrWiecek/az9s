@@ -508,3 +508,45 @@ async fn resource_policy_states_get_definition_names_from_graph_then_arm() {
         ("Built-in B", "direct")
     );
 }
+
+#[tokio::test]
+async fn role_assignments_fall_back_to_the_subscriptions_without_tenant_root_access() {
+    use serde_json::json;
+    let (url, requests) = serve_paths(|_, body| {
+        if body.get("managementGroups").is_some() {
+            error(403, "AuthorizationFailed")
+        } else {
+            ok(json!({"totalRecords": 1, "count": 1, "data": [{
+                "id": "/subscriptions/sub-1/providers/Microsoft.Authorization/roleAssignments/a",
+                "scope": "/subscriptions/sub-1",
+                "roleDefinitionId": "/subscriptions/sub-1/providers/Microsoft.Authorization/roleDefinitions/r",
+                "principalId": "p", "principalType": "User"
+            }]}))
+        }
+    })
+    .await;
+    let mut app = app(&url, Cache::new(Path::new(":memory:")).unwrap());
+    app.state_mut().subscriptions = vec![az9s_core::models::Subscription {
+        id: "sub-1".into(),
+        name: "sub-1".into(),
+        state: "Enabled".into(),
+        tenant_id: TENANT.into(),
+    }];
+    app.open_role_assignments(None, None);
+    settle(&mut app).await;
+
+    assert_eq!(app.state().role_assignments.len(), 1);
+    assert!(
+        app.state()
+            .notice
+            .as_deref()
+            .unwrap_or_default()
+            .contains("No access at the tenant root"),
+        "{:?}",
+        app.state().notice
+    );
+    let bodies = requests.lock().unwrap().clone();
+    assert!(bodies
+        .iter()
+        .any(|b| b["subscriptions"] == json!(["sub-1"])));
+}

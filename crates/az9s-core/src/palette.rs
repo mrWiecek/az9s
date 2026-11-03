@@ -89,6 +89,9 @@ const COMMANDS: &[(&str, &str)] = &[
         "Subscriptions ranked by non-compliant resources",
     ),
     ("exemption all", "Policy exemptions and when they expire"),
+    ("ra", "Role assignments where you are"),
+    ("ra all", "Role assignments in the whole tenant"),
+    ("role", "Role definitions, built-in and custom"),
     ("ctx", "Switch tenant"),
 ];
 

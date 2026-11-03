@@ -10,6 +10,7 @@ pub mod models;
 pub mod palette;
 pub mod policy;
 pub mod query;
+pub mod rbac;
 pub mod resource_type;
 pub mod scope_tree;
 pub mod state;

@@ -219,6 +219,60 @@ impl App {
         }
     }
 
+    /// Cache key of a tenant-wide document (`prefix:<tenant>`).
+    fn tenant_key(&self, prefix: &str) -> String {
+        match &self.state.tenant {
+            Some(tenant) => format!("{prefix}:{}", tenant.to_ascii_lowercase()),
+            None => prefix.to_string(),
+        }
+    }
+
+    /// The enabled subscriptions of the current tenant: the fallback scope
+    /// for tenant-wide queries without management group access.
+    fn tenant_subscription_ids(&self) -> Vec<String> {
+        self.state
+            .subscriptions
+            .iter()
+            .filter(|s| self.state.in_tenant(s) && !s.state.eq_ignore_ascii_case("Disabled"))
+            .map(|s| s.id.clone())
+            .collect()
+    }
+
+    /// Load role assignments and definitions (cached first) unless loading.
+    pub fn load_rbac(&mut self) {
+        let subscription_ids = self.tenant_subscription_ids();
+        if !self.pending.contains_key(&LoadKind::RoleAssignments) {
+            self.request(LoadRequest::RoleAssignments {
+                subscription_ids: subscription_ids.clone(),
+            });
+        }
+        if !self.pending.contains_key(&LoadKind::RoleDefinitions) {
+            self.request(LoadRequest::RoleDefinitions { subscription_ids });
+        }
+    }
+
+    /// `:ra`: the role assignments that matter at `scope` (`None`: every one
+    /// in the tenant), optionally only those of one role (its GUID).
+    pub fn open_role_assignments(
+        &mut self,
+        scope: Option<crate::policy::PolicyScope>,
+        role: Option<String>,
+    ) {
+        let state = &mut self.state;
+        state.ra_scope = scope;
+        state.ra_role = role;
+        state.view = ViewMode::RoleAssignments;
+        state.list_state.reset();
+        self.load_rbac();
+    }
+
+    /// `:role`: every role definition, custom first.
+    pub fn open_role_definitions(&mut self) {
+        self.state.view = ViewMode::RoleDefinitions;
+        self.state.list_state.reset();
+        self.load_rbac();
+    }
+
     /// Cache key of the policy exemptions for the current tenant.
     fn exemptions_key(&self) -> String {
         match &self.state.tenant {
@@ -444,6 +498,22 @@ impl App {
             | LoadRequest::Tenants
             | LoadRequest::PolicyStates { .. }
             | LoadRequest::ResourcePolicy { .. } => return,
+            LoadRequest::RoleAssignments { .. } => repo
+                .document(&self.tenant_key("role_assignments"))
+                .map(|doc| {
+                    match doc.and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at))) {
+                        Some((items, at)) => (LoadedData::RoleAssignments(items), Some(at)),
+                        None => (LoadedData::RoleAssignments(vec![]), None),
+                    }
+                }),
+            LoadRequest::RoleDefinitions { .. } => repo
+                .document(&self.tenant_key("role_definitions"))
+                .map(|doc| {
+                    match doc.and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at))) {
+                        Some((items, at)) => (LoadedData::RoleDefinitions(items), Some(at)),
+                        None => (LoadedData::RoleDefinitions(vec![]), None),
+                    }
+                }),
             LoadRequest::PolicyExemptions => repo.document(&self.exemptions_key()).map(|doc| {
                 match doc.and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at))) {
                     Some((items, at)) => (LoadedData::PolicyExemptions(items), Some(at)),
@@ -556,6 +626,8 @@ impl App {
             LoadKind::Tenants => self.state.tenants.len(),
             LoadKind::PolicyAssignments => self.state.policy_assignments.len(),
             LoadKind::PolicyExemptions => self.state.policy_exemptions.len(),
+            LoadKind::RoleAssignments => self.state.role_assignments.len(),
+            LoadKind::RoleDefinitions => self.state.role_definitions.len(),
             LoadKind::ComplianceRollup => usize::from(self.state.compliance_rollup.is_some()),
             LoadKind::PolicyCompliance => usize::from(self.state.policy_compliance.is_some()),
             LoadKind::ComplianceSummary => usize::from(self.state.compliance_summary.is_some()),
@@ -685,6 +757,15 @@ impl App {
                 // enough. Otherwise the list is empty or incomplete: error.
                 if kind == LoadKind::ScopeTree && !pending.staged {
                     self.fall_back_to_subscriptions(&e);
+                } else if kind == LoadKind::RoleDefinitions
+                    && self.state.view != ViewMode::RoleDefinitions
+                {
+                    // The assignments show without role names.
+                    self.state.notice = Some(format!("Role names unavailable: {e}"));
+                } else if kind == LoadKind::RoleAssignments
+                    && self.state.view != ViewMode::RoleAssignments
+                {
+                    warn!("Role assignments unavailable: {}", e);
                 } else if kind == LoadKind::PolicyExemptions
                     && self.state.view != ViewMode::ExemptionList
                 {
@@ -741,6 +822,8 @@ impl App {
             LoadedData::Tenants(tenants) => self.state.tenants = tenants,
             LoadedData::PolicyAssignments(items) => self.state.policy_assignments = items,
             LoadedData::PolicyExemptions(items) => self.state.policy_exemptions = items,
+            LoadedData::RoleAssignments(items) => self.state.role_assignments = items,
+            LoadedData::RoleDefinitions(items) => self.state.role_definitions = items,
             LoadedData::ComplianceRollup(counts) => self.state.compliance_rollup = Some(counts),
             LoadedData::PolicyCompliance(scope, counts) => {
                 self.state.policy_compliance = Some((scope, counts))
@@ -787,6 +870,24 @@ impl App {
             LoadRequest::Tenants
             | LoadRequest::PolicyStates { .. }
             | LoadRequest::ResourcePolicy { .. } => return,
+            LoadRequest::RoleAssignments { .. } => {
+                match serde_json::to_string(&self.state.role_assignments) {
+                    Ok(value) => WriteJob::Document {
+                        key: self.tenant_key("role_assignments"),
+                        value,
+                    },
+                    Err(_) => return,
+                }
+            }
+            LoadRequest::RoleDefinitions { .. } => {
+                match serde_json::to_string(&self.state.role_definitions) {
+                    Ok(value) => WriteJob::Document {
+                        key: self.tenant_key("role_definitions"),
+                        value,
+                    },
+                    Err(_) => return,
+                }
+            }
             LoadRequest::PolicyExemptions => {
                 match serde_json::to_string(&self.state.policy_exemptions) {
                     Ok(value) => WriteJob::Document {
@@ -912,6 +1013,8 @@ fn view_of(kind: LoadKind) -> ViewMode {
         }
         LoadKind::ComplianceRollup => ViewMode::ComplianceRanking,
         LoadKind::PolicyExemptions => ViewMode::ExemptionList,
+        LoadKind::RoleAssignments => ViewMode::RoleAssignments,
+        LoadKind::RoleDefinitions => ViewMode::RoleDefinitions,
     }
 }
 

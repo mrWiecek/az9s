@@ -519,9 +519,11 @@ pub fn resources_query(resource_group: Option<&str>) -> String {
 /// KQL returning one resource's full document (properties, sku, identity,
 /// zones, tags...) by ID.
 pub fn resource_detail_query(resource_id: &str) -> String {
-    // Policy objects live in the policyresources table, not resources.
+    // Policy objects live in policyresources, RBAC in authorizationresources.
     let table = if is_policy_id(resource_id) {
         "policyresources"
+    } else if is_role_id(resource_id) {
+        "authorizationresources"
     } else {
         "resources"
     };
@@ -536,6 +538,42 @@ pub fn resource_detail_query(resource_id: &str) -> String {
 pub fn is_policy_id(id: &str) -> bool {
     let id = id.to_ascii_lowercase();
     id.contains("/providers/microsoft.authorization/policy")
+}
+
+/// Whether an ARM ID is a role assignment or role definition, which
+/// Resource Graph keeps in `authorizationresources`.
+pub fn is_role_id(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    id.contains("/providers/microsoft.authorization/roleassignments/")
+        || id.contains("/providers/microsoft.authorization/roledefinitions/")
+}
+
+/// KQL listing every role assignment in the scope.
+pub fn role_assignments_query() -> String {
+    "authorizationresources \
+     | where type =~ 'microsoft.authorization/roleassignments' \
+     | project id, \
+         scope = tostring(properties.scope), \
+         roleDefinitionId = tostring(properties.roleDefinitionId), \
+         principalId = tostring(properties.principalId), \
+         principalType = tostring(properties.principalType), \
+         createdOn = tostring(properties.createdOn), \
+         description = tostring(properties.description), \
+         condition = tostring(properties.condition)"
+        .to_string()
+}
+
+/// KQL listing every role definition (built-in and custom) in the scope.
+pub fn role_definitions_query() -> String {
+    "authorizationresources \
+     | where type =~ 'microsoft.authorization/roledefinitions' \
+     | project id, name, \
+         roleName = tostring(properties.roleName), \
+         roleType = tostring(properties.type), \
+         description = tostring(properties.description), \
+         assignableScopes = properties.assignableScopes, \
+         permissions = properties.permissions"
+        .to_string()
 }
 
 /// KQL listing every policy assignment in the scope, with what the policy
@@ -721,6 +759,16 @@ mod tests {
     use super::*;
     use crate::testing::{error, ok, serve, serve_counting, serve_sequence, Reply, StaticToken};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn role_objects_are_read_from_authorizationresources() {
+        let ra = "/subscriptions/s/providers/Microsoft.Authorization/roleAssignments/x";
+        let rd = "/providers/Microsoft.Authorization/roleDefinitions/y";
+        assert!(is_role_id(ra) && is_role_id(rd) && !is_role_id("/subscriptions/s"));
+        assert!(resource_detail_query(rd).starts_with("authorizationresources |"));
+        assert!(role_assignments_query().contains("'microsoft.authorization/roleassignments'"));
+        assert!(role_definitions_query().contains("roleType = tostring(properties.type)"));
+    }
 
     #[test]
     fn definition_names_are_looked_up_by_lowercase_id() {
