@@ -1,3 +1,4 @@
+use crate::config::{self, Config, StartView};
 use crate::{
     cache::{Cache, WriteJob},
     loader::{
@@ -48,6 +49,11 @@ impl App {
     /// Create the application: open the cache, show cached subscriptions right
     /// away, and start fetching fresh subscriptions in the background.
     pub async fn new() -> anyhow::Result<Self> {
+        Self::start(Config::load(Config::path(None))).await
+    }
+
+    /// Like [`App::new`], with an already loaded config (`--config`).
+    pub async fn start(loaded: config::Loaded) -> anyhow::Result<Self> {
         let _t = timing::timer("startup.app_init");
         info!("Initializing az9s application");
 
@@ -67,10 +73,28 @@ impl App {
             fetcher.warm_up();
         }
         let mut app = Self::with_fetcher(cache, fetcher);
-        app.load_cached_subscriptions();
-        app.request(LoadRequest::Subscriptions);
-        app.open_scope_tree();
+        app.apply_config(loaded);
         Ok(app)
+    }
+
+    /// Start with `loaded`: the first view, and the background loads. Says
+    /// in the status bar if the config file couldn't be used.
+    pub fn apply_config(&mut self, loaded: config::Loaded) {
+        self.state.config = loaded.config;
+        self.load_cached_subscriptions();
+        self.request(LoadRequest::Subscriptions);
+        match self.state.config.start {
+            StartView::Mg => self.open_scope_tree(),
+            StartView::Sub => {
+                // The tree still loads (for :mg and the palette), but the
+                // subscription list is the start view.
+                self.state.view = ViewMode::SubscriptionList;
+                self.request(LoadRequest::ScopeTree);
+            }
+        }
+        if let Some(problem) = loaded.problem {
+            self.state.notice = Some(format!("Config {problem}"));
+        }
     }
 
     /// Resource Graph for lists (with ARM fallback), unless `AZ9S_BACKEND=arm`.

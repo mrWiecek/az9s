@@ -65,6 +65,9 @@ pub struct AppState {
     /// The command palette (Ctrl+P), while open
     pub palette: Option<crate::palette::Palette>,
 
+    /// Settings from the config file
+    pub config: crate::config::Config,
+
     /// Help screen state
     pub help_open: bool,
 

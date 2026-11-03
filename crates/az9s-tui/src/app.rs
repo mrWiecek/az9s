@@ -11,6 +11,7 @@ use az9s_core::query::ResourceQuery;
 use az9s_core::scope_tree::TreeRowKind;
 use az9s_core::state::{DetailTab, NavigationContext, ViewMode};
 use az9s_core::{App, AppState};
+use std::time::{Duration, Instant};
 
 /// Navigation metadata key marking a view that showed all subscriptions.
 const CROSS_SUBSCRIPTION: &str = "cross_subscription";
@@ -30,6 +31,8 @@ pub struct TuiApp {
     core: App,
     should_quit: bool,
     desktop: Box<dyn Desktop>,
+    /// When the current view was last loaded by auto-refresh or `r`
+    last_refresh: Instant,
 }
 
 impl TuiApp {
@@ -44,6 +47,7 @@ impl TuiApp {
             core,
             should_quit: false,
             desktop,
+            last_refresh: Instant::now(),
         }
     }
 
@@ -95,6 +99,7 @@ impl TuiApp {
                 if state.loading {
                     state.spinner_frame = state.spinner_frame.wrapping_add(1);
                 }
+                self.tick_at(Instant::now()).await?;
                 Ok(true)
             }
             Event::Resize(_, _) => {
@@ -581,9 +586,14 @@ impl TuiApp {
                 None => Scope::All,
             };
         }
-        match &state.selected_subscription {
-            Some(sub) => Scope::Subscription(sub.id.clone()),
-            None => Scope::All,
+        match (
+            &state.selected_subscription,
+            &state.config.default_subscription,
+        ) {
+            (Some(sub), _) => Scope::Subscription(sub.id.clone()),
+            // No context: the config's default subscription, if any.
+            (None, Some(name)) => Scope::Subscription(name.clone()),
+            (None, None) => Scope::All,
         }
     }
 
@@ -713,8 +723,43 @@ impl TuiApp {
         Ok(true)
     }
 
+    /// Auto-refresh (`refresh_interval` in the config): reload the current
+    /// view when the interval has passed since the last load, unless a load
+    /// is running or the user is typing, searching or reading help.
+    pub async fn tick_at(&mut self, now: Instant) -> Result<()> {
+        let state = self.state();
+        let interval = state.config.refresh_interval;
+        let busy = state.loading
+            || state.command_mode
+            || state.filter_mode
+            || state.help_open
+            || state.palette.is_some()
+            || state.detail_search_input.is_some()
+            || state.error.is_some();
+        let refreshable = matches!(
+            state.view,
+            ViewMode::ManagementGroupTree
+                | ViewMode::SubscriptionList
+                | ViewMode::ResourceGroupList
+                | ViewMode::ResourceList
+                | ViewMode::ResourceTypeSummary
+                | ViewMode::TagSummary
+                | ViewMode::ResourceDetail
+        );
+        if interval > 0
+            && !busy
+            && refreshable
+            && now.duration_since(self.last_refresh) >= Duration::from_secs(interval)
+        {
+            debug!("Auto-refresh after {interval}s");
+            self.handle_refresh().await?;
+        }
+        Ok(())
+    }
+
     /// Reload the current view in the background
     async fn handle_refresh(&mut self) -> Result<()> {
+        self.last_refresh = Instant::now();
         let state = self.state();
         let scope_ids = if state.cross_subscription_mode {
             Some(self.scope_subscription_ids())
