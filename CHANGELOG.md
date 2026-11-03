@@ -12,6 +12,24 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-03
+
+### Added
+- **Tags view: `:tag [all|<sub>] [filters]`.** Lists every tag on the
+  resources in scope as key, value and how many resources carry it, most
+  common first. Keys are grouped ignoring case, as Azure treats them. `/`
+  narrows by key or value, `Enter` opens the resources with that tag
+  (without reloading), `Esc` comes back, `c` copies the list. Filters work
+  as for `:res`, e.g. `:tag all type=keyvault`.
+- **Vim-style search in the resource detail view.** `/` searches the open
+  tab (Overview, Tags or JSON) instead of filtering: it jumps to the first
+  match as you type and highlights every match, the current one more
+  strongly. `Enter` keeps the search, `Esc` cancels it and returns to where
+  you were. `n` / `N` go to the next / previous match and wrap around
+  ("search hit BOTTOM, continuing at TOP"); the status bar shows "match 3
+  of 12". Lowercase ignores case, a capital letter makes it exact
+  (smartcase). `Esc` clears the highlights, then goes back.
+
 ## [0.6.0] - 2026-11-02
 
 ### Added
@@ -329,7 +347,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/mrWiecek/az9s/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/mrWiecek/az9s/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/mrWiecek/az9s/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/mrWiecek/az9s/compare/v0.3.1...v0.4.0

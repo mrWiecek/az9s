@@ -259,3 +259,50 @@ async fn tag_key_equals_value_and_keyvault_alias_from_the_command_line() {
     app.apply_load(loads.recv().await.unwrap());
     assert_eq!(visible_names(&app), ["kv-1"]);
 }
+
+#[tokio::test]
+async fn tag_view_counts_tags_and_opens_the_tagged_resources() {
+    let mut app = setup();
+    let mut loads = app.take_load_receiver().unwrap();
+
+    command(&mut app, "tag all").await;
+    assert_eq!(app.state().view, ViewMode::TagSummary);
+    app.apply_load(loads.recv().await.unwrap());
+    let rows: Vec<(String, String, usize)> = app
+        .state()
+        .tag_summary()
+        .into_iter()
+        .map(|t| (t.key, t.value, t.count))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("env".to_string(), "prod".to_string(), 3),
+            ("env".to_string(), "dev".to_string(), 2),
+        ]
+    );
+
+    // It renders: counts, keys and values.
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 20)).unwrap();
+    terminal
+        .draw(|f| az9s_tui::ui::draw(f, &mut app).unwrap())
+        .unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(screen.contains("Tags (2 values of 1 key)"), "{screen}");
+    assert!(screen.contains("env") && screen.contains("prod"));
+
+    // Enter on env=prod: those resources, no reload; Esc comes back.
+    press(&mut app, KeyCode::Enter).await;
+    assert_eq!(app.state().view, ViewMode::ResourceList);
+    assert!(!app.state().loading);
+    assert_eq!(visible_names(&app), ["vm-1", "disk-1", "kv-1"]);
+    press(&mut app, KeyCode::Esc).await;
+    assert_eq!(app.state().view, ViewMode::TagSummary);
+    assert!(app.state().resource_query.is_empty());
+}

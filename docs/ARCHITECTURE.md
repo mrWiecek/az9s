@@ -102,8 +102,9 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   (`type=`, `loc=`, `tag=`): parsing, matching, and `Display` back to the
   typed form (stored in navigation contexts so `Esc` restores it). Applied
   on the client in `AppState::filtered_resources`, with the `/` text filter,
-  in one memoized pass; `AppState::type_summary` counts types (memoized per
-  list and query).
+  in one memoized pass; `AppState::type_summary` counts types and
+  `AppState::tag_summary` counts tag key/value pairs (each memoized per list
+  and query).
 - `export.rs`: `view_text`, what `c` copies: a list's filtered rows as TSV
   with a header, the tree or type summary rows, or the detail view's tab.
 - `resource_type.rs`: short aliases for resource types (`vm`, `vnet`, …),
@@ -162,6 +163,10 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
 - `app.rs`: `TuiApp` wraps `App`. It handles keys per mode (normal, filter, command,
   help) and moves between views. Opening a view switches to it immediately and
   calls `App::request`; the list fills in when the result arrives.
+- `ui/search.rs`: Vim-style search for the detail view: smartcase matching,
+  next/previous with wrap-around, and highlighting that splits styled spans.
+  It runs over `ui::detail_lines`, the same lines the view draws, so match
+  positions and the screen agree.
 - `desktop.rs`: the `Desktop` trait for copying (OSC 52 escape sequence)
   and opening URLs (`open` / `xdg-open` / `start`). Tests record instead.
 - `command.rs`: parses `:` commands (`:mg`, `:sub`, `:rg [all|<sub>]`,

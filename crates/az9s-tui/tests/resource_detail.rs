@@ -281,3 +281,102 @@ async fn c_copies_the_current_view() {
         .unwrap()
         .starts_with("Copied JSON of vm-1"));
 }
+
+async fn type_text(app: &mut TuiApp, text: &str) {
+    for c in text.chars() {
+        press(app, KeyCode::Char(c)).await;
+    }
+}
+
+#[tokio::test]
+async fn slash_searches_the_detail_view_like_vim() {
+    let (mut app, _, _) = setup(Ok(vm_document()));
+    let mut loads = app.take_load_receiver().unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    press(&mut app, KeyCode::Enter).await;
+    app.apply_load(loads.recv().await.unwrap());
+    press(&mut app, KeyCode::Char('3')).await; // JSON
+    screen(&mut terminal, &mut app);
+    let line_of = |app: &TuiApp| app.state().detail_match.unwrap().0;
+
+    // Typing jumps to the first match, which is far below the screen.
+    press(&mut app, KeyCode::Char('/')).await;
+    assert_eq!(app.state().view, ViewMode::ResourceDetail, "no list filter");
+    type_text(&mut app, "data-3").await;
+    let first = line_of(&app);
+    let text = screen(&mut terminal, &mut app);
+    assert!(text.contains("/data-3_"), "prompt in the footer");
+    assert!(text.contains("\"data-3\""), "scrolled to the match: {text}");
+    assert!(app.state().detail_scroll > 0);
+    assert!(app
+        .state()
+        .notice
+        .as_deref()
+        .unwrap()
+        .contains("match 1 of 11"));
+
+    // Enter keeps it; n and N move; n past the last wraps to the top.
+    press(&mut app, KeyCode::Enter).await;
+    press(&mut app, KeyCode::Char('n')).await;
+    assert!(line_of(&app) > first);
+    press(&mut app, KeyCode::Char('N')).await;
+    assert_eq!(line_of(&app), first);
+    for _ in 0..11 {
+        press(&mut app, KeyCode::Char('n')).await;
+    }
+    assert_eq!(line_of(&app), first, "11 matches: back where it started");
+    assert!(app
+        .state()
+        .notice
+        .as_deref()
+        .unwrap()
+        .contains("continuing at TOP"));
+
+    // Esc clears the search first, then goes back to the list.
+    press(&mut app, KeyCode::Esc).await;
+    assert!(app.state().detail_search.is_empty());
+    assert_eq!(app.state().view, ViewMode::ResourceDetail);
+    press(&mut app, KeyCode::Esc).await;
+    assert_eq!(app.state().view, ViewMode::ResourceList);
+}
+
+#[tokio::test]
+async fn esc_while_typing_cancels_and_restores_the_view() {
+    let (mut app, _, _) = setup(Ok(vm_document()));
+    let mut loads = app.take_load_receiver().unwrap();
+    press(&mut app, KeyCode::Enter).await;
+    app.apply_load(loads.recv().await.unwrap());
+    press(&mut app, KeyCode::Char('3')).await;
+
+    press(&mut app, KeyCode::Char('/')).await;
+    type_text(&mut app, "nothing-like-this").await;
+    assert!(app
+        .state()
+        .notice
+        .as_deref()
+        .unwrap()
+        .contains("Pattern not found"));
+    press(&mut app, KeyCode::Esc).await;
+    assert!(app.state().detail_search_input.is_none());
+    assert!(app.state().detail_search.is_empty());
+    assert_eq!(app.state().detail_scroll, 0);
+    assert_eq!(
+        app.state().view,
+        ViewMode::ResourceDetail,
+        "Esc only cancels"
+    );
+
+    // Capital letters make the search exact-case (smartcase).
+    press(&mut app, KeyCode::Char('/')).await;
+    type_text(&mut app, "VMSIZE").await;
+    assert!(app.state().notice.as_deref().unwrap().contains("not found"));
+    press(&mut app, KeyCode::Esc).await;
+    press(&mut app, KeyCode::Char('/')).await;
+    type_text(&mut app, "vmsize").await;
+    assert!(app
+        .state()
+        .notice
+        .as_deref()
+        .unwrap()
+        .contains("match 1 of 1"));
+}

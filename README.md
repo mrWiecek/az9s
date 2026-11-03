@@ -62,7 +62,7 @@ az9s --timings                             # launch, print a timing summary on e
 | `Enter` | Open (in the tree: resource groups of the group or subscription) |
 | `Space`, `l`/`→`, `h`/`←` | Tree: open/close a group (`h` on a closed row goes to the parent) |
 | `Esc` / `Backspace` | Back, clear filter, or dismiss error |
-| `/` | Filter |
+| `/` | Filter the list; in the detail view, search like Vim (`n`/`N` next/previous) |
 | `:` | Command mode |
 | `r` | Refresh |
 | `y` | Copy the selected item's Azure ID (works over SSH; in tmux enable `set-clipboard`) |
@@ -81,6 +81,7 @@ az9s --timings                             # launch, print a timing summary on e
 | `:rg [all\|<sub>] [loc=… tag=…]` | Resource groups. Without a scope: where you are (the highlighted or current subscription or management group; all subscriptions if none) |
 | `:res [all\|<sub>] [filters]` | Resources, scoped like `:rg`, e.g. `:res all type=vm loc=westeurope tag=env=prod` (`type=` takes aliases like `vm`, `vnet`, `keyvault`, the type's last part, the full type, or a provider). `?` in the app has more examples |
 | `:type [all\|<sub>] [filters]` | Resource counts per type; `Enter` lists that type |
+| `:tag [all\|<sub>] [filters]` | Tags (key, value, how many resources); `Enter` lists the resources with that tag |
 
 ## Development
 

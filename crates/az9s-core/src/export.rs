@@ -63,6 +63,16 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
                 with_header("count\talias\ttype", lines),
             )
         }
+        ViewMode::TagSummary => {
+            let rows = state.tag_summary();
+            let lines = rows
+                .iter()
+                .map(|t| tsv(&[&t.count.to_string(), &t.key, &t.value]));
+            (
+                count(rows.len(), "tag"),
+                with_header("count\tkey\tvalue", lines),
+            )
+        }
         ViewMode::ManagementGroupTree => {
             let rows = state.tree_rows();
             let lines = rows.iter().map(|r| {

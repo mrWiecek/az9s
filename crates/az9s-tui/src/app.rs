@@ -1,5 +1,6 @@
 use crate::desktop::{Desktop, SystemDesktop};
 use crate::event::Event;
+use crate::ui::search;
 use crate::{Command, CommandKind, Scope};
 use anyhow::Result;
 use az9s_core::detail;
@@ -139,6 +140,12 @@ impl TuiApp {
             return self.handle_filter_key(key).await;
         }
 
+        // Typing a search in the detail view (after `/`)
+        if self.state().detail_search_input.is_some() {
+            self.handle_search_key(key);
+            return Ok(true);
+        }
+
         // Help screen has special handling
         if self.state().help_open {
             return self.handle_help_key(key).await;
@@ -194,9 +201,21 @@ impl TuiApp {
                     state.clear_error();
                 } else if !state.filter.is_empty() {
                     state.clear_filter();
+                } else if state.view == ViewMode::ResourceDetail && !state.detail_search.is_empty()
+                {
+                    // First Esc clears the search highlights, the next goes back.
+                    state.clear_detail_search();
+                    state.notice = None;
                 } else {
                     self.navigate_back().await?;
                 }
+                Ok(true)
+            }
+            KeyCode::Char('/') if self.state().view == ViewMode::ResourceDetail => {
+                debug!("Start search");
+                let state = self.state_mut();
+                state.detail_search_origin = (state.detail_scroll, state.detail_match);
+                state.detail_search_input = Some(String::new());
                 Ok(true)
             }
             KeyCode::Char('/') => {
@@ -294,6 +313,7 @@ impl TuiApp {
             CommandKind::ResourceGroups { scope, .. }
             | CommandKind::Resources { scope, .. }
             | CommandKind::ResourceTypes { scope, .. }
+            | CommandKind::Tags { scope, .. }
                 if *scope == Scope::Current =>
             {
                 *scope = context;
@@ -340,6 +360,16 @@ impl TuiApp {
                     let state = self.state_mut();
                     state.resource_query = query;
                     state.view = ViewMode::ResourceTypeSummary;
+                }
+            }
+            CommandKind::Tags { scope, query } => {
+                debug!("Command: tags, scope {:?}, filter {}", scope, query);
+                if let Some(subscription_ids) = self.resolve_scope(&scope) {
+                    self.state_mut().clear_navigation();
+                    self.show_resources(subscription_ids, None, scope.is_cross_subscription());
+                    let state = self.state_mut();
+                    state.resource_query = query;
+                    state.view = ViewMode::TagSummary;
                 }
             }
             CommandKind::Invalid(_) => {
@@ -573,7 +603,10 @@ impl TuiApp {
                 self.core
                     .request(LoadRequest::ResourceGroups { subscription_ids });
             }
-            (ViewMode::ResourceList | ViewMode::ResourceTypeSummary, Some(subscription_ids)) => {
+            (
+                ViewMode::ResourceList | ViewMode::ResourceTypeSummary | ViewMode::TagSummary,
+                Some(subscription_ids),
+            ) => {
                 let resource_group = self.state().current_resource_group.clone();
                 self.core.request(LoadRequest::Resources {
                     subscription_ids,
@@ -702,6 +735,109 @@ impl TuiApp {
         self.state_mut().notice = Some(notice);
     }
 
+    /// The detail view's current lines as plain text, for searching.
+    fn detail_texts(&self) -> Vec<String> {
+        crate::ui::detail_lines(self.state())
+            .iter()
+            .map(|l| l.to_string())
+            .collect()
+    }
+
+    /// Go to the match of `pattern` after (or before) `from`, scroll to it
+    /// and say where it is. Returns whether one was found.
+    fn search_jump(
+        &mut self,
+        pattern: &str,
+        from: (usize, usize),
+        forward: bool,
+        inclusive: bool,
+    ) -> bool {
+        let matches = search::find_matches(&self.detail_texts(), pattern);
+        let state = self.state_mut();
+        match search::next_match(&matches, from, forward, inclusive) {
+            Some((i, wrapped)) => {
+                let m = matches[i];
+                state.detail_match = Some((m.line, m.start));
+                state.detail_scroll_to = Some(m.line);
+                let position = format!("/{pattern}  match {} of {}", i + 1, matches.len());
+                state.notice = Some(match (wrapped, forward) {
+                    (true, true) => format!("search hit BOTTOM, continuing at TOP · {position}"),
+                    (true, false) => format!("search hit TOP, continuing at BOTTOM · {position}"),
+                    _ => position,
+                });
+                true
+            }
+            None => {
+                state.detail_match = None;
+                state.notice = Some(format!("Pattern not found: {pattern}"));
+                false
+            }
+        }
+    }
+
+    /// `n` / `N`: next or previous match of the committed search.
+    fn search_step(&mut self, forward: bool) {
+        let pattern = self.state().detail_search.clone();
+        if pattern.is_empty() {
+            self.state_mut().notice = Some("No previous search (type / to search)".into());
+            return;
+        }
+        let from = self
+            .state()
+            .detail_match
+            .unwrap_or((self.state().detail_scroll, 0));
+        // Without a current match, the first match at the top line counts.
+        let inclusive = self.state().detail_match.is_none();
+        self.search_jump(&pattern, from, forward, inclusive);
+    }
+
+    /// Keys while typing a search after `/`: incremental, like Vim's
+    /// incsearch. Enter keeps the search, Esc cancels it.
+    fn handle_search_key(&mut self, key: KeyEvent) {
+        let state = self.state_mut();
+        let Some(input) = state.detail_search_input.as_mut() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Enter => {
+                let pattern = state.detail_search_input.take().unwrap_or_default();
+                if pattern.is_empty() {
+                    // Like Vim: an empty pattern repeats the last search.
+                    self.search_step(true);
+                } else {
+                    state.detail_search = pattern;
+                }
+                return;
+            }
+            KeyCode::Esc => {
+                let (scroll, current) = state.detail_search_origin;
+                state.detail_search_input = None;
+                state.detail_scroll = scroll;
+                state.detail_match = current;
+                state.notice = None;
+                return;
+            }
+            KeyCode::Backspace => {
+                if input.pop().is_none() {
+                    // Backspace on an empty search leaves search mode.
+                    state.detail_search_input = None;
+                    return;
+                }
+            }
+            KeyCode::Char(c) => input.push(c),
+            _ => return,
+        }
+        // Incremental: from where the search started, as the pattern grows.
+        let pattern = input.clone();
+        let (origin_scroll, _) = state.detail_search_origin;
+        if pattern.is_empty() {
+            state.detail_match = None;
+            state.notice = None;
+            return;
+        }
+        self.search_jump(&pattern, (origin_scroll, 0), true, true);
+    }
+
     /// Copy what the current view shows (`c`): every row passing the
     /// filters, as tab-separated text, or the detail view's current tab.
     fn copy_view(&mut self) {
@@ -747,6 +883,10 @@ impl TuiApp {
             ViewMode::SubscriptionList => self.handle_subscription_select().await,
             ViewMode::ResourceTypeSummary => {
                 self.handle_type_select();
+                Ok(true)
+            }
+            ViewMode::TagSummary => {
+                self.handle_tag_select();
                 Ok(true)
             }
             ViewMode::ResourceGroupList => self.handle_resource_group_select().await,
@@ -824,6 +964,20 @@ impl TuiApp {
         self.push_current_context(None);
         let state = self.state_mut();
         state.resource_query.types = vec![resource_type];
+        state.filter.clear();
+        state.view = ViewMode::ResourceList;
+        state.list_state.reset();
+    }
+
+    /// Enter on the tags view: the resources with that tag (on top of any
+    /// other filters). The rows are already loaded.
+    fn handle_tag_select(&mut self) {
+        let Some(tag) = self.state().selected_tag() else {
+            return;
+        };
+        self.push_current_context(None);
+        let state = self.state_mut();
+        state.resource_query.tags = vec![(tag.key, Some(tag.value))];
         state.filter.clear();
         state.view = ViewMode::ResourceList;
         state.list_state.reset();
@@ -931,6 +1085,12 @@ impl TuiApp {
                 let state = self.state_mut();
                 state.detail_tab = next;
                 state.detail_scroll = 0;
+                state.detail_match = None;
+            }
+            match key.code {
+                KeyCode::Char('n') => self.search_step(true),
+                KeyCode::Char('N') => self.search_step(false),
+                _ => {}
             }
             return Ok(true);
         }
