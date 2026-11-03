@@ -1,6 +1,7 @@
+use super::theme::theme;
 use az9s_core::state::{AppState, ViewMode};
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
 };
 
@@ -18,7 +19,7 @@ impl Breadcrumb {
         let mut spans = vec![Span::styled(
             "az9s",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme().accent)
                 .add_modifier(Modifier::BOLD),
         )];
 
@@ -27,7 +28,7 @@ impl Breadcrumb {
             spans.push(Span::raw(" > "));
             spans.push(Span::styled(
                 format!("[{}]", Self::truncate(&tenant, 30)),
-                Style::default().fg(Color::Magenta),
+                Style::default().fg(theme().special),
             ));
         }
 
@@ -42,13 +43,13 @@ impl Breadcrumb {
             spans.push(Span::raw(" > "));
             spans.push(Span::styled(
                 Self::truncate(group, 30),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme().highlight),
             ));
         } else if let Some(sub) = &state.selected_subscription {
             spans.push(Span::raw(" > "));
             spans.push(Span::styled(
                 Self::truncate(&sub.name, 30),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme().highlight),
             ));
         }
 
@@ -56,7 +57,7 @@ impl Breadcrumb {
         spans.push(Span::raw(" > "));
         spans.push(Span::styled(
             Self::view_name(&state.view),
-            Style::default().fg(Color::White),
+            Style::default().fg(theme().text),
         ));
 
         // Add filter indicator if active
@@ -65,7 +66,7 @@ impl Breadcrumb {
             spans.push(Span::styled(
                 format!("Filter: {}", state.filter),
                 Style::default()
-                    .fg(Color::Magenta)
+                    .fg(theme().special)
                     .add_modifier(Modifier::ITALIC),
             ));
         }
@@ -73,7 +74,7 @@ impl Breadcrumb {
         // Add loading indicator
         if state.loading {
             spans.push(Span::raw("  "));
-            spans.push(Span::styled("⟳", Style::default().fg(Color::Green)));
+            spans.push(Span::styled("⟳", Style::default().fg(theme().ok)));
         }
 
         Line::from(spans)

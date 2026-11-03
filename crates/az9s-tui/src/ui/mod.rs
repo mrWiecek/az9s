@@ -3,6 +3,7 @@ pub mod help;
 pub mod resource_type;
 pub mod search;
 pub mod status_bar;
+pub mod theme;
 pub mod widgets;
 
 use crate::TuiApp;
@@ -14,12 +15,13 @@ use breadcrumb::Breadcrumb;
 use help::render_help;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, StatefulWidget, Tabs, Wrap},
     Frame,
 };
 use status_bar::StatusBar;
+use theme::theme;
 use widgets::{
     cell, list_item_spans, name_width, truncate_with_ellipsis, SelectableList, SelectableListState,
 };
@@ -144,7 +146,7 @@ fn draw_tree(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
                     .borders(Borders::ALL)
                     .title("Management Groups"),
             )
-            .style(Style::default().fg(Color::Gray))
+            .style(Style::default().fg(theme().subtle))
             .wrap(Wrap { trim: true });
         f.render_widget(content, area);
         return Ok(());
@@ -163,12 +165,12 @@ fn draw_tree(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
                 (true, false) => "▸ ",
             };
             let (icon, color) = match row.kind {
-                TreeRowKind::ManagementGroup => ("◆ ", Color::Cyan),
-                TreeRowKind::Unplaced => ("◇ ", Color::DarkGray),
+                TreeRowKind::ManagementGroup => ("◆ ", theme().accent),
+                TreeRowKind::Unplaced => ("◇ ", theme().muted),
                 TreeRowKind::Subscription => match row.state.as_deref() {
-                    Some(s) if s.eq_ignore_ascii_case("Disabled") => ("● ", Color::Red),
-                    Some(s) if s.eq_ignore_ascii_case("Warned") => ("● ", Color::Yellow),
-                    _ => ("● ", Color::Green),
+                    Some(s) if s.eq_ignore_ascii_case("Disabled") => ("● ", theme().error),
+                    Some(s) if s.eq_ignore_ascii_case("Warned") => ("● ", theme().highlight),
+                    _ => ("● ", theme().ok),
                 },
             };
             let width = 60usize.saturating_sub(indent.chars().count() + 4).max(10);
@@ -183,17 +185,17 @@ fn draw_tree(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
             };
             let label_style = if row.is_group() {
                 Style::default()
-                    .fg(Color::White)
+                    .fg(theme().text)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme().text)
             };
             list_item_spans(vec![
                 Span::raw(indent),
-                Span::styled(marker, Style::default().fg(Color::DarkGray)),
+                Span::styled(marker, Style::default().fg(theme().muted)),
                 Span::styled(icon, Style::default().fg(color)),
                 Span::styled(format!("{label:<width$}  "), label_style),
-                Span::styled(detail, Style::default().fg(Color::DarkGray)),
+                Span::styled(detail, Style::default().fg(theme().muted)),
             ])
         })
         .collect();
@@ -219,12 +221,7 @@ fn draw_tree(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
 
     let list = SelectableList::new(items)
         .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+        .highlight_style(theme().selection());
     let mut widget_state = SelectableListState {
         selected: list_state.selected - visible.start,
         offset: 0,
@@ -253,7 +250,7 @@ fn draw_subscription_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result
                     .borders(Borders::ALL)
                     .title("Subscriptions"),
             )
-            .style(Style::default().fg(Color::Gray))
+            .style(Style::default().fg(theme().subtle))
             .wrap(Wrap { trim: true });
         f.render_widget(content, area);
         return Ok(());
@@ -270,21 +267,21 @@ fn draw_subscription_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result
         .iter()
         .map(|sub| {
             let state_color = match sub.state.as_str() {
-                "Enabled" => Color::Green,
-                "Disabled" => Color::Red,
-                "Warned" => Color::Yellow,
-                _ => Color::Gray,
+                "Enabled" => theme().ok,
+                "Disabled" => theme().error,
+                "Warned" => theme().highlight,
+                _ => theme().subtle,
             };
 
             list_item_spans(vec![
                 Span::styled(
                     cell(&sub.name, name_col),
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme().text)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(cell(&sub.state, 12), Style::default().fg(state_color)),
-                Span::styled(sub.id.clone(), Style::default().fg(Color::DarkGray)),
+                Span::styled(sub.id.clone(), Style::default().fg(theme().muted)),
             ])
         })
         .collect();
@@ -312,12 +309,7 @@ fn draw_subscription_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result
     // Create the list widget
     let list = SelectableList::new(items)
         .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+        .highlight_style(theme().selection());
 
     // Items are already windowed: render from the top with a relative selection.
     let mut widget_state = SelectableListState {
@@ -351,7 +343,7 @@ fn draw_resource_group_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Resu
                     .borders(Borders::ALL)
                     .title("Resource Groups"),
             )
-            .style(Style::default().fg(Color::Gray))
+            .style(Style::default().fg(theme().subtle))
             .wrap(Wrap { trim: true });
         f.render_widget(content, area);
         return Ok(());
@@ -379,11 +371,14 @@ fn draw_resource_group_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Resu
                 Span::styled(
                     cell(&rg.name, name_col),
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme().text)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(cell(&rg.location, 20), Style::default().fg(Color::Yellow)),
-                Span::styled(tag_info, Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    cell(&rg.location, 20),
+                    Style::default().fg(theme().highlight),
+                ),
+                Span::styled(tag_info, Style::default().fg(theme().muted)),
             ])
         })
         .collect();
@@ -416,12 +411,7 @@ fn draw_resource_group_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Resu
     // Create the list widget
     let list = SelectableList::new(items)
         .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+        .highlight_style(theme().selection());
 
     // Items are already windowed: render from the top with a relative selection.
     let mut widget_state = SelectableListState {
@@ -457,7 +447,7 @@ fn draw_type_summary(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> 
                     .borders(Borders::ALL)
                     .title(format!("Resource Types{scope}")),
             )
-            .style(Style::default().fg(Color::Gray))
+            .style(Style::default().fg(theme().subtle))
             .wrap(Wrap { trim: true });
         f.render_widget(content, area);
         return Ok(());
@@ -475,16 +465,16 @@ fn draw_type_summary(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> 
                 Span::styled(
                     format!("{count:>count_width$}  "),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme().highlight)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     cell(&resource_type::short_label(resource_type), 20),
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme().text)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(resource_type.clone(), Style::default().fg(Color::DarkGray)),
+                Span::styled(resource_type.clone(), Style::default().fg(theme().muted)),
             ])
         })
         .collect();
@@ -503,12 +493,7 @@ fn draw_type_summary(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> 
     };
     let list = SelectableList::new(items)
         .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+        .highlight_style(theme().selection());
     let mut widget_state = SelectableListState {
         selected: list_state.selected - visible.start,
         offset: 0,
@@ -531,24 +516,24 @@ fn draw_tenant_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         .map(|r| {
             let marker = if r.current { "● " } else { "  " };
             list_item_spans(vec![
-                Span::styled(marker, Style::default().fg(Color::Green)),
+                Span::styled(marker, Style::default().fg(theme().ok)),
                 Span::styled(
                     cell(&r.name, name_col),
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme().text)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     cell(&format!("{} subscriptions", r.subscriptions), 18),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme().highlight),
                 ),
                 Span::styled(
                     cell(r.domain.as_deref().unwrap_or(""), 32),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(theme().accent),
                 ),
                 Span::styled(
                     r.id.clone().unwrap_or_default(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme().muted),
                 ),
             ])
         })
@@ -568,12 +553,7 @@ fn draw_tenant_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     };
     let list = SelectableList::new(items)
         .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+        .highlight_style(theme().selection());
     let mut widget_state = SelectableListState {
         selected: list_state.selected - visible.start,
         offset: 0,
@@ -605,7 +585,7 @@ fn draw_tag_summary(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
                     .borders(Borders::ALL)
                     .title(format!("Tags{scope}")),
             )
-            .style(Style::default().fg(Color::Gray))
+            .style(Style::default().fg(theme().subtle))
             .wrap(Wrap { trim: true });
         f.render_widget(content, area);
         return Ok(());
@@ -629,16 +609,16 @@ fn draw_tag_summary(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
                 Span::styled(
                     format!("{:>count_width$}  ", t.count),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme().highlight)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     cell(&t.key, key_col),
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme().accent)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(t.value.clone(), Style::default().fg(Color::White)),
+                Span::styled(t.value.clone(), Style::default().fg(theme().text)),
             ])
         })
         .collect();
@@ -667,12 +647,7 @@ fn draw_tag_summary(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     };
     let list = SelectableList::new(items)
         .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+        .highlight_style(theme().selection());
     let mut widget_state = SelectableListState {
         selected: list_state.selected - visible.start,
         offset: 0,
@@ -699,7 +674,7 @@ fn draw_resource_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()>
 
         let content = Paragraph::new(message)
             .block(Block::default().borders(Borders::ALL).title("Resources"))
-            .style(Style::default().fg(Color::Gray))
+            .style(Style::default().fg(theme().subtle))
             .wrap(Wrap { trim: true });
         f.render_widget(content, area);
         return Ok(());
@@ -724,26 +699,29 @@ fn draw_resource_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()>
 
             // Lowercase first: Resource Graph returns types in lowercase.
             let type_color = match res.resource_type.to_ascii_lowercase().as_str() {
-                t if t.contains("virtualmachine") => Color::Cyan,
-                t if t.contains("storage") => Color::Yellow,
-                t if t.contains("network") => Color::Blue,
+                t if t.contains("virtualmachine") => theme().accent,
+                t if t.contains("storage") => theme().highlight,
+                t if t.contains("network") => theme().info,
                 t if t.contains("database") || t.contains("sql") || t.contains("cosmos") => {
-                    Color::Magenta
+                    theme().special
                 }
-                t if t.contains("keyvault") => Color::Red,
-                t if t.contains("container") || t.contains("kubernetes") => Color::Green,
-                _ => Color::White,
+                t if t.contains("keyvault") => theme().error,
+                t if t.contains("container") || t.contains("kubernetes") => theme().ok,
+                _ => theme().text,
             };
 
             list_item_spans(vec![
                 Span::styled(
                     display_name,
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme().text)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(display_type, Style::default().fg(type_color)),
-                Span::styled(cell(&res.location, 20), Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    cell(&res.location, 20),
+                    Style::default().fg(theme().highlight),
+                ),
             ])
         })
         .collect();
@@ -775,12 +753,7 @@ fn draw_resource_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()>
     // Create the list widget
     let list = SelectableList::new(items)
         .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+        .highlight_style(theme().selection());
 
     // Items are already windowed: render from the top with a relative selection.
     let mut widget_state = SelectableListState {
@@ -803,7 +776,7 @@ fn draw_resource_detail(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<(
                     .borders(Borders::ALL)
                     .title("Resource Detail"),
             )
-            .style(Style::default().fg(Color::Gray))
+            .style(Style::default().fg(theme().subtle))
             .wrap(Wrap { trim: true });
         f.render_widget(content, area);
         return Ok(());
@@ -858,13 +831,8 @@ fn draw_resource_detail(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<(
         .collect();
     let tabs = Tabs::new(titles)
         .select(tab.index())
-        .style(Style::default().fg(Color::Gray))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
+        .style(Style::default().fg(theme().subtle))
+        .highlight_style(theme().selection())
         .divider("│");
     f.render_widget(tabs, parts[0]);
 
@@ -901,7 +869,7 @@ pub fn detail_lines(state: &AppState) -> Vec<Line<'static>> {
             if tags.is_empty() {
                 vec![Line::from(Span::styled(
                     "No tags.",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme().muted),
                 ))]
             } else {
                 let width = tags
@@ -914,9 +882,9 @@ pub fn detail_lines(state: &AppState) -> Vec<Line<'static>> {
                         Line::from(vec![
                             Span::styled(
                                 format!("{k:<width$}  "),
-                                Style::default().fg(Color::Yellow),
+                                Style::default().fg(theme().highlight),
                             ),
-                            Span::styled(v, Style::default().fg(Color::White)),
+                            Span::styled(v, Style::default().fg(theme().text)),
                         ])
                     })
                     .collect()
@@ -942,7 +910,7 @@ fn overview_lines(sections: &[detail::Section]) -> Vec<Line<'static>> {
         lines.push(Line::from(Span::styled(
             section.title,
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme().accent)
                 .add_modifier(Modifier::BOLD),
         )));
         for (label, value) in &section.rows {
@@ -950,9 +918,9 @@ fn overview_lines(sections: &[detail::Section]) -> Vec<Line<'static>> {
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("  {label:<width$}  "),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme().highlight),
                 ),
-                Span::styled(value.clone(), Style::default().fg(Color::White)),
+                Span::styled(value.clone(), Style::default().fg(theme().text)),
             ]));
         }
     }
@@ -969,7 +937,7 @@ fn json_line(line: &str) -> Line<'static> {
         Some(i) if rest.starts_with('"') => {
             spans.push(Span::styled(
                 rest[..i + 1].to_string(),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme().accent),
             ));
             spans.push(Span::raw(": "));
             &rest[i + 3..]
@@ -978,13 +946,13 @@ fn json_line(line: &str) -> Line<'static> {
     };
     let bare = value.trim_end_matches(',');
     let color = if bare.starts_with('"') {
-        Color::Green
+        theme().ok
     } else if bare == "true" || bare == "false" || bare == "null" {
-        Color::Magenta
+        theme().special
     } else if bare.starts_with(|c: char| c == '-' || c.is_ascii_digit()) {
-        Color::Yellow
+        theme().highlight
     } else {
-        Color::Gray
+        theme().subtle
     };
     spans.push(Span::styled(value.to_string(), Style::default().fg(color)));
     Line::from(spans)
@@ -995,7 +963,7 @@ fn draw_logs(f: &mut Frame, area: Rect, _app: &TuiApp) -> Result<()> {
     let content =
         Paragraph::new("Logs view\n\nSelect a resource to view its logs.\n\nPress Esc to go back.")
             .block(Block::default().borders(Borders::ALL).title("Logs"))
-            .style(Style::default().fg(Color::Gray))
+            .style(Style::default().fg(theme().subtle))
             .wrap(Wrap { trim: true });
     f.render_widget(content, area);
     Ok(())
@@ -1036,16 +1004,13 @@ fn draw_command_suggestions(f: &mut Frame, footer: Rect, app: &TuiApp) {
         .take(VISIBLE)
         .map(|(i, s)| {
             let style = if i == selected {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
+                theme().selection()
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme().text)
             };
             Line::from(vec![
                 Span::styled(cell(&s.text, text_width), style),
-                Span::styled(s.detail.clone(), Style::default().fg(Color::DarkGray)),
+                Span::styled(s.detail.clone(), Style::default().fg(theme().muted)),
             ])
         })
         .collect();
@@ -1077,7 +1042,7 @@ fn draw_palette(f: &mut Frame, area: Rect, app: &TuiApp) {
     f.render_widget(Clear, rect);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(theme().accent))
         .title(format!(
             " Go to · {} match{} · Enter go · Esc close ",
             palette.results.len(),
@@ -1088,7 +1053,7 @@ fn draw_palette(f: &mut Frame, area: Rect, app: &TuiApp) {
 
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::styled("> ", Style::default().fg(theme().accent)),
             Span::styled(
                 format!("{}_", palette.query),
                 Style::default().add_modifier(Modifier::BOLD),
@@ -1102,16 +1067,16 @@ fn draw_palette(f: &mut Frame, area: Rect, app: &TuiApp) {
     for (i, result) in palette.results.iter().enumerate().skip(first).take(visible) {
         let selected = i == palette.selected;
         let base = if selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
+            theme().selection()
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(theme().text)
         };
         let mut spans = vec![Span::styled(
             format!("{:<4}", result.item.kind.tag()),
             if selected {
                 base
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(theme().muted)
             },
         )];
         // The label, with matched characters highlighted, cut to fit.
@@ -1119,9 +1084,9 @@ fn draw_palette(f: &mut Frame, area: Rect, app: &TuiApp) {
         for (j, ch) in label.chars().enumerate() {
             let style = if result.positions.contains(&j) {
                 base.fg(if selected {
-                    Color::Black
+                    theme().on_selection()
                 } else {
-                    Color::Yellow
+                    theme().highlight
                 })
                 .add_modifier(Modifier::BOLD)
             } else {
@@ -1134,7 +1099,7 @@ fn draw_palette(f: &mut Frame, area: Rect, app: &TuiApp) {
             if selected {
                 base
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(theme().muted)
             },
         ));
         lines.push(Line::from(spans));
@@ -1142,7 +1107,7 @@ fn draw_palette(f: &mut Frame, area: Rect, app: &TuiApp) {
     if palette.results.is_empty() {
         lines.push(Line::from(Span::styled(
             "Nothing matches. Only loaded data is searched: run :res all first to find any resource.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme().muted),
         )));
     }
     f.render_widget(Paragraph::new(lines), inner);
@@ -1159,7 +1124,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                     .borders(Borders::ALL)
                     .title("Command · Tab completes · Enter runs · Esc cancels"),
             )
-            .style(Style::default().fg(Color::Cyan));
+            .style(Style::default().fg(theme().accent));
         f.render_widget(footer, area);
         return;
     }
@@ -1171,7 +1136,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                     .borders(Borders::ALL)
                     .title("Search · Enter keep · Esc cancel"),
             )
-            .style(Style::default().fg(Color::Cyan));
+            .style(Style::default().fg(theme().accent));
         f.render_widget(footer, area);
         return;
     }
@@ -1299,14 +1264,8 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
         .iter()
         .flat_map(|(key, desc)| {
             vec![
-                Span::styled(
-                    format!(" {} ", key),
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(format!(" {} ", desc), Style::default().fg(Color::White)),
+                Span::styled(format!(" {} ", key), theme().selection()),
+                Span::styled(format!(" {} ", desc), Style::default().fg(theme().text)),
             ]
         })
         .collect();
@@ -1327,9 +1286,9 @@ fn draw_error_overlay(f: &mut Frame, app: &TuiApp) {
                 Block::default()
                     .borders(Borders::ALL)
                     .title("Error")
-                    .style(Style::default().fg(Color::Red)),
+                    .style(Style::default().fg(theme().error)),
             )
-            .style(Style::default().fg(Color::White).bg(Color::Black))
+            .style(Style::default().fg(theme().text))
             .wrap(Wrap { trim: true });
 
         f.render_widget(error_widget, area);

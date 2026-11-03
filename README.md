@@ -28,7 +28,8 @@ works for Kubernetes.
   are **not** needed: TLS uses rustls.
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), logged in with
   `az login`
-- A terminal with true color support (recommended)
+- A terminal with colour support. On a light background use `theme = "light"`;
+  `theme = "mono"` (or `NO_COLOR=1`) uses no colours at all.
 
 ## Install
 
@@ -120,6 +121,7 @@ use another file.
 start = "mg"                               # first view: "mg" (tree) or "sub"
 default_subscription = "prod-connectivity" # for :rg/:res/:type/:tag without context
 tenant = "<tenant-id>"                     # start in this tenant (like :ctx)
+theme = "default"                          # "default" (dark), "light" or "mono"; NO_COLOR forces mono
 refresh_interval = 120                     # auto-refresh every N s (min 30); 0 = off
 read_only = true                           # status bar shows RO; actions (M4) disabled
 ```

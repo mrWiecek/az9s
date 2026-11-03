@@ -4,10 +4,8 @@
 //! case-insensitive unless the pattern has an uppercase letter. Only ASCII
 //! letters are case-folded, so byte offsets stay valid for highlighting.
 
-use ratatui::{
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-};
+use super::theme::theme;
+use ratatui::text::{Line, Span};
 
 /// A match: line index and byte range within that line's text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,11 +88,8 @@ pub fn highlight(
     if ranges.is_empty() {
         return line;
     }
-    let other = Style::default().fg(Color::Black).bg(Color::Yellow);
-    let strong = Style::default()
-        .fg(Color::Black)
-        .bg(Color::LightRed)
-        .add_modifier(Modifier::BOLD);
+    let other = theme().search_match(false);
+    let strong = theme().search_match(true);
 
     let mut spans = Vec::new();
     let mut offset = 0; // byte offset of the current span in the line
@@ -135,6 +130,7 @@ pub fn highlight(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::{Color, Style};
 
     fn lines(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()

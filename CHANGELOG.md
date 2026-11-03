@@ -12,6 +12,21 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-03
+
+### Added
+- **Themes:** `theme = "default" | "light" | "mono"` in the config file.
+  - `default`: the colours so far, for dark terminals.
+  - `light`: for light terminal backgrounds: no white, grey or yellow text;
+    blue accents and selection.
+  - `mono`: no colours at all; the selected row and search matches use
+    reversed and underlined text. The `NO_COLOR` environment variable
+    (https://no-color.org) also selects it.
+
+### Changed
+- Every view takes its colours from one palette of roles (accent, muted,
+  highlight, …) instead of fixed colours, so themes apply everywhere.
+
 ## [0.10.0] - 2026-11-03
 
 ### Added
@@ -401,7 +416,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/mrWiecek/az9s/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/mrWiecek/az9s/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/mrWiecek/az9s/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/mrWiecek/az9s/compare/v0.7.0...v0.8.0

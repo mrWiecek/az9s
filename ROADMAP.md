@@ -175,8 +175,9 @@ Work items, in order:
       autocomplete for `:` commands.
 - [x] Config file `~/.config/az9s/config.toml` for default subscription, refresh
       interval, start view and read-only mode (`az9s --init-config` writes one).
-- [ ] Themes (a `theme` setting): colours are hard-coded today; needs one
-      palette used by every view first.
+- [x] Themes: `theme = "default" | "light" | "mono"` in the config file; every
+      view takes its colours from one palette (`ui/theme.rs`); `NO_COLOR` forces
+      mono.
 - [x] **Scope tree:** tenant root → management groups → subscriptions → resource
       groups, with `:mg` to jump. This becomes the top-level navigation (needed by M3),
       and az9s opens at the tenant root management group by default.

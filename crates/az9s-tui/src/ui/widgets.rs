@@ -1,7 +1,8 @@
+use super::theme::theme;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, StatefulWidget, Widget},
 };
@@ -37,10 +38,7 @@ impl<'a> SelectableList<'a> {
         Self {
             items,
             block: None,
-            highlight_style: Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            highlight_style: theme().selection(),
             normal_style: Style::default(),
         }
     }
