@@ -79,6 +79,11 @@ const COMMANDS: &[(&str, &str)] = &[
         "tag all",
         "Tags and how many resources carry them, every subscription",
     ),
+    ("policy", "Policy assignments and compliance where you are"),
+    (
+        "policy all",
+        "Policy assignments and compliance for the whole tenant",
+    ),
     ("ctx", "Switch tenant"),
 ];
 

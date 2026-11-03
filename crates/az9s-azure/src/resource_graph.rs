@@ -519,10 +519,51 @@ pub fn resources_query(resource_group: Option<&str>) -> String {
 /// KQL returning one resource's full document (properties, sku, identity,
 /// zones, tags...) by ID.
 pub fn resource_detail_query(resource_id: &str) -> String {
+    // Policy objects live in the policyresources table, not resources.
+    let table = if is_policy_id(resource_id) {
+        "policyresources"
+    } else {
+        "resources"
+    };
     format!(
-        "resources | where id =~ {} | limit 1",
+        "{table} | where id =~ {} | limit 1",
         kql_string(resource_id)
     )
+}
+
+/// Whether an ARM ID is a policy object (assignment, definition, set
+/// definition, exemption), which Resource Graph keeps in `policyresources`.
+pub fn is_policy_id(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    id.contains("/providers/microsoft.authorization/policy")
+}
+
+/// KQL listing every policy assignment in the scope, with what the policy
+/// view needs.
+pub fn policy_assignments_query() -> String {
+    "policyresources \
+     | where type =~ 'microsoft.authorization/policyassignments' \
+     | project id, name, \
+         displayName = tostring(properties.displayName), \
+         scope = tostring(properties.scope), \
+         definitionId = tostring(properties.policyDefinitionId), \
+         enforcementMode = tostring(properties.enforcementMode), \
+         description = tostring(properties.description) \
+     | order by displayName asc"
+        .to_string()
+}
+
+/// KQL counting, per policy assignment, the resources evaluated and those
+/// non-compliant, from the latest policy states in the scope.
+pub fn policy_compliance_query() -> String {
+    "policyresources \
+     | where type =~ 'microsoft.policyinsights/policystates' \
+     | extend assignment = tolower(tostring(properties.policyAssignmentId)), \
+         state = tostring(properties.complianceState), \
+         resource = tolower(tostring(properties.resourceId)) \
+     | summarize total = dcount(resource), \
+         nonCompliant = dcountif(resource, state =~ 'NonCompliant') by assignment"
+        .to_string()
 }
 
 fn str_field(row: &Value, key: &str) -> String {
@@ -592,6 +633,16 @@ mod tests {
     use super::*;
     use crate::testing::{error, ok, serve, serve_counting, serve_sequence, Reply, StaticToken};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn policy_objects_are_read_from_policyresources() {
+        let id = "/providers/Microsoft.Management/managementGroups/mg/providers/Microsoft.Authorization/policyAssignments/a1";
+        assert!(is_policy_id(id));
+        assert!(resource_detail_query(id).starts_with("policyresources | where id =~"));
+        assert!(!is_policy_id("/subscriptions/s/resourceGroups/rg"));
+        assert!(policy_assignments_query().contains("policyassignments"));
+        assert!(policy_compliance_query().contains("dcountif(resource, state =~ 'NonCompliant')"));
+    }
 
     #[test]
     fn detail_query_escapes_the_id() {

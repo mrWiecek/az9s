@@ -185,12 +185,14 @@ Work items, in order:
 
 ## M3 — Policy (3 weeks)
 
-- [ ] `:policy`, `:assignment` and `:exemption` commands.
-- [ ] Browse policy assignments **per scope, starting at management groups**, with
-      inherited assignments shown at child scopes. Browse definitions and
-      initiatives (set definitions).
-- [ ] Compliance summary per assignment and per scope (Resource Graph
-      `policyresources`).
+- [x] `:policy [all|<sub>]`: the policy assignments that apply at a scope, **per
+      scope starting at management groups, with inherited assignments shown at
+      child scopes** ("from Platform"), each with its compliance (non-compliant
+      out of evaluated resources, from Resource Graph `policyresources`), worst
+      first. `Enter` opens the assignment's details (v0.12.0).
+- [ ] `:assignment` and `:exemption` commands; browse definitions and initiatives
+      (set definitions).
+- [ ] Compliance summary per scope (totals across assignments).
 - [ ] Drill down: assignment → non-compliant resources → resource detail. Also the
       reverse: resource → its policy states.
 - [ ] Compliance roll-up across the management-group tree: which subscriptions and

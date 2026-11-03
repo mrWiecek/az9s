@@ -7,6 +7,7 @@ use az9s_core::complete;
 use az9s_core::detail;
 use az9s_core::loader::{LoadReceiver, LoadRequest, LoadResult};
 use az9s_core::palette::PaletteAction;
+use az9s_core::policy::PolicyScope;
 use az9s_core::query::ResourceQuery;
 use az9s_core::scope_tree::TreeRowKind;
 use az9s_core::state::{DetailTab, NavigationContext, ViewMode};
@@ -455,6 +456,7 @@ impl TuiApp {
             | CommandKind::Resources { scope, .. }
             | CommandKind::ResourceTypes { scope, .. }
             | CommandKind::Tags { scope, .. }
+            | CommandKind::Policy { scope }
                 if *scope == Scope::Current =>
             {
                 *scope = context;
@@ -462,6 +464,13 @@ impl TuiApp {
             _ => {}
         }
         match command.kind {
+            CommandKind::Policy { scope } => {
+                debug!("Command: policy, scope {:?}", scope);
+                if let Some(policy_scope) = self.policy_scope(&scope) {
+                    self.state_mut().clear_navigation();
+                    self.core.open_policy(policy_scope);
+                }
+            }
             CommandKind::Context(None) => {
                 debug!("Command: tenants");
                 let state = self.state_mut();
@@ -571,6 +580,39 @@ impl TuiApp {
                 None => {
                     self.state_mut()
                         .set_error(Some(format!("Subscription not found: {}", name)));
+                    None
+                }
+            },
+        }
+    }
+
+    /// The policy scope for a command scope: one subscription, a management
+    /// group, or (for `all`) the tenant root group. Shows an error and
+    /// returns `None` when that can't be determined.
+    fn policy_scope(&mut self, scope: &Scope) -> Option<PolicyScope> {
+        match scope {
+            Scope::Group(group) => Some(PolicyScope::Group(group.clone())),
+            Scope::Subscription(name) => match self.find_subscription(name).cloned() {
+                Some(sub) => {
+                    let id = sub.id.clone();
+                    self.state_mut().selected_subscription = Some(sub);
+                    Some(PolicyScope::Subscription(id))
+                }
+                None => {
+                    self.state_mut()
+                        .set_error(Some(format!("Subscription not found: {name}")));
+                    None
+                }
+            },
+            Scope::All | Scope::Current => match &self.state().scope_tree {
+                Some(tree) => Some(PolicyScope::Group(tree.root.clone())),
+                None => {
+                    self.state_mut().set_error(Some(
+                        "Policy for all subscriptions needs the management group tree, \
+                         which isn't loaded (see :mg). Name a subscription instead: \
+                         :policy <subscription>"
+                            .into(),
+                    ));
                     None
                 }
             },
@@ -821,6 +863,11 @@ impl TuiApp {
             }
             (ViewMode::ResourceDetail, _) => self.core.refresh_resource_detail(),
             (ViewMode::TenantList, _) => self.core.request(LoadRequest::Tenants),
+            (ViewMode::PolicyAssignments, _) => {
+                if let Some(scope) = self.state().policy_scope.clone() {
+                    self.core.open_policy(scope);
+                }
+            }
             (ViewMode::ManagementGroupTree, _) => {
                 info!("Refreshing the management group tree");
                 self.core.request(LoadRequest::ScopeTree);
@@ -853,6 +900,7 @@ impl TuiApp {
             state.list_state.reset();
             state.cross_subscription_mode = ctx.metadata.contains_key(CROSS_SUBSCRIPTION);
             state.scope_group = ctx.metadata.get(SCOPE_GROUP).cloned();
+            // Back to the policy view keeps its scope (still in state).
             state.resource_query = ctx
                 .metadata
                 .get(QUERY)
@@ -1113,6 +1161,28 @@ impl TuiApp {
             }
             ViewMode::TagSummary => {
                 self.handle_tag_select();
+                Ok(true)
+            }
+            ViewMode::PolicyAssignments => {
+                if let Some(row) = self.state().selected_policy_row() {
+                    self.push_current_context(None);
+                    let a = row.assignment;
+                    let subscription_id = a
+                        .scope
+                        .to_ascii_lowercase()
+                        .strip_prefix("/subscriptions/")
+                        .map(|s| s.split('/').next().unwrap_or(s).to_string())
+                        .unwrap_or_default();
+                    self.core.open_resource_detail(az9s_core::models::Resource {
+                        id: a.id,
+                        name: a.display_name,
+                        resource_type: "Microsoft.Authorization/policyAssignments".into(),
+                        location: String::new(),
+                        resource_group: String::new(),
+                        subscription_id,
+                        tags: Default::default(),
+                    });
+                }
                 Ok(true)
             }
             ViewMode::TenantList => {

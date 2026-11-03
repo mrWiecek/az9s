@@ -12,6 +12,28 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-03
+
+### Added
+- **Azure Policy, first step: `:policy [all|<sub>]`.** Lists the policy
+  assignments that apply at a scope: assigned there ("this scope") or
+  inherited from the management groups above it ("from Platform"). Each row
+  shows whether it is an initiative (I) or a single policy (P), whether it
+  is enforced, and how many resources are non-compliant out of those
+  evaluated, worst first. The title says how many more assignments sit below
+  the scope.
+  - `:policy` uses where you are (the highlighted or current subscription or
+    management group); `:policy all` the whole tenant (needs the management
+    group tree).
+  - `Enter` opens the assignment in the detail view (Overview, JSON, `/`
+    search); `c`, `y`, `o` and `/` work as in other lists.
+  - Data: two Resource Graph queries on `policyresources` (all assignments
+    tenant-wide, and compliance counts for the scope from the latest policy
+    states), cached per tenant and per scope so the view opens instantly
+    next time.
+- The detail view finds policy objects (in `policyresources`, possibly on a
+  management group) as well as resources.
+
 ## [0.11.0] - 2026-11-03
 
 ### Added
@@ -416,7 +438,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/mrWiecek/az9s/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/mrWiecek/az9s/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/mrWiecek/az9s/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/mrWiecek/az9s/compare/v0.8.0...v0.9.0

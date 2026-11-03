@@ -313,3 +313,102 @@ async fn config_tenant_starts_in_that_tenant() {
     assert_eq!(app.state().tenant.as_deref(), Some("t-2"));
     assert_eq!(asked.lock().unwrap().as_slice(), [Some("t-2".to_string())]);
 }
+
+#[tokio::test]
+async fn policy_view_shows_inherited_assignments_with_compliance() {
+    use az9s_core::policy::PolicyScope;
+    use az9s_core::scope_tree::{GroupNode, SubscriptionNode};
+    use serde_json::json;
+    let mg = |n: &str| format!("/providers/Microsoft.Management/managementGroups/{n}");
+    let assignment = |name: &str, scope: &str| {
+        json!({
+            "id": format!("{scope}/providers/Microsoft.Authorization/policyAssignments/{name}"),
+            "name": name, "displayName": format!("Policy {name}"), "scope": scope,
+            "definitionId": "/providers/Microsoft.Authorization/policySetDefinitions/x",
+            "enforcementMode": "Default", "description": ""
+        })
+    };
+    let rows = vec![
+        assignment("root-a", &mg(TENANT)),
+        assignment("plat-a", &mg("platform")),
+        assignment("sub-a", "/subscriptions/sub-1"),
+        assignment("other", &mg("elsewhere")),
+    ];
+    let sub_a = rows[2]["id"].as_str().unwrap().to_lowercase();
+    let root_a = rows[0]["id"].as_str().unwrap().to_lowercase();
+    let (url, requests) = serve_paths(move |_, body| {
+        let query = body["query"].as_str().unwrap_or_default();
+        if query.contains("policyassignments") {
+            ok(json!({"totalRecords": 4, "count": 4, "data": rows.clone()}))
+        } else if query.contains("policystates") {
+            ok(json!({"totalRecords": 2, "count": 2, "data": [
+                {"assignment": sub_a, "total": 10, "nonCompliant": 1},
+                {"assignment": root_a, "total": 10, "nonCompliant": 7}
+            ]}))
+        } else {
+            error(400, "unexpected query")
+        }
+    })
+    .await;
+    let mut app = app(&url, Cache::new(Path::new(":memory:")).unwrap());
+    app.state_mut().scope_tree = Some(ScopeTree {
+        root: TENANT.into(),
+        root_display_name: "Tenant Root Group".into(),
+        groups: vec![GroupNode {
+            name: "platform".into(),
+            display_name: "Platform".into(),
+            parent: TENANT.into(),
+        }],
+        subscriptions: vec![SubscriptionNode {
+            id: "sub-1".into(),
+            display_name: "sub-1".into(),
+            parent: "platform".into(),
+        }],
+    });
+
+    app.open_policy(PolicyScope::Subscription("sub-1".into()));
+    assert_eq!(app.state().view, ViewMode::PolicyAssignments);
+    settle(&mut app).await;
+
+    let rows = app.state().policy_rows();
+    let summary: Vec<(&str, &str, Option<u64>)> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.assignment.name.as_str(),
+                r.origin_label.as_str(),
+                r.compliance.map(|c| c.non_compliant),
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("root-a", "from Tenant Root Group", Some(7)),
+            ("sub-a", "this scope", Some(1)),
+            ("plat-a", "from Platform", None),
+        ],
+        "most non-compliant first; other management groups' assignments left out"
+    );
+
+    // Compliance was asked for this subscription only; assignments tenant-wide.
+    let bodies = requests.lock().unwrap().clone();
+    let compliance = bodies
+        .iter()
+        .find(|b| b["query"].as_str().unwrap().contains("policystates"))
+        .unwrap();
+    assert_eq!(compliance["subscriptions"], json!(["sub-1"]));
+    let assignments = bodies
+        .iter()
+        .find(|b| b["query"].as_str().unwrap().contains("policyassignments"))
+        .unwrap();
+    assert_eq!(assignments["managementGroups"], json!([TENANT]));
+
+    // Both are cached for next time.
+    let repo = app.cache().repository();
+    assert!(repo.document("policy_assignments").unwrap().is_some());
+    assert!(repo
+        .document("policy_compliance:/subscriptions/sub-1")
+        .unwrap()
+        .is_some());
+}

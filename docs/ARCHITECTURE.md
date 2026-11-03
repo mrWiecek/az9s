@@ -111,6 +111,13 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   reloads the start view. `AppState::tenant` filters subscriptions
   (`in_tenant`); the scope tree is cached per tenant (`scope_tree:<id>`).
   Names come from `ManagementGroupClient::tenants` (`GET /tenants`).
+- `policy.rs`: Azure Policy model. `PolicyAssignment` and `Compliance`
+  parse Resource Graph rows; `PolicyScope` (management group or
+  subscription); `applicable` finds the assignments at a scope and its
+  ancestors in the management group tree (`Origin::Here` / `Inherited`);
+  `assigned_below` counts those further down. `App::open_policy` loads
+  `LoadRequest::PolicyAssignments` (tenant-wide) and
+  `LoadRequest::PolicyCompliance { scope }`, both cached as documents.
 - `config.rs`: the optional config file (`Config::path`, `Config::load`,
   `TEMPLATE` for `--init-config`). `App::start` applies it: the start view,
   and `AppState::config` for the default subscription, auto-refresh

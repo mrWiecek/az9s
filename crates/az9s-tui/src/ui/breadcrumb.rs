@@ -90,6 +90,7 @@ impl Breadcrumb {
             ViewMode::ResourceTypeSummary => "Resource Types",
             ViewMode::TagSummary => "Tags",
             ViewMode::TenantList => "Tenants",
+            ViewMode::PolicyAssignments => "Policy",
             ViewMode::ResourceDetail => "Resource Detail",
             ViewMode::Logs => "Logs",
         }

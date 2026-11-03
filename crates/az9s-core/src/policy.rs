@@ -1,0 +1,384 @@
+//! Azure Policy: which assignments apply at a scope, and how compliant the
+//! resources there are.
+//!
+//! An assignment applies at its own scope and every scope below it, so a
+//! subscription is governed by assignments on itself and on each management
+//! group above it. The management group tree supplies those ancestors.
+
+use crate::scope_tree::ScopeTree;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyAssignment {
+    pub id: String,
+    pub name: String,
+    pub display_name: String,
+    /// ARM ID of the scope it is assigned at.
+    pub scope: String,
+    /// The policy definition, or set definition (initiative), it assigns.
+    pub definition_id: String,
+    /// "Default" (enforced) or "DoNotEnforce".
+    pub enforcement: String,
+    pub description: String,
+}
+
+impl PolicyAssignment {
+    /// From a row of `resource_graph::policy_assignments_query`.
+    pub fn from_row(row: &Value) -> Option<Self> {
+        let text = |key: &str| {
+            row.get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let id = text("id");
+        if id.is_empty() {
+            return None;
+        }
+        let name = text("name");
+        let display_name = Some(text("displayName"))
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| name.clone());
+        Some(Self {
+            id,
+            name,
+            display_name,
+            scope: text("scope"),
+            definition_id: text("definitionId"),
+            enforcement: Some(text("enforcementMode"))
+                .filter(|e| !e.is_empty())
+                .unwrap_or_else(|| "Default".into()),
+            description: text("description"),
+        })
+    }
+
+    /// Whether it assigns an initiative (a policy set) rather than one policy.
+    pub fn is_initiative(&self) -> bool {
+        self.definition_id
+            .to_ascii_lowercase()
+            .contains("/policysetdefinitions/")
+    }
+
+    pub fn is_enforced(&self) -> bool {
+        !self.enforcement.eq_ignore_ascii_case("DoNotEnforce")
+    }
+}
+
+/// Where policy is looked at: a management group or a subscription.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PolicyScope {
+    /// Management group name (the tenant root group's name is the tenant ID)
+    Group(String),
+    /// Subscription ID
+    Subscription(String),
+}
+
+impl PolicyScope {
+    /// The scope's ARM ID, lowercase.
+    pub fn arm_id(&self) -> String {
+        match self {
+            PolicyScope::Group(g) => group_id(g),
+            PolicyScope::Subscription(s) => format!("/subscriptions/{}", s.to_ascii_lowercase()),
+        }
+    }
+}
+
+fn group_id(name: &str) -> String {
+    format!(
+        "/providers/microsoft.management/managementgroups/{}",
+        name.to_ascii_lowercase()
+    )
+}
+
+/// Resources evaluated, and those non-compliant, for one assignment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Compliance {
+    pub non_compliant: u64,
+    pub total: u64,
+}
+
+/// Counts per assignment (lowercase ID) from rows of
+/// `resource_graph::policy_compliance_query`.
+pub fn compliance_from_rows(rows: &[Value]) -> HashMap<String, Compliance> {
+    rows.iter()
+        .filter_map(|row| {
+            let id = row.get("assignment")?.as_str()?.to_ascii_lowercase();
+            let num = |key: &str| row.get(key).and_then(Value::as_u64).unwrap_or(0);
+            Some((
+                id,
+                Compliance {
+                    non_compliant: num("nonCompliant"),
+                    total: num("total"),
+                },
+            ))
+        })
+        .collect()
+}
+
+/// How an assignment comes to apply at a scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Origin {
+    /// Assigned at this very scope
+    Here,
+    /// Assigned at an ancestor (its scope's ARM ID)
+    Inherited(String),
+}
+
+/// The scope's ancestors' ARM IDs (lowercase), the scope itself first, then
+/// up to the tenant root. Without a tree, only the scope itself.
+pub fn ancestors(target: &PolicyScope, tree: Option<&ScopeTree>) -> Vec<String> {
+    let mut chain = vec![target.arm_id()];
+    let Some(tree) = tree else {
+        return chain;
+    };
+    let parent_of_group: HashMap<String, &str> = tree
+        .groups
+        .iter()
+        .map(|g| (g.name.to_ascii_lowercase(), g.parent.as_str()))
+        .collect();
+    let mut next = match target {
+        PolicyScope::Group(g) => parent_of_group.get(&g.to_ascii_lowercase()).copied(),
+        PolicyScope::Subscription(s) => tree
+            .subscriptions
+            .iter()
+            .find(|n| n.id.eq_ignore_ascii_case(s))
+            .map(|n| n.parent.as_str()),
+    };
+    let mut seen = HashSet::new();
+    while let Some(group) = next {
+        if !seen.insert(group.to_ascii_lowercase()) {
+            break; // a cycle in bad data
+        }
+        chain.push(group_id(group));
+        next = parent_of_group.get(&group.to_ascii_lowercase()).copied();
+    }
+    chain
+}
+
+/// Assignments that apply at `target`, nearest scope first, each with its
+/// origin.
+pub fn applicable<'a>(
+    assignments: &'a [PolicyAssignment],
+    target: &PolicyScope,
+    tree: Option<&ScopeTree>,
+) -> Vec<(&'a PolicyAssignment, Origin)> {
+    let chain = ancestors(target, tree);
+    let mut found: Vec<(usize, &PolicyAssignment, Origin)> = assignments
+        .iter()
+        .filter_map(|a| {
+            let scope = a.scope.to_ascii_lowercase();
+            let depth = chain.iter().position(|c| *c == scope)?;
+            let origin = if depth == 0 {
+                Origin::Here
+            } else {
+                Origin::Inherited(scope)
+            };
+            Some((depth, a, origin))
+        })
+        .collect();
+    found.sort_by_key(|(depth, _, _)| *depth);
+    found.into_iter().map(|(_, a, o)| (a, o)).collect()
+}
+
+/// How many assignments sit below `target` (on child management groups,
+/// subscriptions, resource groups or resources): they apply only to part of
+/// it, so they are shown at those scopes instead.
+pub fn assigned_below(
+    assignments: &[PolicyAssignment],
+    target: &PolicyScope,
+    tree: Option<&ScopeTree>,
+) -> usize {
+    // Scopes strictly below the target: an assignment is below if its scope
+    // is one of them or inside one of them.
+    let roots: Vec<String> = match (target, tree) {
+        (PolicyScope::Subscription(s), _) => {
+            // Only what is inside the subscription (resource groups, resources).
+            let sub = PolicyScope::Subscription(s.clone()).arm_id();
+            return assignments
+                .iter()
+                .filter(|a| a.scope.to_ascii_lowercase().starts_with(&format!("{sub}/")))
+                .count();
+        }
+        (PolicyScope::Group(g), Some(tree)) => {
+            let mut roots: Vec<String> = descendant_groups(tree, g)
+                .into_iter()
+                .map(|d| group_id(&d))
+                .collect();
+            roots.extend(
+                tree.subscriptions_under(g, &[])
+                    .into_iter()
+                    .map(|s| PolicyScope::Subscription(s).arm_id()),
+            );
+            roots
+        }
+        (PolicyScope::Group(_), None) => return 0,
+    };
+    assignments
+        .iter()
+        .filter(|a| {
+            let scope = a.scope.to_ascii_lowercase();
+            roots
+                .iter()
+                .any(|r| scope == *r || scope.starts_with(&format!("{r}/")))
+        })
+        .count()
+}
+
+/// Management groups strictly below `group` (names).
+fn descendant_groups(tree: &ScopeTree, group: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![group.to_ascii_lowercase()];
+    let mut seen = HashSet::new();
+    while let Some(g) = stack.pop() {
+        if !seen.insert(g.clone()) {
+            continue;
+        }
+        for child in tree
+            .groups
+            .iter()
+            .filter(|c| c.parent.eq_ignore_ascii_case(&g))
+        {
+            out.push(child.name.clone());
+            stack.push(child.name.to_ascii_lowercase());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scope_tree::{GroupNode, SubscriptionNode};
+    use serde_json::json;
+
+    /// root → platform → connectivity (sub-c); root → workloads (sub-w)
+    fn tree() -> ScopeTree {
+        let g = |name: &str, parent: &str| GroupNode {
+            name: name.into(),
+            display_name: name.to_uppercase(),
+            parent: parent.into(),
+        };
+        let s = |id: &str, parent: &str| SubscriptionNode {
+            id: id.into(),
+            display_name: id.into(),
+            parent: parent.into(),
+        };
+        ScopeTree {
+            root: "root".into(),
+            root_display_name: "Tenant Root Group".into(),
+            groups: vec![
+                g("platform", "root"),
+                g("connectivity", "platform"),
+                g("workloads", "root"),
+            ],
+            subscriptions: vec![s("sub-c", "connectivity"), s("sub-w", "workloads")],
+        }
+    }
+
+    fn at(name: &str, scope: &str) -> PolicyAssignment {
+        PolicyAssignment {
+            id: format!("{scope}/providers/Microsoft.Authorization/policyAssignments/{name}"),
+            name: name.into(),
+            display_name: name.into(),
+            scope: scope.into(),
+            definition_id: "/providers/Microsoft.Authorization/policyDefinitions/x".into(),
+            enforcement: "Default".into(),
+            description: String::new(),
+        }
+    }
+
+    fn mg(name: &str) -> String {
+        format!("/providers/Microsoft.Management/managementGroups/{name}")
+    }
+
+    fn assignments() -> Vec<PolicyAssignment> {
+        vec![
+            at("tenant-wide", &mg("root")),
+            at("platform-only", &mg("Platform")),
+            at("conn", &mg("connectivity")),
+            at("workloads", &mg("workloads")),
+            at("on-sub-c", "/subscriptions/SUB-C"),
+            at("on-rg", "/subscriptions/sub-c/resourceGroups/rg-hub"),
+        ]
+    }
+
+    fn names(found: &[(&PolicyAssignment, Origin)]) -> Vec<String> {
+        found.iter().map(|(a, _)| a.name.clone()).collect()
+    }
+
+    #[test]
+    fn a_subscription_gets_its_own_and_every_ancestors_assignments() {
+        let all = assignments();
+        let found = applicable(
+            &all,
+            &PolicyScope::Subscription("sub-c".into()),
+            Some(&tree()),
+        );
+        assert_eq!(
+            names(&found),
+            ["on-sub-c", "conn", "platform-only", "tenant-wide"]
+        );
+        assert_eq!(found[0].1, Origin::Here);
+        assert_eq!(
+            found[1].1,
+            Origin::Inherited(mg("connectivity").to_ascii_lowercase())
+        );
+    }
+
+    #[test]
+    fn a_group_gets_its_own_and_its_ancestors_not_its_childrens() {
+        let all = assignments();
+        let found = applicable(&all, &PolicyScope::Group("platform".into()), Some(&tree()));
+        assert_eq!(names(&found), ["platform-only", "tenant-wide"]);
+        assert_eq!(
+            assigned_below(&all, &PolicyScope::Group("platform".into()), Some(&tree())),
+            3,
+            "conn, on-sub-c, on-rg"
+        );
+        assert_eq!(
+            assigned_below(
+                &all,
+                &PolicyScope::Subscription("sub-c".into()),
+                Some(&tree())
+            ),
+            1,
+            "on-rg"
+        );
+    }
+
+    #[test]
+    fn without_a_tree_only_direct_assignments_are_known() {
+        let all = assignments();
+        let found = applicable(&all, &PolicyScope::Subscription("sub-c".into()), None);
+        assert_eq!(names(&found), ["on-sub-c"]);
+    }
+
+    #[test]
+    fn rows_parse() {
+        let a = PolicyAssignment::from_row(&json!({
+            "id": "/x/policyAssignments/a1", "name": "a1", "displayName": "",
+            "scope": "/subscriptions/s",
+            "definitionId": "/providers/Microsoft.Authorization/policySetDefinitions/asb",
+            "enforcementMode": "DoNotEnforce", "description": "d"
+        }))
+        .unwrap();
+        assert_eq!(a.display_name, "a1", "falls back to the name");
+        assert!(a.is_initiative() && !a.is_enforced());
+        assert!(PolicyAssignment::from_row(&json!({"name": "no id"})).is_none());
+
+        let counts = compliance_from_rows(&[
+            json!({"assignment": "/X/A1", "total": 10, "nonCompliant": 3}),
+            json!({"total": 1}),
+        ]);
+        assert_eq!(
+            counts["/x/a1"],
+            Compliance {
+                non_compliant: 3,
+                total: 10
+            }
+        );
+        assert_eq!(counts.len(), 1);
+    }
+}

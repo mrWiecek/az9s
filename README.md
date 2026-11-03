@@ -19,6 +19,7 @@ works for Kubernetes.
 | Management group tree → subscriptions → resource groups → resources → detail (Overview, Tags, JSON) | Command palette, config file, `:ctx` (M2) |
 | Resource groups across a whole management group, or all subscriptions (`:rg all`, `:res all`) via Azure Resource Graph | Azure Policy at management-group scope: assignments, compliance, exemptions (M3) |
 | Instant views from a local cache, refreshed in the background, with data age in the status bar | Safe actions: VM start/stop, restarts, tags, delete, policy scans (M4) |
+| Policy assignments per scope with inheritance and compliance (`:policy`) | Non-compliant resources, compliance roll-up, exemptions (M3) |
 | Filters (`type=`, `loc=`, `tag=`), a resource-type summary (`:type`), `/` text filter, `y` copy ID, `o` open in Portal, vim keys | AKS, Key Vault, logs, themes (M5) |
 
 ## Requirements
@@ -78,6 +79,7 @@ az9s --timings                             # launch, print a timing summary on e
 
 | Command | Shows |
 |---|---|
+| `:policy [all\|<sub>]` | Policy assignments that apply there (assigned or inherited from management groups), with non-compliant resource counts, worst first |
 | `:ctx [all\|<tenant>]` | Tenants you can use (`Enter` switches), or switch by name, domain or ID; `all` returns to the default login |
 | `:mg` | Management group tree (the start view) |
 | `:sub` | Subscriptions |
