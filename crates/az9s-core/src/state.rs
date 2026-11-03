@@ -95,6 +95,21 @@ pub struct AppState {
     /// across the tenant: the tree's compliance column and `:compliance`
     pub compliance_rollup: Option<HashMap<String, crate::policy::Compliance>>,
 
+    /// Every role assignment in the tenant, once loaded
+    pub role_assignments: Vec<crate::rbac::RoleAssignment>,
+
+    /// Every role definition (built-in and custom), once loaded
+    pub role_definitions: Vec<crate::rbac::RoleDefinition>,
+
+    /// Principals named so far (Microsoft Graph), by lowercase ID
+    pub principals: HashMap<String, az9s_azure::directory::Principal>,
+
+    /// The scope `:ra` shows (`None`: the whole tenant)
+    pub ra_scope: Option<crate::policy::PolicyScope>,
+
+    /// Only this role's assignments (its GUID), when opened from `:role`
+    pub ra_role: Option<String>,
+
     /// Every policy exemption in the tenant, once loaded
     pub policy_exemptions: Vec<crate::policy::PolicyExemption>,
 
@@ -235,6 +250,33 @@ pub struct PolicyRow {
     pub compliance: Option<crate::policy::Compliance>,
 }
 
+/// One row of `:ra`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleAssignmentRow {
+    pub assignment: crate::rbac::RoleAssignment,
+    /// The role's name (its GUID while definitions load)
+    pub role_name: String,
+    /// The principal's display name (its ID until named)
+    pub principal_name: String,
+    /// A user's sign-in name or an application's app ID, when named
+    pub principal_detail: String,
+    /// Custom role (`None`: definition not loaded)
+    pub custom: Option<bool>,
+    pub reach: crate::rbac::Reach,
+    /// "inherited", "this scope" or "below" (empty for the whole tenant)
+    pub origin_label: String,
+    /// Where it is assigned, readable
+    pub scope_label: String,
+}
+
+/// One row of `:role`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleDefinitionRow {
+    pub definition: crate::rbac::RoleDefinition,
+    /// Assignments of it in the tenant (as loaded)
+    pub assignments: usize,
+}
+
 /// One row of `:exemption`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExemptionRow {
@@ -317,6 +359,10 @@ pub enum ViewMode {
     ComplianceRanking,
     /// Policy exemptions at or below a scope (`:exemption`)
     ExemptionList,
+    /// Role assignments that matter at a scope (`:ra`)
+    RoleAssignments,
+    /// Role definitions, built-in and custom (`:role`)
+    RoleDefinitions,
     ResourceDetail,
     Logs,
 }
@@ -486,6 +532,8 @@ impl AppState {
             ViewMode::PolicyNonCompliant => self.non_compliant_rows().len(),
             ViewMode::ComplianceRanking => self.compliance_rows().len(),
             ViewMode::ExemptionList => self.exemption_rows().len(),
+            ViewMode::RoleAssignments => self.role_assignment_rows().len(),
+            ViewMode::RoleDefinitions => self.role_definition_rows().len(),
             ViewMode::ManagementGroupTree => self.tree_rows().len(),
             _ => 0,
         }
@@ -802,6 +850,167 @@ impl AppState {
                     || contains_ignore_ascii_case(&r.group, &needle)
             })
             .collect()
+    }
+
+    /// A role definition by the GUID at the end of its ID.
+    pub fn role_definition(&self, guid: &str) -> Option<&crate::rbac::RoleDefinition> {
+        self.role_definitions
+            .iter()
+            .find(|d| d.guid().eq_ignore_ascii_case(guid))
+    }
+
+    /// Rows of `:ra`: assignments inherited from above (top first), then
+    /// those at the scope, then those below; by role and principal within
+    /// each. `/` narrows by role, built-in/custom, principal, type or scope.
+    pub fn role_assignment_rows(&self) -> Vec<RoleAssignmentRow> {
+        use crate::rbac::{assignments_at, Reach};
+        let mut rows: Vec<RoleAssignmentRow> = assignments_at(
+            &self.role_assignments,
+            self.ra_scope.as_ref(),
+            self.scope_tree.as_ref(),
+        )
+        .into_iter()
+        .filter(|(a, _)| {
+            self.ra_role
+                .as_ref()
+                .is_none_or(|role| a.role_guid().eq_ignore_ascii_case(role))
+        })
+        .map(|(a, reach)| {
+            let role = self.role_definition(&a.role_guid());
+            let scope_label = if a.scope == "/" {
+                "tenant root (/)".to_string()
+            } else {
+                self.scope_label(&a.scope)
+            };
+            let principal = self.principals.get(&a.principal_id.to_ascii_lowercase());
+            RoleAssignmentRow {
+                principal_name: principal
+                    .map(|p| p.display_name.clone())
+                    .unwrap_or_else(|| a.principal_id.clone()),
+                principal_detail: principal.map(|p| p.detail.clone()).unwrap_or_default(),
+                role_name: role
+                    .map(|r| r.role_name.clone())
+                    .unwrap_or_else(|| a.role_guid()),
+                custom: role.map(|r| r.is_custom()),
+                origin_label: match (&reach, self.ra_scope.is_some()) {
+                    (_, false) => String::new(),
+                    (Reach::Inherited(_), true) => "inherited".into(),
+                    (Reach::Here, true) => "this scope".into(),
+                    (Reach::Below, true) => "below".into(),
+                },
+                scope_label,
+                reach,
+                assignment: a.clone(),
+            }
+        })
+        .collect();
+        // Broad scopes first: the tenant root, groups, subscriptions, groups
+        // of resources, resources.
+        let level = |scope: &str| {
+            let scope = scope.to_ascii_lowercase();
+            match scope.trim_end_matches('/') {
+                "" => 0,
+                s if s.starts_with("/providers/microsoft.management/") => 1,
+                s => s.matches('/').count(),
+            }
+        };
+        rows.sort_by(|a, b| {
+            a.reach
+                .cmp(&b.reach)
+                .then_with(|| level(&a.assignment.scope).cmp(&level(&b.assignment.scope)))
+                .then_with(|| a.role_name.to_lowercase().cmp(&b.role_name.to_lowercase()))
+                .then_with(|| a.scope_label.cmp(&b.scope_label))
+                .then_with(|| a.assignment.principal_id.cmp(&b.assignment.principal_id))
+        });
+        if self.filter.is_empty() {
+            return rows;
+        }
+        let needle = self.filter.to_ascii_lowercase();
+        rows.into_iter()
+            .filter(|r| {
+                let kind = match r.custom {
+                    Some(true) => "custom",
+                    Some(false) => "built-in",
+                    None => "",
+                };
+                [
+                    r.role_name.as_str(),
+                    kind,
+                    &r.assignment.principal_id,
+                    &r.principal_name,
+                    &r.principal_detail,
+                    &r.assignment.principal_type,
+                    &r.scope_label,
+                    &r.origin_label,
+                ]
+                .iter()
+                .any(|f| contains_ignore_ascii_case(f, &needle))
+            })
+            .collect()
+    }
+
+    /// The selected row of `:ra`.
+    pub fn selected_role_assignment(&self) -> Option<RoleAssignmentRow> {
+        if self.view != ViewMode::RoleAssignments {
+            return None;
+        }
+        self.role_assignment_rows()
+            .into_iter()
+            .nth(self.list_state.selected)
+    }
+
+    /// Rows of `:role`: custom roles first, then built-in, by name, with how
+    /// many assignments each has in the tenant. `/` narrows by name,
+    /// built-in/custom or description.
+    pub fn role_definition_rows(&self) -> Vec<RoleDefinitionRow> {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for a in &self.role_assignments {
+            *counts.entry(a.role_guid()).or_default() += 1;
+        }
+        let mut rows: Vec<RoleDefinitionRow> = self
+            .role_definitions
+            .iter()
+            .map(|d| RoleDefinitionRow {
+                assignments: counts.get(&d.guid()).copied().unwrap_or(0),
+                definition: d.clone(),
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            b.definition
+                .is_custom()
+                .cmp(&a.definition.is_custom())
+                .then_with(|| {
+                    a.definition
+                        .role_name
+                        .to_lowercase()
+                        .cmp(&b.definition.role_name.to_lowercase())
+                })
+        });
+        if self.filter.is_empty() {
+            return rows;
+        }
+        let needle = self.filter.to_ascii_lowercase();
+        rows.into_iter()
+            .filter(|r| {
+                [
+                    r.definition.role_name.as_str(),
+                    r.definition.kind_label(),
+                    &r.definition.description,
+                ]
+                .iter()
+                .any(|f| contains_ignore_ascii_case(f, &needle))
+            })
+            .collect()
+    }
+
+    /// The selected row of `:role`.
+    pub fn selected_role_definition(&self) -> Option<RoleDefinitionRow> {
+        if self.view != ViewMode::RoleDefinitions {
+            return None;
+        }
+        self.role_definition_rows()
+            .into_iter()
+            .nth(self.list_state.selected)
     }
 
     /// Rows of `:exemption`: the exemptions at or below the scope, expired
@@ -1242,6 +1451,8 @@ impl AppState {
                 .selected_compliance_row()
                 .map(|r| format!("/subscriptions/{}", r.subscription_id)),
             ViewMode::ExemptionList => self.selected_exemption().map(|r| r.exemption.id),
+            ViewMode::RoleAssignments => self.selected_role_assignment().map(|r| r.assignment.id),
+            ViewMode::RoleDefinitions => self.selected_role_definition().map(|r| r.definition.id),
             ViewMode::ResourceGroupList => self.selected_resource_group().map(|r| r.id.clone()),
             ViewMode::ResourceList => self.selected_resource().map(|r| r.id.clone()),
             ViewMode::ResourceDetail => {
@@ -1288,6 +1499,13 @@ impl AppState {
             ViewMode::ResourceGroupList => self.selected_resource_group().map(|r| r.id.clone()),
             ViewMode::ResourceList => self.selected_resource().map(|r| r.id.clone()),
             ViewMode::ManagementGroupTree => self.selected_tree_row().map(|r| r.key),
+            // Their rows are found again by ARM ID (see `select_id`).
+            ViewMode::PolicyAssignments
+            | ViewMode::PolicyNonCompliant
+            | ViewMode::ComplianceRanking
+            | ViewMode::ExemptionList
+            | ViewMode::RoleAssignments
+            | ViewMode::RoleDefinitions => self.selected_arm_id(),
             _ => None,
         }
     }
@@ -1321,6 +1539,14 @@ impl AppState {
                 .exemption_rows()
                 .iter()
                 .position(|r| r.exemption.id == id),
+            ViewMode::RoleAssignments => self
+                .role_assignment_rows()
+                .iter()
+                .position(|r| r.assignment.id == id),
+            ViewMode::RoleDefinitions => self
+                .role_definition_rows()
+                .iter()
+                .position(|r| r.definition.id == id),
             _ => None,
         };
         if let Some(i) = position {

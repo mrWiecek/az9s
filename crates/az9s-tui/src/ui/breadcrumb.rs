@@ -94,6 +94,8 @@ impl Breadcrumb {
             ViewMode::PolicyNonCompliant => "Non-compliant",
             ViewMode::ComplianceRanking => "Compliance",
             ViewMode::ExemptionList => "Exemptions",
+            ViewMode::RoleAssignments => "Role assignments",
+            ViewMode::RoleDefinitions => "Roles",
             ViewMode::ResourceDetail => "Resource Detail",
             ViewMode::Logs => "Logs",
         }

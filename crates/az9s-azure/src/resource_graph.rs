@@ -43,13 +43,24 @@ pub struct CliTenantTokenSource {
     pub tenant: String,
     /// The CLI to run (tests point this at a fake).
     pub program: String,
+    /// The token's audience (ARM unless set, e.g. Microsoft Graph).
+    pub resource: String,
 }
+
+/// The token audience for Azure Resource Manager.
+pub const ARM_RESOURCE: &str = "https://management.azure.com/";
 
 impl CliTenantTokenSource {
     pub fn new(tenant: impl Into<String>) -> Self {
+        Self::for_resource(tenant, ARM_RESOURCE)
+    }
+
+    /// Tokens for another audience, e.g. Microsoft Graph.
+    pub fn for_resource(tenant: impl Into<String>, resource: impl Into<String>) -> Self {
         Self {
             tenant: tenant.into(),
             program: "az".into(),
+            resource: resource.into(),
         }
     }
 }
@@ -64,7 +75,7 @@ impl TokenSource for CliTenantTokenSource {
                     "account",
                     "get-access-token",
                     "--resource",
-                    "https://management.azure.com/",
+                    &self.resource,
                     "--tenant",
                     &self.tenant,
                     "--query",
@@ -110,6 +121,27 @@ impl TokenSource for CredentialTokenSource {
             let token = self
                 .0
                 .get_token(&[ARM_SCOPE])
+                .await
+                .map_err(|e| AzureError::AuthenticationFailed(e.to_string()))?;
+            Ok(token.token.secret().to_string())
+        }
+        .boxed()
+    }
+}
+
+/// Tokens from an Azure SDK credential for another audience, e.g.
+/// Microsoft Graph (`https://graph.microsoft.com/.default`).
+pub struct ScopedCredentialTokenSource {
+    pub credential: Arc<dyn TokenCredential>,
+    pub scope: String,
+}
+
+impl TokenSource for ScopedCredentialTokenSource {
+    fn token(&self) -> BoxFuture<'_, Result<String>> {
+        async move {
+            let token = self
+                .credential
+                .get_token(&[self.scope.as_str()])
                 .await
                 .map_err(|e| AzureError::AuthenticationFailed(e.to_string()))?;
             Ok(token.token.secret().to_string())
@@ -519,9 +551,11 @@ pub fn resources_query(resource_group: Option<&str>) -> String {
 /// KQL returning one resource's full document (properties, sku, identity,
 /// zones, tags...) by ID.
 pub fn resource_detail_query(resource_id: &str) -> String {
-    // Policy objects live in the policyresources table, not resources.
+    // Policy objects live in policyresources, RBAC in authorizationresources.
     let table = if is_policy_id(resource_id) {
         "policyresources"
+    } else if is_role_id(resource_id) {
+        "authorizationresources"
     } else {
         "resources"
     };
@@ -536,6 +570,42 @@ pub fn resource_detail_query(resource_id: &str) -> String {
 pub fn is_policy_id(id: &str) -> bool {
     let id = id.to_ascii_lowercase();
     id.contains("/providers/microsoft.authorization/policy")
+}
+
+/// Whether an ARM ID is a role assignment or role definition, which
+/// Resource Graph keeps in `authorizationresources`.
+pub fn is_role_id(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    id.contains("/providers/microsoft.authorization/roleassignments/")
+        || id.contains("/providers/microsoft.authorization/roledefinitions/")
+}
+
+/// KQL listing every role assignment in the scope.
+pub fn role_assignments_query() -> String {
+    "authorizationresources \
+     | where type =~ 'microsoft.authorization/roleassignments' \
+     | project id, \
+         scope = tostring(properties.scope), \
+         roleDefinitionId = tostring(properties.roleDefinitionId), \
+         principalId = tostring(properties.principalId), \
+         principalType = tostring(properties.principalType), \
+         createdOn = tostring(properties.createdOn), \
+         description = tostring(properties.description), \
+         condition = tostring(properties.condition)"
+        .to_string()
+}
+
+/// KQL listing every role definition (built-in and custom) in the scope.
+pub fn role_definitions_query() -> String {
+    "authorizationresources \
+     | where type =~ 'microsoft.authorization/roledefinitions' \
+     | project id, name, \
+         roleName = tostring(properties.roleName), \
+         roleType = tostring(properties.type), \
+         description = tostring(properties.description), \
+         assignableScopes = properties.assignableScopes, \
+         permissions = properties.permissions"
+        .to_string()
 }
 
 /// KQL listing every policy assignment in the scope, with what the policy
@@ -723,6 +793,16 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
+    fn role_objects_are_read_from_authorizationresources() {
+        let ra = "/subscriptions/s/providers/Microsoft.Authorization/roleAssignments/x";
+        let rd = "/providers/Microsoft.Authorization/roleDefinitions/y";
+        assert!(is_role_id(ra) && is_role_id(rd) && !is_role_id("/subscriptions/s"));
+        assert!(resource_detail_query(rd).starts_with("authorizationresources |"));
+        assert!(role_assignments_query().contains("'microsoft.authorization/roleassignments'"));
+        assert!(role_definitions_query().contains("roleType = tostring(properties.type)"));
+    }
+
+    #[test]
     fn definition_names_are_looked_up_by_lowercase_id() {
         let q = policy_definition_names_query(&[
             "/providers/Microsoft.Authorization/policyDefinitions/A".into(),
@@ -801,6 +881,7 @@ mod tests {
         let source = CliTenantTokenSource {
             tenant: "t-2".into(),
             program: fake_cli(dir.path(), true),
+            resource: ARM_RESOURCE.into(),
         };
         let token = source.token().await.unwrap();
         assert!(token.contains("--tenant t-2"), "{token}");
@@ -809,6 +890,7 @@ mod tests {
         let failing = CliTenantTokenSource {
             tenant: "t-2".into(),
             program: fake_cli(dir.path(), false),
+            resource: ARM_RESOURCE.into(),
         };
         let e = failing.token().await.unwrap_err().to_string();
         assert!(

@@ -104,6 +104,8 @@ fn draw_content(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         ViewMode::PolicyNonCompliant => draw_non_compliant(f, area, app),
         ViewMode::ComplianceRanking => draw_compliance(f, area, app),
         ViewMode::ExemptionList => draw_exemptions(f, area, app),
+        ViewMode::RoleAssignments => draw_role_assignments(f, area, app),
+        ViewMode::RoleDefinitions => draw_role_definitions(f, area, app),
         ViewMode::ResourceDetail => draw_resource_detail(f, area, app),
         ViewMode::Logs => draw_logs(f, area, app),
     }
@@ -543,6 +545,210 @@ fn compliance_cell(c: Option<az9s_core::policy::Compliance>) -> (String, Style) 
             (text, Style::default().fg(color))
         }
     }
+}
+
+/// "C " for a custom role (highlighted), "B " for built-in, blank if unknown.
+fn role_kind_span(custom: Option<bool>) -> Span<'static> {
+    let t = theme();
+    match custom {
+        Some(true) => Span::styled(
+            "C ",
+            Style::default()
+                .fg(t.highlight)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Some(false) => Span::styled("B ", Style::default().fg(t.muted)),
+        None => Span::raw("  "),
+    }
+}
+
+/// A message in a bordered box, for an empty list.
+fn draw_empty(f: &mut Frame, area: Rect, title: String, message: String) {
+    let content = Paragraph::new(message)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .style(Style::default().fg(theme().subtle))
+        .wrap(Wrap { trim: true });
+    f.render_widget(content, area);
+}
+
+/// `:ra`: role assignments that matter at a scope.
+fn draw_role_assignments(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
+    use az9s_core::rbac::Reach;
+    let rows = app.state().role_assignment_rows();
+    let state = app.state();
+    let t = theme();
+    let scope_name = state
+        .ra_scope
+        .as_ref()
+        .map(|s| state.scope_label(&s.arm_id()))
+        .unwrap_or_else(|| "whole tenant".into());
+    let role_note = state
+        .ra_role
+        .as_ref()
+        .map(|guid| {
+            let name = state
+                .role_definition(guid)
+                .map_or(guid.clone(), |d| d.role_name.clone());
+            format!(" · role {name}")
+        })
+        .unwrap_or_default();
+    let heading = format!("Role assignments · {scope_name}{role_note}");
+    if rows.is_empty() {
+        let message = if state.loading {
+            "Loading role assignments…".to_string()
+        } else if !state.filter.is_empty() {
+            "No role assignments match the current filter.\n\nPress Esc to clear the filter.".into()
+        } else {
+            format!("No role assignments at {scope_name}.")
+        };
+        draw_empty(f, area, heading, message);
+        return Ok(());
+    }
+
+    let (type_w, principal_w, scope_w) = (18, 38, 34);
+    let name_col = name_width(area.width, 2 + type_w + principal_w + scope_w + 12, 40);
+    let viewport = area.height.saturating_sub(2) as usize;
+    let mut list_state = state.list_state.clone();
+    let visible = list_state.visible_range(rows.len(), viewport);
+    let items: Vec<_> = rows[visible.clone()]
+        .iter()
+        .map(|r| {
+            let a = &r.assignment;
+            let origin_style = match r.reach {
+                Reach::Inherited(_) => Style::default().fg(t.muted),
+                Reach::Here => Style::default().fg(t.special),
+                Reach::Below => Style::default().fg(t.accent),
+            };
+            list_item_spans(vec![
+                role_kind_span(r.custom),
+                Span::styled(
+                    cell(&r.role_name, name_col),
+                    Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    cell(&a.principal_type, type_w),
+                    Style::default().fg(t.accent),
+                ),
+                Span::styled(
+                    cell(
+                        &if r.principal_detail.is_empty() {
+                            r.principal_name.clone()
+                        } else {
+                            format!("{} ({})", r.principal_name, r.principal_detail)
+                        },
+                        principal_w,
+                    ),
+                    Style::default().fg(t.text),
+                ),
+                Span::styled(cell(&r.scope_label, scope_w), Style::default().fg(t.muted)),
+                Span::styled(r.origin_label.clone(), origin_style),
+            ])
+        })
+        .collect();
+
+    let count = |reach: fn(&Reach) -> bool| rows.iter().filter(|r| reach(&r.reach)).count();
+    let summary = if state.ra_scope.is_some() {
+        format!(
+            "{} inherited, {} here, {} below",
+            count(|r| matches!(r, Reach::Inherited(_))),
+            count(|r| *r == Reach::Here),
+            count(|r| *r == Reach::Below)
+        )
+    } else {
+        format!(
+            "{} assignment{}",
+            rows.len(),
+            if rows.len() == 1 { "" } else { "s" }
+        )
+    };
+    let title = if state.filter_mode {
+        format!("{heading} ({}) - Filter: {}_", rows.len(), state.filter)
+    } else {
+        format!("{heading} ({summary}) · C custom, B built-in · Enter role, d details")
+    };
+    let list = SelectableList::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(theme().selection());
+    let mut widget_state = SelectableListState {
+        selected: list_state.selected - visible.start,
+        offset: 0,
+    };
+    list.render(area, f.buffer_mut(), &mut widget_state);
+    app.state_mut().list_state = list_state;
+    Ok(())
+}
+
+/// `:role`: role definitions, custom first.
+fn draw_role_definitions(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
+    let rows = app.state().role_definition_rows();
+    let state = app.state();
+    let t = theme();
+    let heading = "Roles".to_string();
+    if rows.is_empty() {
+        let message = if state.loading {
+            "Loading role definitions…".to_string()
+        } else if !state.filter.is_empty() {
+            "No roles match the current filter.\n\nPress Esc to clear the filter.".into()
+        } else {
+            "No role definitions loaded. Press r to retry.".into()
+        };
+        draw_empty(f, area, heading, message);
+        return Ok(());
+    }
+    let name_col = name_width(area.width, 2 + 10 + 14, 50);
+    let viewport = area.height.saturating_sub(2) as usize;
+    let mut list_state = state.list_state.clone();
+    let visible = list_state.visible_range(rows.len(), viewport);
+    let items: Vec<_> = rows[visible.clone()]
+        .iter()
+        .map(|r| {
+            let d = &r.definition;
+            let assignments = match r.assignments {
+                0 => "unused".to_string(),
+                1 => "1 assignment".to_string(),
+                n => format!("{} assignments", grouped(n as u64)),
+            };
+            list_item_spans(vec![
+                role_kind_span(Some(d.is_custom())),
+                Span::styled(
+                    cell(&d.role_name, name_col),
+                    Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    cell(d.kind_label(), 10),
+                    Style::default().fg(if d.is_custom() { t.highlight } else { t.muted }),
+                ),
+                Span::styled(
+                    cell(&assignments, 18),
+                    Style::default().fg(if r.assignments == 0 {
+                        t.muted
+                    } else {
+                        t.accent
+                    }),
+                ),
+                Span::styled(d.description.clone(), Style::default().fg(t.muted)),
+            ])
+        })
+        .collect();
+    let custom = rows.iter().filter(|r| r.definition.is_custom()).count();
+    let title = if state.filter_mode {
+        format!("{heading} ({}) - Filter: {}_", rows.len(), state.filter)
+    } else {
+        format!(
+            "{heading} ({custom} custom, {} built-in) · Enter assignments, d details",
+            rows.len() - custom
+        )
+    };
+    let list = SelectableList::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(theme().selection());
+    let mut widget_state = SelectableListState {
+        selected: list_state.selected - visible.start,
+        offset: 0,
+    };
+    list.render(area, f.buffer_mut(), &mut widget_state);
+    app.state_mut().list_state = list_state;
+    Ok(())
 }
 
 /// An exemption's expiry, coloured: red when expired, yellow within
@@ -1862,6 +2068,28 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 (":", "Command"),
                 ("r", "Refresh"),
                 ("Esc", "Back"),
+                ("q", "Quit"),
+            ],
+            ViewMode::RoleAssignments => vec![
+                ("↑↓/jk", "Navigate"),
+                ("Enter", "Role"),
+                ("d", "Details"),
+                ("/", "Filter"),
+                ("c", "Copy"),
+                ("y", "Copy ID"),
+                ("o", "Portal"),
+                ("r", "Refresh"),
+                ("Esc", "Back"),
+                ("q", "Quit"),
+            ],
+            ViewMode::RoleDefinitions => vec![
+                ("↑↓/jk", "Navigate"),
+                ("Enter", "Assignments"),
+                ("d", "Details"),
+                ("/", "Filter"),
+                ("c", "Copy"),
+                ("y", "Copy ID"),
+                ("r", "Refresh"),
                 ("q", "Quit"),
             ],
             ViewMode::ExemptionList => vec![

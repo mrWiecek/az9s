@@ -1,0 +1,186 @@
+//! Names of directory principals (users, groups, service principals) from
+//! Microsoft Graph, for role assignments, which only carry principal IDs.
+//!
+//! One call resolves up to 1000 IDs:
+//! `POST {endpoint}/v1.0/directoryObjects/getByIds`. Reading them needs the
+//! default directory read permission members have; guests may not, and then
+//! the IDs stay as they are.
+
+use crate::resource_graph::TokenSource;
+use crate::{timing, AzureError, Result};
+use serde_json::{json, Value};
+use std::sync::Arc;
+
+pub const DEFAULT_GRAPH_ENDPOINT: &str = "https://graph.microsoft.com";
+/// The token audience for Microsoft Graph.
+pub const GRAPH_RESOURCE: &str = "https://graph.microsoft.com/";
+const MAX_IDS_PER_REQUEST: usize = 1000;
+
+/// A directory object behind a principal ID.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Principal {
+    pub id: String,
+    pub display_name: String,
+    /// "user", "group" or "servicePrincipal"
+    pub kind: String,
+    /// A user's sign-in name, or an application's app ID
+    pub detail: String,
+}
+
+pub struct DirectoryClient {
+    http: reqwest::Client,
+    endpoint: String,
+    tokens: Arc<dyn TokenSource>,
+}
+
+impl DirectoryClient {
+    pub fn new(tokens: Arc<dyn TokenSource>) -> Self {
+        Self::with_endpoint(DEFAULT_GRAPH_ENDPOINT, tokens)
+    }
+
+    pub fn with_endpoint(endpoint: impl Into<String>, tokens: Arc<dyn TokenSource>) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            endpoint: endpoint.into().trim_end_matches('/').to_string(),
+            tokens,
+        }
+    }
+
+    /// The principals behind `ids`. IDs the directory doesn't know (deleted
+    /// principals) are left out.
+    pub async fn principals(&self, ids: &[String]) -> Result<Vec<Principal>> {
+        let _t = timing::timer("azure.principals");
+        let mut found = Vec::new();
+        for batch in ids.chunks(MAX_IDS_PER_REQUEST) {
+            let token = self.tokens.token().await?;
+            let response = self
+                .http
+                .post(format!("{}/v1.0/directoryObjects/getByIds", self.endpoint))
+                .bearer_auth(token)
+                .header("content-type", "application/json")
+                .body(
+                    json!({"ids": batch, "types": ["user", "group", "servicePrincipal"]})
+                        .to_string(),
+                )
+                .send()
+                .await
+                .map_err(|e| {
+                    AzureError::ApiError(format!("Microsoft Graph request failed: {e}"))
+                })?;
+            let status = response.status();
+            let text = response
+                .text()
+                .await
+                .map_err(|e| AzureError::ApiError(format!("Microsoft Graph response: {e}")))?;
+            if !status.is_success() {
+                let message = serde_json::from_str::<Value>(&text)
+                    .ok()
+                    .and_then(|v| v.pointer("/error/message")?.as_str().map(str::to_string))
+                    .unwrap_or_else(|| text.chars().take(300).collect());
+                return Err(AzureError::Http {
+                    status: status.as_u16(),
+                    message,
+                });
+            }
+            let body: Value = serde_json::from_str(&text).map_err(|e| {
+                AzureError::ApiError(format!("Invalid Microsoft Graph response: {e}"))
+            })?;
+            found.extend(
+                body.get("value")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(principal_from_item),
+            );
+        }
+        Ok(found)
+    }
+}
+
+fn principal_from_item(item: &Value) -> Option<Principal> {
+    let text = |key: &str| item.get(key).and_then(Value::as_str).unwrap_or_default();
+    let id = text("id");
+    if id.is_empty() {
+        return None;
+    }
+    let kind = text("@odata.type")
+        .trim_start_matches("#microsoft.graph.")
+        .to_string();
+    let detail = match kind.as_str() {
+        "user" => text("userPrincipalName"),
+        "servicePrincipal" => text("appId"),
+        _ => "",
+    };
+    Some(Principal {
+        id: id.to_string(),
+        display_name: Some(text("displayName"))
+            .filter(|n| !n.is_empty())
+            .unwrap_or(id)
+            .to_string(),
+        kind,
+        detail: detail.to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{error, ok, serve_paths, StaticToken};
+
+    fn client(endpoint: &str) -> DirectoryClient {
+        DirectoryClient::with_endpoint(endpoint, Arc::new(StaticToken("t".into())))
+    }
+
+    #[tokio::test]
+    async fn principals_are_named_by_id() {
+        let (endpoint, requests) = serve_paths(|path, body| {
+            assert_eq!(path, "/v1.0/directoryObjects/getByIds");
+            assert_eq!(body["types"], json!(["user", "group", "servicePrincipal"]));
+            ok(json!({"value": [
+                {"@odata.type": "#microsoft.graph.user", "id": "u1",
+                 "displayName": "Ada Lovelace", "userPrincipalName": "ada@contoso.com"},
+                {"@odata.type": "#microsoft.graph.servicePrincipal", "id": "s1",
+                 "displayName": "deploy-pipeline", "appId": "app-1"},
+                {"@odata.type": "#microsoft.graph.group", "id": "g1", "displayName": "Platform Admins"}
+            ]}))
+        })
+        .await;
+        let ids: Vec<String> = ["u1", "s1", "g1", "gone"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let found = client(&endpoint).principals(&ids).await.unwrap();
+        let summary: Vec<(&str, &str, &str)> = found
+            .iter()
+            .map(|p| (p.display_name.as_str(), p.kind.as_str(), p.detail.as_str()))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("Ada Lovelace", "user", "ada@contoso.com"),
+                ("deploy-pipeline", "servicePrincipal", "app-1"),
+                ("Platform Admins", "group", "")
+            ]
+        );
+        assert_eq!(
+            requests.lock().unwrap()[0]["ids"].as_array().unwrap().len(),
+            4
+        );
+    }
+
+    #[tokio::test]
+    async fn graph_errors_say_why() {
+        let (endpoint, _) =
+            serve_paths(|_, _| error(403, "Insufficient privileges to complete the operation."))
+                .await;
+        let e = client(&endpoint)
+            .principals(&["u1".to_string()])
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("403") && e.contains("Insufficient privileges"),
+            "{e}"
+        );
+    }
+}

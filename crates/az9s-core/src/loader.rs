@@ -55,6 +55,19 @@ pub enum LoadRequest {
     PolicyAssignments,
     /// Every policy exemption in the tenant.
     PolicyExemptions,
+    /// Every role assignment in the tenant (these subscriptions' if the
+    /// tenant root isn't readable).
+    RoleAssignments {
+        subscription_ids: Vec<String>,
+    },
+    /// Every role definition, built-in and custom (as above).
+    RoleDefinitions {
+        subscription_ids: Vec<String>,
+    },
+    /// Names of these principal IDs, from Microsoft Graph.
+    Principals {
+        ids: Vec<String>,
+    },
     /// Resources evaluated / non-compliant per subscription, tenant-wide:
     /// the compliance roll-up of the management group tree and `:compliance`.
     ComplianceRollup,
@@ -90,6 +103,9 @@ pub enum LoadKind {
     Tenants,
     PolicyAssignments,
     PolicyExemptions,
+    RoleAssignments,
+    RoleDefinitions,
+    Principals,
     ComplianceRollup,
     PolicyCompliance,
     ComplianceSummary,
@@ -108,6 +124,9 @@ impl LoadKind {
             LoadKind::Tenants => "tenants",
             LoadKind::PolicyAssignments => "policy assignments",
             LoadKind::PolicyExemptions => "policy exemptions",
+            LoadKind::RoleAssignments => "role assignments",
+            LoadKind::RoleDefinitions => "role definitions",
+            LoadKind::Principals => "principal names",
             LoadKind::ComplianceRollup => "compliance per subscription",
             LoadKind::PolicyCompliance => "policy compliance",
             LoadKind::ComplianceSummary => "compliance summary",
@@ -128,6 +147,9 @@ impl LoadRequest {
             LoadRequest::Tenants => LoadKind::Tenants,
             LoadRequest::PolicyAssignments => LoadKind::PolicyAssignments,
             LoadRequest::PolicyExemptions => LoadKind::PolicyExemptions,
+            LoadRequest::RoleAssignments { .. } => LoadKind::RoleAssignments,
+            LoadRequest::RoleDefinitions { .. } => LoadKind::RoleDefinitions,
+            LoadRequest::Principals { .. } => LoadKind::Principals,
             LoadRequest::ComplianceRollup => LoadKind::ComplianceRollup,
             LoadRequest::PolicyCompliance { .. } => LoadKind::PolicyCompliance,
             LoadRequest::ComplianceSummary { .. } => LoadKind::ComplianceSummary,
@@ -148,6 +170,9 @@ pub enum LoadedData {
     Tenants(Vec<crate::models::Tenant>),
     PolicyAssignments(Vec<PolicyAssignment>),
     PolicyExemptions(Vec<PolicyExemption>),
+    RoleAssignments(Vec<crate::rbac::RoleAssignment>),
+    RoleDefinitions(Vec<crate::rbac::RoleDefinition>),
+    Principals(Vec<az9s_azure::directory::Principal>),
     /// Per subscription (lowercase ID), tenant-wide
     ComplianceRollup(HashMap<String, Compliance>),
     PolicyCompliance(PolicyScope, HashMap<String, Compliance>),
@@ -438,6 +463,15 @@ impl Fetcher for AzureFetcher {
                     failed_subscriptions: Vec::new(),
                     notice: None,
                 },
+                LoadRequest::RoleAssignments { .. }
+                | LoadRequest::RoleDefinitions { .. }
+                | LoadRequest::Principals { .. } => FetchOutcome {
+                    data: Err("role assignments need Resource Graph \
+                                   (not available with AZ9S_BACKEND=arm)"
+                        .into()),
+                    failed_subscriptions: Vec::new(),
+                    notice: None,
+                },
                 LoadRequest::PolicyAssignments
                 | LoadRequest::PolicyExemptions
                 | LoadRequest::ComplianceRollup
@@ -476,6 +510,8 @@ pub struct GraphFetcher {
     home_tenant: Arc<tokio::sync::OnceCell<Option<String>>>,
     /// Loads the management group tree, if configured.
     management_groups: Option<Arc<ManagementGroupClient>>,
+    /// Names principals (Microsoft Graph), if configured.
+    directory: Option<Arc<az9s_azure::directory::DirectoryClient>>,
 }
 
 impl GraphFetcher {
@@ -485,7 +521,14 @@ impl GraphFetcher {
             arm,
             home_tenant: Arc::new(tokio::sync::OnceCell::new()),
             management_groups: None,
+            directory: None,
         }
+    }
+
+    /// Also serve [`LoadRequest::Principals`] through this client.
+    pub fn with_directory(mut self, client: Arc<az9s_azure::directory::DirectoryClient>) -> Self {
+        self.directory = Some(client);
+        self
     }
 
     /// Also serve [`LoadRequest::ScopeTree`] through this client.
@@ -599,6 +642,69 @@ impl Fetcher for GraphFetcher {
             .boxed();
         }
         match &request {
+            LoadRequest::Principals { ids } => {
+                let directory = self.directory.clone();
+                let ids = ids.clone();
+                return async move {
+                    let data = match directory {
+                        Some(directory) => directory
+                            .principals(&ids)
+                            .await
+                            .map(LoadedData::Principals)
+                            .map_err(|e| e.to_string()),
+                        // No directory client (tests, offline): no names.
+                        None => Ok(LoadedData::Principals(vec![])),
+                    };
+                    FetchOutcome {
+                        data,
+                        failed_subscriptions: vec![],
+                        notice: None,
+                    }
+                }
+                .boxed();
+            }
+            LoadRequest::RoleAssignments { subscription_ids }
+            | LoadRequest::RoleDefinitions { subscription_ids } => {
+                let graph = self.graph.clone();
+                let cell = self.home_tenant.clone();
+                let ids = subscription_ids.clone();
+                let assignments = matches!(request, LoadRequest::RoleAssignments { .. });
+                return async move {
+                    let _t = timing::timer(if assignments {
+                        "azure.role_assignments"
+                    } else {
+                        "azure.role_definitions"
+                    });
+                    let query = if assignments {
+                        resource_graph::role_assignments_query()
+                    } else {
+                        resource_graph::role_definitions_query()
+                    };
+                    let tenant = Self::resolve_tenant(&graph, &cell).await;
+                    let (rows, notice) = tenant_or_subscriptions(&graph, &query, tenant, ids).await;
+                    let data = rows.map(|rows| {
+                        if assignments {
+                            LoadedData::RoleAssignments(
+                                rows.iter()
+                                    .filter_map(crate::rbac::RoleAssignment::from_row)
+                                    .collect(),
+                            )
+                        } else {
+                            LoadedData::RoleDefinitions(
+                                rows.iter()
+                                    .filter_map(crate::rbac::RoleDefinition::from_row)
+                                    .collect(),
+                            )
+                        }
+                    });
+                    FetchOutcome {
+                        data,
+                        failed_subscriptions: vec![],
+                        notice,
+                    }
+                }
+                .boxed();
+            }
             LoadRequest::PolicyExemptions => {
                 let graph = self.graph.clone();
                 let cell = self.home_tenant.clone();
@@ -864,6 +970,9 @@ impl Fetcher for GraphFetcher {
                 | LoadRequest::Tenants
                 | LoadRequest::PolicyAssignments
                 | LoadRequest::PolicyExemptions
+                | LoadRequest::RoleAssignments { .. }
+                | LoadRequest::RoleDefinitions { .. }
+                | LoadRequest::Principals { .. }
                 | LoadRequest::ComplianceRollup
                 | LoadRequest::PolicyCompliance { .. }
                 | LoadRequest::ComplianceSummary { .. }
@@ -952,6 +1061,9 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::Tenants => LoadedData::Tenants(vec![]),
         LoadKind::PolicyAssignments => LoadedData::PolicyAssignments(vec![]),
         LoadKind::PolicyExemptions => LoadedData::PolicyExemptions(vec![]),
+        LoadKind::RoleAssignments => LoadedData::RoleAssignments(vec![]),
+        LoadKind::RoleDefinitions => LoadedData::RoleDefinitions(vec![]),
+        LoadKind::Principals => LoadedData::Principals(vec![]),
         LoadKind::ComplianceRollup => LoadedData::ComplianceRollup(HashMap::new()),
         LoadKind::PolicyCompliance => {
             LoadedData::PolicyCompliance(PolicyScope::Group(String::new()), HashMap::new())
@@ -962,6 +1074,40 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::PolicyStates => LoadedData::PolicyStates(vec![]),
         LoadKind::ResourcePolicy => LoadedData::ResourcePolicy(String::new(), vec![]),
     }
+}
+
+/// Run a query across the tenant (its root management group), or, when that
+/// isn't readable (no management group access), across `subscription_ids`.
+/// The notice says when the narrower scope was used.
+async fn tenant_or_subscriptions(
+    graph: &ResourceGraphClient,
+    query: &str,
+    tenant: Option<String>,
+    subscription_ids: Vec<String>,
+) -> (Result<Vec<serde_json::Value>, String>, Option<String>) {
+    let mut tenant_error = None;
+    if let Some(tenant) = tenant {
+        match query_all(graph, query, &GraphScope::ManagementGroup(tenant)).await {
+            Ok(rows) => return (Ok(rows), None),
+            Err(e) => {
+                warn!("Resource Graph at the tenant root failed: {}", e);
+                tenant_error = Some(e.to_string());
+            }
+        }
+    }
+    if subscription_ids.is_empty() {
+        let e = tenant_error.unwrap_or_else(|| "could not determine the tenant".into());
+        return (Err(e), None);
+    }
+    let rows = query_all(graph, query, &GraphScope::Subscriptions(subscription_ids))
+        .await
+        .map_err(|e| e.to_string());
+    let notice = (rows.is_ok() && tenant_error.is_some()).then(|| {
+        "No access at the tenant root: showing what your subscriptions grant \
+         (management group assignments may be missing)"
+            .to_string()
+    });
+    (rows, notice)
 }
 
 /// Most definitions whose names are fetched one by one from ARM when

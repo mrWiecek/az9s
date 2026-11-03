@@ -42,6 +42,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("policy", "policy assignments and compliance"),
     ("compliance", "subscriptions by non-compliant resources"),
     ("exemption", "policy exemptions and when they expire"),
+    ("ra", "role assignments"),
+    ("role", "role definitions, built-in and custom"),
     ("ctx", "switch tenant"),
 ];
 
@@ -67,7 +69,7 @@ pub fn complete(input: &str, state: &AppState) -> Completion {
                     Some((r.name, r.domain.unwrap_or(id)))
                 }));
                 prefixed(word, options.into_iter())
-            } else if cmd == "compliance" || cmd == "exemption" {
+            } else if cmd == "compliance" || cmd == "exemption" || cmd == "ra" {
                 let mut options = vec![("all".to_string(), "whole tenant".to_string())];
                 if let Some(tree) = &state.scope_tree {
                     options.extend(
@@ -76,7 +78,7 @@ pub fn complete(input: &str, state: &AppState) -> Completion {
                             .map(|g| (g.display_name.clone(), "management group".into())),
                     );
                 }
-                if cmd == "exemption" {
+                if cmd == "exemption" || cmd == "ra" {
                     options.extend(
                         state
                             .subscriptions
@@ -335,13 +337,13 @@ mod tests {
 
     #[test]
     fn command_names_first() {
-        assert_eq!(texts("r"), ["rg", "res"]);
+        assert_eq!(texts("r"), ["rg", "res", "ra", "role"]);
         assert_eq!(
             texts("t"),
             ["type", "tag", "exemption", "ctx"],
             "starting with t, then containing t"
         );
-        assert_eq!(texts("").len(), 10);
+        assert_eq!(texts("").len(), 12);
         assert_eq!(texts("comp"), ["compliance"]);
         assert!(texts("xyz").is_empty());
     }

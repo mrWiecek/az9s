@@ -101,6 +101,9 @@ pub fn overview(doc: Option<&Value>, resource: &Resource) -> Vec<Section> {
 /// what matters (it shows arrays only as "[n items]").
 fn type_sections(doc: &Value, resource_type: &str) -> Vec<Section> {
     let kind = resource_type.to_ascii_lowercase();
+    if kind == "microsoft.authorization/roledefinitions" {
+        return role_definition_sections(doc);
+    }
     if kind == "microsoft.authorization/policydefinitions"
         || kind == "microsoft.authorization/policysetdefinitions"
     {
@@ -121,6 +124,50 @@ fn type_sections(doc: &Value, resource_type: &str) -> Vec<Section> {
         }];
     }
     vec![]
+}
+
+/// A role definition: what it is, then what it allows and denies (one
+/// permission per row) and where it can be assigned.
+fn role_definition_sections(doc: &Value) -> Vec<Section> {
+    let role = crate::rbac::RoleDefinition::from_row(&serde_json::json!({
+        "id": doc.get("id").cloned().unwrap_or_default(),
+        "name": doc.get("name").cloned().unwrap_or_default(),
+        "roleName": doc.pointer("/properties/roleName").cloned().unwrap_or_default(),
+        "roleType": doc.pointer("/properties/type").cloned().unwrap_or_default(),
+        "description": doc.pointer("/properties/description").cloned().unwrap_or_default(),
+        "assignableScopes": doc.pointer("/properties/assignableScopes").cloned().unwrap_or_default(),
+        "permissions": doc.pointer("/properties/permissions").cloned().unwrap_or_default(),
+    }));
+    let Some(role) = role else {
+        return vec![];
+    };
+    let mut sections = vec![Section {
+        title: "Role definition",
+        rows: vec![
+            ("Role".into(), role.role_name.clone()),
+            ("Type".into(), role.kind_label().into()),
+            ("Description".into(), role.description.clone()),
+        ],
+    }];
+    for (title, items) in [
+        ("Actions", &role.actions),
+        ("Not actions", &role.not_actions),
+        ("Data actions", &role.data_actions),
+        ("Not data actions", &role.not_data_actions),
+        ("Assignable scopes", &role.assignable_scopes),
+    ] {
+        if !items.is_empty() {
+            sections.push(Section {
+                title,
+                rows: items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, item)| ((i + 1).to_string(), item.clone()))
+                    .collect(),
+            });
+        }
+    }
+    sections
 }
 
 /// A policy definition or initiative at a glance: what it is and does.

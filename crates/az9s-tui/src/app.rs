@@ -465,6 +465,7 @@ impl TuiApp {
             | CommandKind::Policy { scope }
             | CommandKind::Compliance { scope }
             | CommandKind::Exemption { scope }
+            | CommandKind::RoleAssignments { scope }
                 if *scope == Scope::Current =>
             {
                 *scope = context;
@@ -478,6 +479,17 @@ impl TuiApp {
                     self.state_mut().clear_navigation();
                     self.core.open_policy(policy_scope);
                 }
+            }
+            CommandKind::RoleAssignments { scope } => {
+                debug!("Command: role assignments, scope {:?}", scope);
+                self.open_role_assignments(scope);
+            }
+            CommandKind::RoleDefinitions => {
+                debug!("Command: role definitions");
+                let state = self.state_mut();
+                state.clear_navigation();
+                state.filter.clear();
+                self.core.open_role_definitions();
             }
             CommandKind::Exemption { scope } => {
                 debug!("Command: exemption, scope {:?}", scope);
@@ -948,6 +960,9 @@ impl TuiApp {
                 self.core.request(LoadRequest::ScopeTree);
                 self.core.request(LoadRequest::ComplianceRollup);
             }
+            (ViewMode::RoleAssignments | ViewMode::RoleDefinitions, _) => {
+                self.core.load_rbac();
+            }
             (ViewMode::ExemptionList, _) => {
                 self.core.request(LoadRequest::PolicyExemptions);
             }
@@ -1224,6 +1239,31 @@ impl TuiApp {
     /// `:exemption`: the exemptions at or below a scope (a management group
     /// or subscription by name; `all` or no context: the whole tenant).
     fn open_exemptions(&mut self, scope: Scope) {
+        let Some(scope) = self.listing_scope(scope) else {
+            return;
+        };
+        let state = self.state_mut();
+        state.clear_navigation();
+        state.filter.clear();
+        self.core.open_exemptions(scope);
+    }
+
+    /// `:ra`: the role assignments that matter at a scope (a management
+    /// group or subscription by name; `all` or no context: the tenant).
+    fn open_role_assignments(&mut self, scope: Scope) {
+        let Some(scope) = self.listing_scope(scope) else {
+            return;
+        };
+        let state = self.state_mut();
+        state.clear_navigation();
+        state.filter.clear();
+        self.core.open_role_assignments(scope, None);
+    }
+
+    /// The scope a tenant-wide list narrows to: `Ok(None)` for the whole
+    /// tenant (also the tenant root group). `None` when the name matched
+    /// nothing (the error is shown).
+    fn listing_scope(&mut self, scope: Scope) -> Option<Option<PolicyScope>> {
         let scope = match scope {
             Scope::All => None,
             Scope::Current => None,
@@ -1236,19 +1276,68 @@ impl TuiApp {
                         self.state_mut().set_error(Some(format!(
                             "No management group or subscription named {name}"
                         )));
-                        return;
+                        return None;
                     }
                 },
             },
         };
         // The tenant root group is the whole tenant.
         let root = self.state().scope_tree.as_ref().map(|t| t.root.clone());
-        let scope =
-            scope.filter(|s| !matches!(s, PolicyScope::Group(g) if Some(g) == root.as_ref()));
-        let state = self.state_mut();
-        state.clear_navigation();
-        state.filter.clear();
-        self.core.open_exemptions(scope);
+        Some(scope.filter(|s| !matches!(s, PolicyScope::Group(g) if Some(g) == root.as_ref())))
+    }
+
+    /// A role definition as a detail-view item: the loaded definition (whose
+    /// ID Resource Graph knows), else the ID the assignment names.
+    fn role_definition_resource(
+        &self,
+        guid: &str,
+        fallback_id: &str,
+    ) -> az9s_core::models::Resource {
+        let (id, name) = match self.state().role_definition(guid) {
+            Some(d) => (d.id.clone(), d.role_name.clone()),
+            None => (fallback_id.to_string(), guid.to_string()),
+        };
+        az9s_core::models::Resource {
+            id,
+            name,
+            resource_type: "Microsoft.Authorization/roleDefinitions".into(),
+            location: String::new(),
+            resource_group: String::new(),
+            // Definitions are found across the tenant.
+            subscription_id: String::new(),
+            tags: Default::default(),
+        }
+    }
+
+    /// `d` in `:ra` (the assignment itself) and `:role` (the definition).
+    fn open_rbac_detail(&mut self) {
+        let resource = match self.state().view {
+            ViewMode::RoleAssignments => self.state().selected_role_assignment().map(|r| {
+                let a = r.assignment;
+                let scope = a.scope.to_ascii_lowercase();
+                az9s_core::models::Resource {
+                    name: format!("{} for {}", r.role_name, a.principal_id),
+                    subscription_id: scope
+                        .strip_prefix("/subscriptions/")
+                        .map(|s| s.split('/').next().unwrap_or(s).to_string())
+                        .unwrap_or_default(),
+                    id: a.id,
+                    resource_type: "Microsoft.Authorization/roleAssignments".into(),
+                    location: String::new(),
+                    resource_group: String::new(),
+                    tags: Default::default(),
+                }
+            }),
+            ViewMode::RoleDefinitions => self
+                .state()
+                .selected_role_definition()
+                .map(|r| self.role_definition_resource(&r.definition.guid(), &r.definition.id)),
+            _ => None,
+        };
+        if let Some(resource) = resource {
+            self.push_current_context(None);
+            self.core.open_resource_detail(resource);
+        }
     }
 
     fn scroll_detail(&mut self, lines: isize) {
@@ -1450,6 +1539,28 @@ impl TuiApp {
                 if let Some(row) = self.state().selected_policy_row() {
                     self.push_current_context(None);
                     self.core.open_non_compliant(row.assignment);
+                }
+                Ok(true)
+            }
+            ViewMode::RoleAssignments => {
+                // The role the assignment grants.
+                if let Some(row) = self.state().selected_role_assignment() {
+                    let a = &row.assignment;
+                    let resource =
+                        self.role_definition_resource(&a.role_guid(), &a.role_definition_id);
+                    self.push_current_context(None);
+                    self.core.open_resource_detail(resource);
+                }
+                Ok(true)
+            }
+            ViewMode::RoleDefinitions => {
+                // Everyone who has the role, across the tenant.
+                if let Some(row) = self.state().selected_role_definition() {
+                    self.push_current_context(None);
+                    let state = self.state_mut();
+                    state.filter.clear();
+                    self.core
+                        .open_role_assignments(None, Some(row.definition.guid()));
                 }
                 Ok(true)
             }
@@ -1704,6 +1815,14 @@ impl TuiApp {
                 KeyCode::Char('N') => self.search_step(false),
                 _ => {}
             }
+            return Ok(true);
+        }
+        if matches!(
+            self.state().view,
+            ViewMode::RoleAssignments | ViewMode::RoleDefinitions
+        ) && key.code == KeyCode::Char('d')
+        {
+            self.open_rbac_detail();
             return Ok(true);
         }
         if self.state().view == ViewMode::PolicyAssignments && key.code == KeyCode::Char('d') {

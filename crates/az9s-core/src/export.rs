@@ -111,6 +111,53 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
                 ),
             )
         }
+        ViewMode::RoleAssignments => {
+            let rows = state.role_assignment_rows();
+            let lines = rows.iter().map(|r| {
+                let a = &r.assignment;
+                let kind = match r.custom {
+                    Some(true) => "custom",
+                    Some(false) => "built-in",
+                    None => "",
+                };
+                tsv(&[
+                    &r.role_name,
+                    kind,
+                    &r.principal_name,
+                    &r.principal_detail,
+                    &a.principal_type,
+                    &a.principal_id,
+                    &r.scope_label,
+                    &r.origin_label,
+                    &a.scope,
+                    &a.id,
+                ])
+            });
+            (
+                count(rows.len(), "role assignment"),
+                with_header(
+                    "role\tkind\tprincipal\tsign-in or app id\tprincipal type\tprincipal id\tscope\treach\tscope id\tid",
+                    lines,
+                ),
+            )
+        }
+        ViewMode::RoleDefinitions => {
+            let rows = state.role_definition_rows();
+            let lines = rows.iter().map(|r| {
+                let d = &r.definition;
+                tsv(&[
+                    &d.role_name,
+                    d.kind_label(),
+                    &r.assignments.to_string(),
+                    &d.description,
+                    &d.id,
+                ])
+            });
+            (
+                count(rows.len(), "role"),
+                with_header("role\tkind\tassignments\tdescription\tid", lines),
+            )
+        }
         ViewMode::ExemptionList => {
             let rows = state.exemption_rows();
             let lines = rows.iter().map(|r| {

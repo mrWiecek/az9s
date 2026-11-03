@@ -81,6 +81,8 @@ az9s --timings                             # launch, print a timing summary on e
 
 | Command | Shows |
 |---|---|
+| `:ra [all\|<mg>\|<sub>]` | Role assignments that matter there: inherited from management groups above, at the scope, and below it (resource groups, resources). Principal names come from Microsoft Graph; `C`/`B` mark custom and built-in roles. `Enter` opens the role's permissions; `d` the assignment |
+| `:role` | Role definitions, custom first, with how many assignments each has; `Enter` lists who has the role, `d` its permissions (actions, data actions, assignable scopes) |
 | `:exemption [all\|<mg>\|<sub>]` | Policy exemptions at or below the scope: category, expiry (red when expired, yellow within 30 days), assignment, scope and reason, soonest to expire first; `Enter` opens one |
 | `:compliance [all\|<mg>]` | Subscriptions ranked by non-compliant resources (with % compliant and their management group), worst first; `Enter` opens `:policy` for one. The management group tree shows the same compliance on every group and subscription |
 | `:policy [all\|<sub>]` | Policy assignments that apply there (assigned or inherited from management groups), with non-compliant resource counts, worst first, under a compliance summary for the scope (% compliant, non-compliant resources, subscriptions and assignments affected). `Enter`: the assignment's non-compliant resources; `d`: the assignment itself |
