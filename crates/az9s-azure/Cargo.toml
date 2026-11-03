@@ -27,4 +27,5 @@ azure_identity = { workspace = true }
 azure_mgmt_resources = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3.8"
 tokio = { workspace = true, features = ["test-util"] }

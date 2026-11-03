@@ -34,6 +34,8 @@ pub enum CommandKind {
     ResourceTypes { scope: Scope, query: ResourceQuery },
     /// Tag key/value counts
     Tags { scope: Scope, query: ResourceQuery },
+    /// Tenants: `None` lists them; `Some("all")` or a tenant name/ID switches
+    Context(Option<String>),
     /// A known command with bad arguments (the message says why)
     Invalid(String),
     /// Unknown/invalid command
@@ -79,6 +81,11 @@ impl Command {
         let cmd = parts[0].to_lowercase();
 
         match cmd.as_str() {
+            "ctx" | "context" | "tenant" => Self {
+                kind: CommandKind::Context(
+                    Some(parts[1..].join(" ")).filter(|arg| !arg.is_empty()),
+                ),
+            },
             "mg" | "managementgroup" | "management-group" => Self {
                 kind: CommandKind::ManagementGroups,
             },
@@ -129,7 +136,7 @@ impl Command {
         match &self.kind {
             CommandKind::Unknown(cmd) if !cmd.is_empty() => {
                 Some(format!(
-                    "Unknown command: '{}'\n\nAvailable commands:\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type\n  :tag [all|<sub>] - Tags and how many resources carry them",
+                    "Unknown command: '{}'\n\nAvailable commands:\n  :ctx [all|<tenant>] - Tenants\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type\n  :tag [all|<sub>] - Tags and how many resources carry them",
                     cmd
                 ))
             }
@@ -220,6 +227,19 @@ mod tests {
         assert_eq!(query.to_string(), "loc=westeurope tag=env:prod");
         let bad = Command::parse(":rg type=vm");
         assert!(bad.error_message().unwrap().contains("not resource groups"));
+    }
+
+    #[test]
+    fn test_parse_ctx() {
+        assert_eq!(Command::parse(":ctx").kind, CommandKind::Context(None));
+        assert_eq!(
+            Command::parse(":ctx all").kind,
+            CommandKind::Context(Some("all".into()))
+        );
+        assert_eq!(
+            Command::parse(":ctx Contoso Ltd").kind,
+            CommandKind::Context(Some("Contoso Ltd".into()))
+        );
     }
 
     #[test]

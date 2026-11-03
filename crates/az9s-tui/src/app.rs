@@ -462,6 +462,26 @@ impl TuiApp {
             _ => {}
         }
         match command.kind {
+            CommandKind::Context(None) => {
+                debug!("Command: tenants");
+                let state = self.state_mut();
+                state.clear_navigation();
+                state.view = ViewMode::TenantList;
+                state.list_state.reset();
+                self.core.request(LoadRequest::Tenants);
+            }
+            CommandKind::Context(Some(arg)) => {
+                if arg.eq_ignore_ascii_case("all") {
+                    self.core.switch_tenant(None);
+                } else {
+                    match self.find_tenant(&arg) {
+                        Some(id) => self.core.switch_tenant(Some(id)),
+                        None => self.state_mut().set_error(Some(format!(
+                            "Tenant not found: {arg}\n\nType :ctx to list the tenants you can use."
+                        ))),
+                    }
+                }
+            }
             CommandKind::ManagementGroups => {
                 debug!("Command: management group tree");
                 self.state_mut().clear_navigation();
@@ -597,11 +617,35 @@ impl TuiApp {
         }
     }
 
-    /// IDs of all subscriptions that can be queried (disabled ones always fail).
+    /// A tenant by ID, name or domain (ignoring case), among the tenants
+    /// known from Azure and from subscriptions. A GUID-looking ID is taken
+    /// as is, so a tenant can be used before its name is known.
+    fn find_tenant(&self, wanted: &str) -> Option<String> {
+        let found = self.state().tenant_rows().into_iter().find_map(|row| {
+            let id = row.id?;
+            let hit = id.eq_ignore_ascii_case(wanted)
+                || row.name.eq_ignore_ascii_case(wanted)
+                || row
+                    .domain
+                    .as_deref()
+                    .is_some_and(|d| d.eq_ignore_ascii_case(wanted));
+            hit.then_some(id)
+        });
+        found.or_else(|| {
+            let guid =
+                wanted.len() == 36 && wanted.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+            guid.then(|| wanted.to_ascii_lowercase())
+        })
+    }
+
+    /// IDs of all subscriptions that can be queried in the current tenant
+    /// (disabled ones always fail).
     fn enabled_subscription_ids(&self) -> Vec<String> {
-        self.state()
+        let state = self.state();
+        state
             .subscriptions
             .iter()
+            .filter(|s| state.in_tenant(s))
             .filter(|s| !s.state.eq_ignore_ascii_case("Disabled"))
             .map(|s| s.id.clone())
             .collect()
@@ -776,6 +820,7 @@ impl TuiApp {
                 self.core.request(LoadRequest::Subscriptions);
             }
             (ViewMode::ResourceDetail, _) => self.core.refresh_resource_detail(),
+            (ViewMode::TenantList, _) => self.core.request(LoadRequest::Tenants),
             (ViewMode::ManagementGroupTree, _) => {
                 info!("Refreshing the management group tree");
                 self.core.request(LoadRequest::ScopeTree);
@@ -1068,6 +1113,12 @@ impl TuiApp {
             }
             ViewMode::TagSummary => {
                 self.handle_tag_select();
+                Ok(true)
+            }
+            ViewMode::TenantList => {
+                if let Some(row) = self.state().selected_tenant_row() {
+                    self.core.switch_tenant(row.id);
+                }
                 Ok(true)
             }
             ViewMode::ResourceGroupList => self.handle_resource_group_select().await,

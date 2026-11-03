@@ -39,6 +39,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("res", "resources"),
     ("type", "resource counts per type"),
     ("tag", "tags and how many resources carry them"),
+    ("ctx", "switch tenant"),
 ];
 
 pub fn complete(input: &str, state: &AppState) -> Completion {
@@ -53,7 +54,17 @@ pub fn complete(input: &str, state: &AppState) -> Completion {
         ),
         Some(cmd) => {
             let cmd = cmd.to_ascii_lowercase();
-            if !matches!(cmd.as_str(), "rg" | "res" | "type" | "tag") {
+            if cmd == "ctx" {
+                let mut options = vec![(
+                    "all".to_string(),
+                    "every tenant (default login)".to_string(),
+                )];
+                options.extend(state.tenant_rows().into_iter().filter_map(|r| {
+                    let id = r.id?;
+                    Some((r.name, r.domain.unwrap_or(id)))
+                }));
+                prefixed(word, options.into_iter())
+            } else if !matches!(cmd.as_str(), "rg" | "res" | "type" | "tag") {
                 vec![]
             } else if let Some(values) = strip_key(word, "type=") {
                 if cmd == "rg" {
@@ -75,6 +86,7 @@ pub fn complete(input: &str, state: &AppState) -> Completion {
                         state
                             .subscriptions
                             .iter()
+                            .filter(|s| state.in_tenant(s))
                             .map(|s| (s.name.clone(), "subscription".into())),
                     );
                 }
@@ -292,8 +304,12 @@ mod tests {
     #[test]
     fn command_names_first() {
         assert_eq!(texts("r"), ["rg", "res"]);
-        assert_eq!(texts("t"), ["type", "tag"]);
-        assert_eq!(texts("").len(), 6);
+        assert_eq!(
+            texts("t"),
+            ["type", "tag", "ctx"],
+            "starting with t, then containing t"
+        );
+        assert_eq!(texts("").len(), 7);
         assert!(texts("xyz").is_empty());
     }
 

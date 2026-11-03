@@ -10,7 +10,9 @@ use crate::{
 };
 use anyhow::Context;
 use az9s_azure::management_groups::ManagementGroupClient;
-use az9s_azure::resource_graph::{CachingTokenSource, CredentialTokenSource};
+use az9s_azure::resource_graph::{
+    CachingTokenSource, CliTenantTokenSource, CredentialTokenSource, TokenSource,
+};
 use az9s_azure::{AuthProvider, AzureAuth, AzureClient, ResourceGraphClient};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -32,7 +34,13 @@ pub struct App {
     loader: Loader,
     /// The in-flight request of each kind
     pending: HashMap<LoadKind, Pending>,
+    /// Builds the fetcher for a tenant (`None`: the CLI's default login),
+    /// for `:ctx`. Absent offline and in tests that don't switch.
+    fetcher_factory: Option<FetcherFactory>,
 }
+
+/// Builds a fetcher that talks to Azure as a given tenant.
+pub type FetcherFactory = Arc<dyn Fn(Option<&str>) -> Option<Arc<dyn Fetcher>> + Send + Sync>;
 
 /// A request in flight, as the App tracks it.
 struct Pending {
@@ -61,18 +69,25 @@ impl App {
         std::fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
         let cache = Cache::new(&cache_dir.join("az9s.db"))?;
 
-        let fetcher: Option<Arc<dyn Fetcher>> = match AzureAuth::new_auto().await {
-            Ok(auth) => Some(Self::azure_fetcher(Arc::new(auth))),
+        let auth = match AzureAuth::new_auto().await {
+            Ok(auth) => Some(Arc::new(auth)),
             Err(e) => {
                 warn!("Azure authentication failed: {}", e);
                 None
             }
         };
-
+        let fetcher = auth.clone().map(|auth| Self::azure_fetcher(auth, None));
         if let Some(fetcher) = &fetcher {
             fetcher.warm_up();
         }
         let mut app = Self::with_fetcher(cache, fetcher);
+        if let Some(auth) = auth {
+            app.set_fetcher_factory(Arc::new(move |tenant: Option<&str>| {
+                let fetcher = Self::azure_fetcher(auth.clone(), tenant);
+                fetcher.warm_up();
+                Some(fetcher)
+            }));
+        }
         app.apply_config(loaded);
         Ok(app)
     }
@@ -81,6 +96,12 @@ impl App {
     /// in the status bar if the config file couldn't be used.
     pub fn apply_config(&mut self, loaded: config::Loaded) {
         self.state.config = loaded.config;
+        if let Some(tenant) = self.state.config.tenant.clone() {
+            if let Some(factory) = &self.fetcher_factory {
+                self.loader.replace_fetcher(factory(Some(&tenant)));
+            }
+            self.state.tenant = Some(tenant);
+        }
         self.load_cached_subscriptions();
         self.request(LoadRequest::Subscriptions);
         match self.state.config.start {
@@ -98,16 +119,23 @@ impl App {
     }
 
     /// Resource Graph for lists (with ARM fallback), unless `AZ9S_BACKEND=arm`.
-    fn azure_fetcher(auth: Arc<AzureAuth>) -> Arc<dyn Fetcher> {
+    ///
+    /// With a `tenant`, Azure is asked as that tenant: tokens come from
+    /// `az account get-access-token --tenant`. The ARM fallback keeps the
+    /// CLI's default login.
+    fn azure_fetcher(auth: Arc<AzureAuth>, tenant: Option<&str>) -> Arc<dyn Fetcher> {
         let arm: Arc<dyn Fetcher> =
             Arc::new(AzureFetcher::new(Arc::new(AzureClient::new(auth.clone()))));
         if std::env::var("AZ9S_BACKEND").is_ok_and(|v| v.eq_ignore_ascii_case("arm")) {
             info!("Using ARM backend (AZ9S_BACKEND=arm)");
             return arm;
         }
-        let tokens = Arc::new(CachingTokenSource::new(CredentialTokenSource(
-            auth.credential(),
-        )));
+        let tokens: Arc<dyn TokenSource> = match tenant {
+            Some(tenant) => Arc::new(CachingTokenSource::new(CliTenantTokenSource::new(tenant))),
+            None => Arc::new(CachingTokenSource::new(CredentialTokenSource(
+                auth.credential(),
+            ))),
+        };
         let management_groups = Arc::new(ManagementGroupClient::new(tokens.clone()));
         Arc::new(
             GraphFetcher::new(Arc::new(ResourceGraphClient::new(tokens)), arm)
@@ -128,6 +156,62 @@ impl App {
             cache,
             loader: Loader::new(fetcher),
             pending: HashMap::new(),
+            fetcher_factory: None,
+        }
+    }
+
+    /// How to build a fetcher for another tenant (enables `:ctx`).
+    pub fn set_fetcher_factory(&mut self, factory: FetcherFactory) {
+        self.fetcher_factory = Some(factory);
+    }
+
+    /// Work in `tenant` from now on (`None`: the CLI's default login, all
+    /// tenants' subscriptions listed). Azure is asked as that tenant;
+    /// every list that belonged to the previous tenant is dropped and the
+    /// start view reloads (its management group tree is cached per tenant).
+    pub fn switch_tenant(&mut self, tenant: Option<String>) {
+        info!("Switching tenant to {:?}", tenant);
+        if let Some(factory) = &self.fetcher_factory {
+            self.loader.replace_fetcher(factory(tenant.as_deref()));
+        }
+        self.pending.clear();
+        let state = &mut self.state;
+        state.tenant = tenant;
+        state.resource_groups.clear();
+        state.resources.clear();
+        state.scope_tree = None;
+        state.tree_expanded.clear();
+        state.scope_group = None;
+        state.selected_subscription = None;
+        state.selected_resource_detail = None;
+        state.resource_document = None;
+        state.resource_query = Default::default();
+        state.cross_subscription_mode = false;
+        state.clear_navigation();
+        state.filter.clear();
+        state.freshness.clear();
+        state.set_loading(false);
+        match state.config.start {
+            StartView::Sub => {
+                state.view = ViewMode::SubscriptionList;
+                state.list_state.reset();
+                self.request(LoadRequest::ScopeTree);
+            }
+            StartView::Mg => self.open_scope_tree(),
+        }
+        if let Some(name) = self.state.tenant_label() {
+            self.state.notice = Some(format!("Switched to tenant {name}"));
+        } else {
+            self.state.notice =
+                Some("Switched to all tenants (the Azure CLI's default login)".into());
+        }
+    }
+
+    /// Cache key of the management group tree for the current tenant.
+    fn scope_tree_key(&self) -> String {
+        match &self.state.tenant {
+            Some(tenant) => format!("{SCOPE_TREE_KEY}:{}", tenant.to_ascii_lowercase()),
+            None => SCOPE_TREE_KEY.to_string(),
         }
     }
 
@@ -199,10 +283,11 @@ impl App {
     /// Fill an empty list from the cache for this request's scope, so the
     /// view shows data instantly while Azure is asked in the background.
     fn show_cached(&mut self, request: &LoadRequest) {
+        let tree_key = self.scope_tree_key();
         let repo = self.cache.repository();
         let result = match request {
-            LoadRequest::Subscriptions => return,
-            LoadRequest::ScopeTree => repo.document(SCOPE_TREE_KEY).map(|doc| match doc {
+            LoadRequest::Subscriptions | LoadRequest::Tenants => return,
+            LoadRequest::ScopeTree => repo.document(&tree_key).map(|doc| match doc {
                 Some((json, cached_at)) => match serde_json::from_str(&json) {
                     Ok(tree) => (LoadedData::ScopeTree(tree), Some(cached_at)),
                     Err(e) => {
@@ -263,6 +348,7 @@ impl App {
             LoadKind::Resources => self.state.resources.len(),
             LoadKind::ScopeTree => usize::from(self.state.scope_tree.is_some()),
             LoadKind::ResourceDetail => usize::from(self.state.resource_document.is_some()),
+            LoadKind::Tenants => self.state.tenants.len(),
         }
     }
 
@@ -408,6 +494,7 @@ impl App {
             }
             LoadedData::Resources(items) => put(&mut self.state.resources, items, append),
             LoadedData::ScopeTree(tree) => self.state.set_scope_tree(tree),
+            LoadedData::Tenants(tenants) => self.state.tenants = tenants,
             LoadedData::ResourceDetail(doc) => {
                 self.state.resource_document = Some(doc).filter(|d| !d.is_null())
             }
@@ -436,6 +523,8 @@ impl App {
         };
         let _t = timing::timer("cache.queue_write");
         let job = match request {
+            // Tenant names are small and refreshed on each :ctx.
+            LoadRequest::Tenants => return,
             LoadRequest::Subscriptions => WriteJob::Subscriptions(self.state.subscriptions.clone()),
             LoadRequest::ResourceGroups { subscription_ids } => WriteJob::ResourceGroups {
                 subscription_ids: scope(subscription_ids),
@@ -461,7 +550,7 @@ impl App {
             LoadRequest::ScopeTree => match &self.state.scope_tree {
                 Some(tree) => match serde_json::to_string(tree) {
                     Ok(value) => WriteJob::Document {
-                        key: SCOPE_TREE_KEY.into(),
+                        key: self.scope_tree_key(),
                         value,
                     },
                     Err(e) => {
@@ -506,6 +595,7 @@ fn view_of(kind: LoadKind) -> ViewMode {
         LoadKind::Resources => ViewMode::ResourceList,
         LoadKind::ScopeTree => ViewMode::ManagementGroupTree,
         LoadKind::ResourceDetail => ViewMode::ResourceDetail,
+        LoadKind::Tenants => ViewMode::TenantList,
     }
 }
 

@@ -61,6 +61,7 @@ impl Fetcher for SlowAzure {
                         .collect(),
                 ),
                 LoadRequest::ScopeTree => LoadedData::ScopeTree(tree()),
+                LoadRequest::Tenants => LoadedData::Tenants(vec![]),
                 LoadRequest::ResourceDetail { .. } => {
                     LoadedData::ResourceDetail(serde_json::json!({}))
                 }

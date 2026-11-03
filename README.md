@@ -77,6 +77,7 @@ az9s --timings                             # launch, print a timing summary on e
 
 | Command | Shows |
 |---|---|
+| `:ctx [all\|<tenant>]` | Tenants you can use (`Enter` switches), or switch by name, domain or ID; `all` returns to the default login |
 | `:mg` | Management group tree (the start view) |
 | `:sub` | Subscriptions |
 | `:rg [all\|<sub>] [loc=… tag=…]` | Resource groups. Without a scope: where you are (the highlighted or current subscription or management group; all subscriptions if none) |
@@ -118,6 +119,7 @@ use another file.
 ```toml
 start = "mg"                               # first view: "mg" (tree) or "sub"
 default_subscription = "prod-connectivity" # for :rg/:res/:type/:tag without context
+tenant = "<tenant-id>"                     # start in this tenant (like :ctx)
 refresh_interval = 120                     # auto-refresh every N s (min 30); 0 = off
 read_only = true                           # status bar shows RO; actions (M4) disabled
 ```
@@ -134,6 +136,7 @@ with the defaults and the status bar names the line and the problem.
 | Status bar says "Resource Graph unavailable … used ARM" | Lists still load, but more slowly; check `just run-debug` logs |
 | A resource you just changed looks stale | Resource Graph can lag ARM briefly; press `r`, or run with `AZ9S_BACKEND=arm` |
 | `o` says "No browser could be started" (e.g. WSL) | The Portal link is copied instead; paste it into a browser. On WSL, installing `wslu` (`wslview`) helps, though az9s also tries `cmd.exe` |
+| `:ctx` switch fails with "no token for tenant" | Run `az login --tenant <id>` once for that tenant, then switch again |
 | Something feels slow | Run `az9s --timings` and include the table in an issue |
 
 ## Contributing

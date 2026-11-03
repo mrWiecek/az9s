@@ -180,7 +180,7 @@ Work items, in order:
 - [x] **Scope tree:** tenant root → management groups → subscriptions → resource
       groups, with `:mg` to jump. This becomes the top-level navigation (needed by M3),
       and az9s opens at the tenant root management group by default.
-- [ ] `:ctx` to switch tenant.
+- [x] `:ctx` to switch tenant.
 
 ## M3 — Policy (3 weeks)
 
@@ -242,4 +242,4 @@ Work items, in order:
 | Command naming | Always singular (`:sub`, `:rg`, `:res`, `:mg`, …); no plural aliases | **Decided** (done) |
 | Default scope | Tenant root management group | **Decided** |
 | Read backend | Azure Resource Graph for lists, ARM for single-resource reads and writes | Proposed (validate in M1) |
-| Multi-tenant | Switch tenants with `:ctx`; no parallel multi-tenant view | Proposed |
+| Multi-tenant | Switch tenants with `:ctx`; no parallel multi-tenant view | Done (v0.10.0) |

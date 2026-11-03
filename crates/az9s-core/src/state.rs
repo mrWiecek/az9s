@@ -68,6 +68,13 @@ pub struct AppState {
     /// Settings from the config file
     pub config: crate::config::Config,
 
+    /// Tenants the user can access (names from Azure), once loaded
+    pub tenants: Vec<crate::models::Tenant>,
+
+    /// The tenant az9s works in (`:ctx`); `None`: the Azure CLI's default
+    /// login, with subscriptions of every tenant listed
+    pub tenant: Option<String>,
+
     /// Help screen state
     pub help_open: bool,
 
@@ -170,6 +177,18 @@ pub struct TagCount {
     pub count: usize,
 }
 
+/// One row of the tenant view (`:ctx`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TenantRow {
+    /// `None`: all tenants (the CLI's default login)
+    pub id: Option<String>,
+    pub name: String,
+    pub domain: Option<String>,
+    pub subscriptions: usize,
+    /// The tenant az9s works in now
+    pub current: bool,
+}
+
 /// Memoized tag counts for one resource list and query.
 #[derive(Debug)]
 struct TagSummaryMemo {
@@ -207,6 +226,8 @@ pub enum ViewMode {
     ResourceTypeSummary,
     /// Tag key/value counts (`:tag`)
     TagSummary,
+    /// Tenants to switch to (`:ctx`)
+    TenantList,
     ResourceDetail,
     Logs,
 }
@@ -364,6 +385,7 @@ impl AppState {
             ViewMode::ResourceList => self.filtered_resources().len(),
             ViewMode::ResourceTypeSummary => self.type_summary().len(),
             ViewMode::TagSummary => self.tag_summary().len(),
+            ViewMode::TenantList => self.tenant_rows().len(),
             ViewMode::ManagementGroupTree => self.tree_rows().len(),
             _ => 0,
         }
@@ -404,9 +426,112 @@ impl AppState {
 
     /// Get filtered subscriptions based on current filter
     pub fn filtered_subscriptions(&self) -> Vec<&Subscription> {
-        self.filter_list(ListKind::Subscriptions, &self.subscriptions, |s, needle| {
-            contains_ignore_ascii_case(&s.name, needle) || contains_ignore_ascii_case(&s.id, needle)
-        })
+        // The current tenant is part of the memo key.
+        let signature = self.tenant.clone().unwrap_or_default();
+        self.filter_list_with(
+            ListKind::Subscriptions,
+            &self.subscriptions,
+            &signature,
+            |s, needle| {
+                self.in_tenant(s)
+                    && (needle.is_empty()
+                        || contains_ignore_ascii_case(&s.name, needle)
+                        || contains_ignore_ascii_case(&s.id, needle))
+            },
+        )
+    }
+
+    /// Whether a subscription belongs to the current tenant (always, with
+    /// no tenant chosen).
+    pub fn in_tenant(&self, sub: &Subscription) -> bool {
+        self.tenant
+            .as_ref()
+            .is_none_or(|t| sub.tenant_id.eq_ignore_ascii_case(t))
+    }
+
+    /// The current tenant's name (or ID, before names load).
+    pub fn tenant_label(&self) -> Option<String> {
+        let id = self.tenant.as_ref()?;
+        Some(
+            self.tenants
+                .iter()
+                .find(|t| t.id.eq_ignore_ascii_case(id))
+                .map(|t| t.name.clone())
+                .unwrap_or_else(|| id.clone()),
+        )
+    }
+
+    /// Rows of the tenant view: "all tenants" first, then every tenant known
+    /// from Azure or from a subscription, with its subscription count.
+    pub fn tenant_rows(&self) -> Vec<TenantRow> {
+        let mut rows: Vec<TenantRow> = self
+            .tenants
+            .iter()
+            .map(|t| TenantRow {
+                id: Some(t.id.clone()),
+                name: t.name.clone(),
+                domain: t.domain.clone(),
+                subscriptions: 0,
+                current: false,
+            })
+            .collect();
+        for sub in &self.subscriptions {
+            match rows.iter_mut().find(|r| {
+                r.id.as_deref()
+                    .is_some_and(|id| id.eq_ignore_ascii_case(&sub.tenant_id))
+            }) {
+                Some(row) => row.subscriptions += 1,
+                None if !sub.tenant_id.is_empty() => rows.push(TenantRow {
+                    id: Some(sub.tenant_id.clone()),
+                    name: sub.tenant_id.clone(),
+                    domain: None,
+                    subscriptions: 1,
+                    current: false,
+                }),
+                None => {}
+            }
+        }
+        rows.sort_by_cached_key(|r| r.name.to_lowercase());
+        rows.insert(
+            0,
+            TenantRow {
+                id: None,
+                name: "All tenants".into(),
+                domain: Some("the Azure CLI's default login".into()),
+                subscriptions: self.subscriptions.len(),
+                current: false,
+            },
+        );
+        for row in &mut rows {
+            row.current = match (&row.id, &self.tenant) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                _ => false,
+            };
+        }
+        if self.filter.is_empty() {
+            return rows;
+        }
+        let needle = self.filter.to_ascii_lowercase();
+        rows.into_iter()
+            .filter(|r| {
+                contains_ignore_ascii_case(&r.name, &needle)
+                    || r.id
+                        .as_deref()
+                        .is_some_and(|id| contains_ignore_ascii_case(id, &needle))
+                    || r.domain
+                        .as_deref()
+                        .is_some_and(|d| contains_ignore_ascii_case(d, &needle))
+            })
+            .collect()
+    }
+
+    /// The selected row of the tenant view.
+    pub fn selected_tenant_row(&self) -> Option<TenantRow> {
+        if self.view != ViewMode::TenantList {
+            return None;
+        }
+        self.tenant_rows().into_iter().nth(self.list_state.selected)
     }
 
     /// Get filtered resource groups based on current filter
@@ -558,20 +683,10 @@ impl AppState {
             .map(|(t, _)| t)
     }
 
-    /// Filter `items` by the current filter, reusing the previous result when
-    /// neither the filter nor the list changed.
-    fn filter_list<'a, T>(
-        &self,
-        kind: ListKind,
-        items: &'a [T],
-        matches: impl Fn(&T, &str) -> bool,
-    ) -> Vec<&'a T> {
-        self.filter_list_with(kind, items, "", matches)
-    }
-
-    /// Like `filter_list`, plus an extra filter identified by `signature`
-    /// (part of the memo key; empty means none). `matches` gets the
-    /// lowercase text filter, which may be empty.
+    /// Filter `items` by the current `/` text plus an extra filter identified
+    /// by `signature` (part of the memo key; empty means none), reusing the
+    /// previous result when neither changed. `matches` gets the lowercase
+    /// text filter, which may be empty.
     fn filter_list_with<'a, T>(
         &self,
         kind: ListKind,
@@ -646,7 +761,10 @@ impl AppState {
                     crate::scope_tree::TreeRowKind::Unplaced => None,
                 }
             }
-            ViewMode::ResourceTypeSummary | ViewMode::TagSummary | ViewMode::Logs => None,
+            ViewMode::ResourceTypeSummary
+            | ViewMode::TagSummary
+            | ViewMode::TenantList
+            | ViewMode::Logs => None,
         }
     }
 

@@ -179,3 +179,137 @@ async fn config_can_start_on_subscriptions_and_reports_a_broken_file() {
         "{notice}"
     );
 }
+
+#[tokio::test]
+async fn switching_tenant_rebuilds_the_fetcher_and_keeps_a_tree_per_tenant() {
+    use az9s_core::app::FetcherFactory;
+    use az9s_core::models::Subscription;
+    use std::sync::Mutex;
+
+    let (url, _) = serve_paths(|_, _| error(500, "unused")).await;
+    let cache = Cache::new(Path::new(":memory:")).unwrap();
+    // A cached tree for tenant t-2 only.
+    let t2_tree = ScopeTree {
+        root: "t-2".into(),
+        root_display_name: "Fabrikam Root".into(),
+        ..Default::default()
+    };
+    cache
+        .repository()
+        .put_document("scope_tree:t-2", &serde_json::to_string(&t2_tree).unwrap())
+        .unwrap();
+    let mut app = app(&url, cache);
+    let asked: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+    let asked_in_factory = asked.clone();
+    let factory: FetcherFactory = Arc::new(move |tenant: Option<&str>| {
+        asked_in_factory
+            .lock()
+            .unwrap()
+            .push(tenant.map(str::to_string));
+        Some(Arc::new(NoArm) as Arc<dyn Fetcher>)
+    });
+    app.set_fetcher_factory(factory);
+    let sub = |id: &str, tenant: &str| Subscription {
+        id: id.into(),
+        name: id.into(),
+        state: "Enabled".into(),
+        tenant_id: tenant.into(),
+    };
+    app.state_mut().subscriptions = vec![sub("a", "t-1"), sub("b", "t-2"), sub("c", "T-2")];
+    app.state_mut().resources = vec![]; // stand-in for lists of the old tenant
+
+    app.switch_tenant(Some("t-2".into()));
+    assert_eq!(asked.lock().unwrap().as_slice(), [Some("t-2".to_string())]);
+    assert_eq!(app.state().view, ViewMode::ManagementGroupTree);
+    assert_eq!(
+        app.state()
+            .scope_tree
+            .as_ref()
+            .map(|t| t.root_display_name.as_str()),
+        Some("Fabrikam Root"),
+        "that tenant's cached tree"
+    );
+    app.state_mut().view = ViewMode::SubscriptionList;
+    let visible: Vec<String> = app
+        .state()
+        .filtered_subscriptions()
+        .iter()
+        .map(|s| s.id.clone())
+        .collect();
+    assert_eq!(visible, ["b", "c"], "only that tenant's subscriptions");
+
+    app.switch_tenant(None);
+    assert_eq!(asked.lock().unwrap().last().unwrap(), &None);
+    assert!(
+        app.state().scope_tree.is_none(),
+        "no tree cached for the default"
+    );
+    app.state_mut().view = ViewMode::SubscriptionList;
+    assert_eq!(app.state().filtered_subscriptions().len(), 3);
+}
+
+#[test]
+fn tenant_rows_merge_names_with_subscription_tenants() {
+    use az9s_core::models::{Subscription, Tenant};
+    use az9s_core::state::AppState;
+    let mut state = AppState::new();
+    state.tenants = vec![Tenant {
+        id: "t-1".into(),
+        name: "Contoso".into(),
+        domain: Some("contoso.onmicrosoft.com".into()),
+    }];
+    state.subscriptions = ["t-1", "t-1", "t-9"]
+        .iter()
+        .enumerate()
+        .map(|(i, t)| Subscription {
+            id: format!("s{i}"),
+            name: format!("s{i}"),
+            state: "Enabled".into(),
+            tenant_id: t.to_string(),
+        })
+        .collect();
+    state.tenant = Some("T-1".into());
+    let rows = state.tenant_rows();
+    let summary: Vec<(Option<&str>, &str, usize, bool)> = rows
+        .iter()
+        .map(|r| (r.id.as_deref(), r.name.as_str(), r.subscriptions, r.current))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (None, "All tenants", 3, false),
+            (Some("t-1"), "Contoso", 2, true),
+            (Some("t-9"), "t-9", 1, false),
+        ]
+    );
+    assert_eq!(state.tenant_label().as_deref(), Some("Contoso"));
+}
+
+#[tokio::test]
+async fn config_tenant_starts_in_that_tenant() {
+    use az9s_core::app::FetcherFactory;
+    use az9s_core::config::{Config, Loaded};
+    use std::sync::Mutex;
+    let (url, _) = serve_paths(|_, _| error(500, "unused")).await;
+    let mut app = app(&url, Cache::new(Path::new(":memory:")).unwrap());
+    let asked: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+    let asked_in_factory = asked.clone();
+    let factory: FetcherFactory = Arc::new(move |tenant: Option<&str>| {
+        asked_in_factory
+            .lock()
+            .unwrap()
+            .push(tenant.map(str::to_string));
+        Some(Arc::new(NoArm) as Arc<dyn Fetcher>)
+    });
+    app.set_fetcher_factory(factory);
+    app.apply_config(Loaded {
+        config: Config {
+            tenant: Some("t-2".into()),
+            ..Config::default()
+        },
+        path: None,
+        problem: None,
+    });
+    assert_eq!(app.state().tenant.as_deref(), Some("t-2"));
+    assert_eq!(asked.lock().unwrap().as_slice(), [Some("t-2".to_string())]);
+}

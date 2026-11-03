@@ -12,6 +12,22 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-03
+
+### Added
+- **`:ctx`: switch tenant.** `:ctx` lists the tenants you can use, with
+  names and domains from Azure, how many of your subscriptions each has,
+  and ● on the current one; `Enter` switches. `:ctx <name|domain|ID>`
+  switches directly, `:ctx all` returns to the Azure CLI's default login.
+  - After a switch, Azure is asked as that tenant (tokens from `az account
+    get-access-token --tenant`), and subscriptions, `all`, the management
+    group tree (cached per tenant), the palette and suggestions cover that
+    tenant only. The breadcrumb shows `[tenant]`.
+  - If the CLI has no token for the tenant, the error says to run
+    `az login --tenant <id>` once.
+  - `tenant = "<id>"` in the config file starts in that tenant.
+  - The ARM fallback (`AZ9S_BACKEND=arm`) keeps the default login.
+
 ## [0.9.0] - 2026-11-03
 
 ### Added
@@ -385,7 +401,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/mrWiecek/az9s/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/mrWiecek/az9s/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/mrWiecek/az9s/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/mrWiecek/az9s/compare/v0.6.0...v0.7.0

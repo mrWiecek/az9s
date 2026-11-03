@@ -105,6 +105,12 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   in one memoized pass; `AppState::type_summary` counts types and
   `AppState::tag_summary` counts tag key/value pairs (each memoized per list
   and query).
+- Tenants (`:ctx`): `App::switch_tenant` swaps the loader's fetcher for one
+  built by the `FetcherFactory` (tokens from `CliTenantTokenSource`, i.e.
+  `az account get-access-token --tenant`), drops the old tenant's lists and
+  reloads the start view. `AppState::tenant` filters subscriptions
+  (`in_tenant`); the scope tree is cached per tenant (`scope_tree:<id>`).
+  Names come from `ManagementGroupClient::tenants` (`GET /tenants`).
 - `config.rs`: the optional config file (`Config::path`, `Config::load`,
   `TEMPLATE` for `--init-config`). `App::start` applies it: the start view,
   and `AppState::config` for the default subscription, auto-refresh
