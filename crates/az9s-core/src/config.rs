@@ -31,10 +31,27 @@ refresh_interval = 0
 # the Azure CLI's default login and lists every tenant's subscriptions.
 # tenant = "00000000-0000-0000-0000-000000000000"
 
+# Colours: "default" (dark terminals), "light" (light backgrounds) or "mono"
+# (no colours). Setting the NO_COLOR environment variable also means mono.
+theme = "default"
+
 # Read-only mode: actions that change Azure (planned, M4) are disabled.
 # The status bar shows RO while it is on.
 read_only = true
 "#;
+
+/// Colour theme (the TUI maps each to colours).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeName {
+    /// For dark terminals (the original colours)
+    #[default]
+    Default,
+    /// For light terminal backgrounds
+    Light,
+    /// No colours: bold, underline and reversed text only
+    Mono,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -52,6 +69,7 @@ pub struct Config {
     pub default_subscription: Option<String>,
     /// Tenant ID to start in (`:ctx`).
     pub tenant: Option<String>,
+    pub theme: ThemeName,
     /// Seconds; 0 = off, otherwise at least [`MIN_REFRESH_SECS`].
     pub refresh_interval: u64,
     pub read_only: bool,
@@ -63,6 +81,7 @@ impl Default for Config {
             start: StartView::Mg,
             default_subscription: None,
             tenant: None,
+            theme: ThemeName::Default,
             refresh_interval: 0,
             read_only: true,
         }
@@ -167,6 +186,11 @@ mod tests {
         .unwrap();
         assert_eq!(config.start, StartView::Sub);
         assert_eq!(config.default_subscription.as_deref(), Some("prod"));
+        assert_eq!(
+            Config::parse("theme = \"light\"").unwrap().theme,
+            ThemeName::Light
+        );
+        assert!(Config::parse("theme = \"neon\"").is_err());
         let with_tenant = Config::parse("tenant = \" AB-CD \"").unwrap();
         assert_eq!(with_tenant.tenant.as_deref(), Some("ab-cd"));
         assert_eq!(

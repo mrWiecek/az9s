@@ -186,6 +186,10 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   next/previous with wrap-around, and highlighting that splits styled spans.
   It runs over `ui::detail_lines`, the same lines the view draws, so match
   positions and the screen agree.
+- `ui/theme.rs`: colours by role (`theme().accent`, `.muted`,
+  `.selection()`, `.search_match()`), one `Theme` per `theme` setting;
+  set once at startup from the config (`NO_COLOR` forces mono). Views never
+  name a colour directly.
 - `desktop.rs`: the `Desktop` trait for copying (OSC 52 escape sequence)
   and opening URLs (`open` / `xdg-open` / `start`). Tests record instead.
 - `command.rs`: parses `:` commands (`:mg`, `:sub`, `:rg [all|<sub>]`,

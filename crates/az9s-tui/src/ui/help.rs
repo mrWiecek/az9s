@@ -1,6 +1,7 @@
+use super::theme::theme;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
@@ -12,18 +13,18 @@ pub fn help_lines() -> Vec<Line<'static>> {
         Line::from(Span::styled(
             text,
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme().highlight)
                 .add_modifier(Modifier::BOLD),
         ))
     };
     let dim =
-        |text: &'static str| Line::from(Span::styled(text, Style::default().fg(Color::DarkGray)));
+        |text: &'static str| Line::from(Span::styled(text, Style::default().fg(theme().muted)));
     let l = Line::from;
     vec![
         Line::from(Span::styled(
             "az9s help  ·  j/k or ↑/↓ scroll  ·  Esc, q or ? close",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme().accent)
                 .add_modifier(Modifier::BOLD),
         )),
         l(""),
@@ -118,6 +119,7 @@ pub fn help_lines() -> Vec<Line<'static>> {
         l("  default_subscription = \"…\"   scope for :rg/:res/:type/:tag without context"),
         l("  refresh_interval = 120       auto-refresh every N seconds (min 30; 0 off)"),
         l("  tenant = \"<tenant-id>\"       start in this tenant (like :ctx)"),
+        l("  theme = \"default\"            \"light\" for light terminals, \"mono\" for no colours"),
         l("  read_only = true             status bar shows RO; actions (M4) disabled"),
         l(""),
         heading("Status bar"),
@@ -140,7 +142,7 @@ pub fn render_help(f: &mut Frame, area: Rect, scroll: &mut usize) {
             Block::default()
                 .title(" Help ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
+                .border_style(Style::default().fg(theme().accent)),
         )
         .wrap(Wrap { trim: false })
         .alignment(Alignment::Left)

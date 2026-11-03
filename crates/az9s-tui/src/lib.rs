@@ -25,6 +25,7 @@ pub use event::{Event, EventHandler};
 /// Run the TUI application
 pub async fn run(core_app: App) -> Result<()> {
     info!("Starting TUI");
+    ui::theme::set_theme(core_app.state().config.theme);
 
     // Setup panic hook to restore terminal on panic
     let original_hook = panic::take_hook();

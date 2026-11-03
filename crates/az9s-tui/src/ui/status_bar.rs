@@ -1,6 +1,7 @@
+use super::theme::theme;
 use az9s_core::state::{format_age, AppState, DataSource};
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
 };
 
@@ -24,7 +25,7 @@ impl StatusBar {
         if let Some(sub) = &state.selected_subscription {
             spans.push(Span::styled(
                 format!("Sub: {} ", Self::truncate(&sub.name, 20)),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme().highlight),
             ));
             spans.push(Span::raw("| "));
         }
@@ -34,7 +35,7 @@ impl StatusBar {
             spans.push(Span::styled(
                 "RO ",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme().accent)
                     .add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::raw("| "));
@@ -42,7 +43,7 @@ impl StatusBar {
         if state.config.refresh_interval > 0 {
             spans.push(Span::styled(
                 format!("auto ⟳ {}s ", state.config.refresh_interval),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme().accent),
             ));
             spans.push(Span::raw("| "));
         }
@@ -59,7 +60,7 @@ impl StatusBar {
             spans.push(Span::styled(
                 "Filtered ",
                 Style::default()
-                    .fg(Color::Magenta)
+                    .fg(theme().special)
                     .add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::raw("| "));
@@ -70,10 +71,10 @@ impl StatusBar {
             let frame = SPINNER[state.spinner_frame % SPINNER.len()];
             spans.push(Span::styled(
                 format!("{frame} Loading"),
-                Style::default().fg(Color::Green),
+                Style::default().fg(theme().ok),
             ));
         } else {
-            spans.push(Span::styled("Ready", Style::default().fg(Color::Green)));
+            spans.push(Span::styled("Ready", Style::default().fg(theme().ok)));
         }
 
         // Non-blocking notice, e.g. some subscriptions failed to load
@@ -81,7 +82,7 @@ impl StatusBar {
             spans.push(Span::raw(" | "));
             spans.push(Span::styled(
                 format!("⚠ {notice}"),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme().highlight),
             ));
         }
 
@@ -99,9 +100,9 @@ impl StatusBar {
         if let Some(fresh) = state.current_freshness() {
             let age = format_age(fresh.as_of);
             let (text, color) = match fresh.source {
-                DataSource::Azure => (format!("● Azure · {age}"), Color::Green),
-                DataSource::Cache => (format!("◐ Cached · {age}"), Color::Yellow),
-                DataSource::None => ("○ Disconnected".to_string(), Color::Red),
+                DataSource::Azure => (format!("● Azure · {age}"), theme().ok),
+                DataSource::Cache => (format!("◐ Cached · {age}"), theme().highlight),
+                DataSource::None => ("○ Disconnected".to_string(), theme().error),
             };
             return Span::styled(
                 text,
@@ -111,19 +112,19 @@ impl StatusBar {
         match state.data_source {
             DataSource::Azure => Span::styled(
                 "● Azure",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(theme().ok).add_modifier(Modifier::BOLD),
             ),
             DataSource::Cache => Span::styled(
                 "◐ Cached",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme().highlight)
                     .add_modifier(Modifier::BOLD),
             ),
             DataSource::None => Span::styled(
                 "○ Disconnected",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme().error)
+                    .add_modifier(Modifier::BOLD),
             ),
         }
     }
