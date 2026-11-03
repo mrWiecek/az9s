@@ -41,6 +41,9 @@ pub enum CommandKind {
     RoleAssignments { scope: Scope },
     /// Role definitions, built-in and custom
     RoleDefinitions,
+    /// One principal's access across the tenant (name, sign-in name, app
+    /// ID or object ID)
+    Access(String),
     /// Policy exemptions at or below a scope (a management group or
     /// subscription by name, or `all`)
     Exemption { scope: Scope },
@@ -110,6 +113,16 @@ impl Command {
                         Some(t) if t.eq_ignore_ascii_case("all") => Scope::All,
                         Some(_) => Scope::Subscription(parts[1..].join(" ")),
                     },
+                },
+            },
+            "access" => Self {
+                kind: match parts[1..].join(" ") {
+                    q if q.is_empty() => CommandKind::Invalid(
+                        ":access needs a principal: a name, sign-in name, app ID or \
+                         object ID (or press p on a row of :ra)"
+                            .into(),
+                    ),
+                    q => CommandKind::Access(q),
                 },
             },
             "role" | "roledefinition" | "role-definition" => Self {
@@ -189,7 +202,7 @@ impl Command {
         match &self.kind {
             CommandKind::Unknown(cmd) if !cmd.is_empty() => {
                 Some(format!(
-                    "Unknown command: '{}'\n\nAvailable commands:\n  :policy [all|<sub>] - Policy assignments and compliance\n  :compliance [all|<mg>] - Subscriptions by non-compliant resources\n  :exemption [all|<mg>|<sub>] - Policy exemptions and when they expire\n  :ra [all|<mg>|<sub>] - Role assignments (inherited, here, below)\n  :role - Role definitions, built-in and custom\n  :ctx [all|<tenant>] - Tenants\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type\n  :tag [all|<sub>] - Tags and how many resources carry them",
+                    "Unknown command: '{}'\n\nAvailable commands:\n  :policy [all|<sub>] - Policy assignments and compliance\n  :compliance [all|<mg>] - Subscriptions by non-compliant resources\n  :exemption [all|<mg>|<sub>] - Policy exemptions and when they expire\n  :ra [all|<mg>|<sub>] - Role assignments (inherited, here, below)\n  :role - Role definitions, built-in and custom\n  :access <principal> - Everything one user, group or app can do\n  :ctx [all|<tenant>] - Tenants\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type\n  :tag [all|<sub>] - Tags and how many resources carry them",
                     cmd
                 ))
             }

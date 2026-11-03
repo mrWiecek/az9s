@@ -44,6 +44,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("exemption", "policy exemptions and when they expire"),
     ("ra", "role assignments"),
     ("role", "role definitions, built-in and custom"),
+    ("access", "everything one user, group or app can do"),
     ("ctx", "switch tenant"),
 ];
 
@@ -68,6 +69,15 @@ pub fn complete(input: &str, state: &AppState) -> Completion {
                     let id = r.id?;
                     Some((r.name, r.domain.unwrap_or(id)))
                 }));
+                prefixed(word, options.into_iter())
+            } else if cmd == "access" {
+                let mut options: Vec<(String, String)> = state
+                    .principals
+                    .values()
+                    .map(|p| (p.display_name.clone(), p.kind.clone()))
+                    .collect();
+                options.sort();
+                options.dedup();
                 prefixed(word, options.into_iter())
             } else if cmd == "compliance" || cmd == "exemption" || cmd == "ra" {
                 let mut options = vec![("all".to_string(), "whole tenant".to_string())];
@@ -343,7 +353,7 @@ mod tests {
             ["type", "tag", "exemption", "ctx"],
             "starting with t, then containing t"
         );
-        assert_eq!(texts("").len(), 12);
+        assert_eq!(texts("").len(), 13);
         assert_eq!(texts("comp"), ["compliance"]);
         assert!(texts("xyz").is_empty());
     }

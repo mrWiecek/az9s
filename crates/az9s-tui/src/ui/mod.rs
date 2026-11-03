@@ -592,7 +592,21 @@ fn draw_role_assignments(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<
             format!(" · role {name}")
         })
         .unwrap_or_default();
-    let heading = format!("Role assignments · {scope_name}{role_note}");
+    // One principal's access: who, and through how many groups.
+    let principal = state.ra_principal.as_ref().map(|id| {
+        let p = state.principals.get(id);
+        let name = p.map_or(id.clone(), |p| p.display_name.clone());
+        let detail = p
+            .map(|p| p.detail.clone())
+            .filter(|d| !d.is_empty())
+            .map(|d| format!(" ({d})"))
+            .unwrap_or_default();
+        (name + &detail, state.principal_groups.get(id).map(Vec::len))
+    });
+    let heading = match &principal {
+        Some((who, _)) => format!("Access · {who}"),
+        None => format!("Role assignments · {scope_name}{role_note}"),
+    };
     if rows.is_empty() {
         let message = if state.loading {
             "Loading role assignments…".to_string()
@@ -647,7 +661,17 @@ fn draw_role_assignments(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<
         .collect();
 
     let count = |reach: fn(&Reach) -> bool| rows.iter().filter(|r| reach(&r.reach)).count();
-    let summary = if state.ra_scope.is_some() {
+    let summary = if let Some((_, groups)) = &principal {
+        let direct = rows.iter().filter(|r| r.via.is_none()).count();
+        let groups = match groups {
+            Some(n) => format!("member of {n} group{}", if *n == 1 { "" } else { "s" }),
+            None => "groups loading…".into(),
+        };
+        format!(
+            "{direct} direct, {} via groups, {groups}",
+            rows.len() - direct
+        )
+    } else if state.ra_scope.is_some() {
         format!(
             "{} inherited, {} here, {} below",
             count(|r| matches!(r, Reach::Inherited(_))),
@@ -664,7 +688,7 @@ fn draw_role_assignments(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<
     let title = if state.filter_mode {
         format!("{heading} ({}) - Filter: {}_", rows.len(), state.filter)
     } else {
-        format!("{heading} ({summary}) · C custom, B built-in · Enter role, d details")
+        format!("{heading} ({summary}) · C custom, B built-in · Enter role, d details, p principal")
     };
     let list = SelectableList::new(items)
         .block(Block::default().borders(Borders::ALL).title(title))
@@ -2074,6 +2098,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("↑↓/jk", "Navigate"),
                 ("Enter", "Role"),
                 ("d", "Details"),
+                ("p", "Principal's access"),
                 ("/", "Filter"),
                 ("c", "Copy"),
                 ("y", "Copy ID"),

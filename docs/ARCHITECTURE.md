@@ -139,6 +139,12 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   (`az9s_azure::directory::DirectoryClient`, `directoryObjects/getByIds`,
   a Graph-audience token from the same login) for the IDs not yet named;
   names accumulate in `AppState::principals` and are cached per tenant.
+  One principal's access (`App::open_access`, `AppState::ra_principal`)
+  adds its groups from `LoadRequest::PrincipalGroups` (Graph
+  `transitiveMemberOf`, nested groups included) and keeps the assignments
+  of the principal or any of those groups, each with the group it comes
+  `via`. Navigation contexts of `:ra` carry its scope, role and principal
+  so `Esc` restores the list as it was.
 - Exemptions: `LoadRequest::PolicyExemptions` (tenant-wide, cached as
   `policy_exemptions:<tenant>`) into `PolicyExemption`. `:exemption` lists
   those `within` a scope (`AppState::exemption_rows`, by `Expiry`); the

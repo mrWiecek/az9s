@@ -296,10 +296,28 @@ impl App {
         let state = &mut self.state;
         state.ra_scope = scope;
         state.ra_role = role;
+        state.ra_principal = None;
         state.view = ViewMode::RoleAssignments;
         state.list_state.reset();
         self.load_rbac();
         self.load_principal_names();
+    }
+
+    /// One principal's access across the tenant: its own role assignments
+    /// and its groups' (nested groups too, from Microsoft Graph).
+    pub fn open_access(&mut self, principal_id: &str) {
+        let id = principal_id.to_ascii_lowercase();
+        let state = &mut self.state;
+        state.ra_scope = None;
+        state.ra_role = None;
+        state.ra_principal = Some(id.clone());
+        state.view = ViewMode::RoleAssignments;
+        state.list_state.reset();
+        self.load_rbac();
+        self.load_principal_names();
+        if !self.state.principal_groups.contains_key(&id) {
+            self.request(LoadRequest::PrincipalGroups { principal_id: id });
+        }
     }
 
     /// `:role`: every role definition, custom first.
@@ -532,6 +550,7 @@ impl App {
         let result = match request {
             LoadRequest::Subscriptions
             | LoadRequest::Tenants
+            | LoadRequest::PrincipalGroups { .. }
             | LoadRequest::PolicyStates { .. }
             | LoadRequest::ResourcePolicy { .. } => return,
             LoadRequest::Principals { .. } => {
@@ -673,6 +692,7 @@ impl App {
             LoadKind::RoleAssignments => self.state.role_assignments.len(),
             LoadKind::RoleDefinitions => self.state.role_definitions.len(),
             LoadKind::Principals => self.state.principals.len(),
+            LoadKind::PrincipalGroups => self.state.principal_groups.len(),
             LoadKind::ComplianceRollup => usize::from(self.state.compliance_rollup.is_some()),
             LoadKind::PolicyCompliance => usize::from(self.state.policy_compliance.is_some()),
             LoadKind::ComplianceSummary => usize::from(self.state.compliance_summary.is_some()),
@@ -806,6 +826,12 @@ impl App {
                 // enough. Otherwise the list is empty or incomplete: error.
                 if kind == LoadKind::ScopeTree && !pending.staged {
                     self.fall_back_to_subscriptions(&e);
+                } else if kind == LoadKind::PrincipalGroups {
+                    // Direct assignments still show.
+                    self.state.notice = Some(format!(
+                        "Group memberships unavailable (Microsoft Graph): {e}; \
+                         showing direct assignments only"
+                    ));
                 } else if kind == LoadKind::Principals {
                     // The assignments still show the principal IDs.
                     self.state.notice = Some(format!(
@@ -878,6 +904,17 @@ impl App {
             LoadedData::PolicyExemptions(items) => self.state.policy_exemptions = items,
             LoadedData::RoleAssignments(items) => self.state.role_assignments = items,
             LoadedData::RoleDefinitions(items) => self.state.role_definitions = items,
+            LoadedData::PrincipalGroups(id, groups) => {
+                if !id.is_empty() {
+                    // Their names are known now too.
+                    for g in &groups {
+                        self.state
+                            .principals
+                            .insert(g.id.to_ascii_lowercase(), g.clone());
+                    }
+                    self.state.principal_groups.insert(id, groups);
+                }
+            }
             // Names add up: each lookup asks only for the missing ones.
             LoadedData::Principals(items) => self
                 .state
@@ -927,6 +964,7 @@ impl App {
             // Tenant names are small and refreshed on each :ctx; policy
             // states change often and are always loaded fresh.
             LoadRequest::Tenants
+            | LoadRequest::PrincipalGroups { .. }
             | LoadRequest::PolicyStates { .. }
             | LoadRequest::ResourcePolicy { .. } => return,
             LoadRequest::Principals { .. } => {
@@ -1085,7 +1123,7 @@ fn view_of(kind: LoadKind) -> ViewMode {
         LoadKind::PolicyExemptions => ViewMode::ExemptionList,
         LoadKind::RoleAssignments => ViewMode::RoleAssignments,
         LoadKind::RoleDefinitions => ViewMode::RoleDefinitions,
-        LoadKind::Principals => ViewMode::RoleAssignments,
+        LoadKind::Principals | LoadKind::PrincipalGroups => ViewMode::RoleAssignments,
     }
 }
 

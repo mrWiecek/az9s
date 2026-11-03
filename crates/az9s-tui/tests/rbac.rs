@@ -90,6 +90,23 @@ impl Fetcher for Azure {
                     })
                     .collect(),
             )),
+            // Ada (principal-1) is in the group principal-2, through a nested group.
+            LoadRequest::PrincipalGroups { principal_id } => Ok(LoadedData::PrincipalGroups(
+                principal_id.clone(),
+                if principal_id == "principal-1" {
+                    ["principal-2", "nested-group"]
+                        .iter()
+                        .map(|id| az9s_core::rbac::Principal {
+                            id: id.to_string(),
+                            display_name: format!("Group {id}"),
+                            kind: "group".into(),
+                            detail: String::new(),
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                },
+            )),
             _ => Err("not in this test".into()),
         };
         async move {
@@ -306,4 +323,79 @@ async fn roles_custom_first_with_their_assignments() {
         app.state().selected_resource_detail.as_ref().unwrap().name,
         "Owner"
     );
+}
+
+async fn settle(app: &mut TuiApp, loads: &mut az9s_core::loader::LoadReceiver) {
+    while app.state().loading {
+        app.apply_load(loads.recv().await.unwrap());
+    }
+}
+
+#[tokio::test]
+async fn a_principals_access_direct_and_through_groups() {
+    let mut app = setup();
+    let mut loads = app.take_load_receiver().unwrap();
+    command(&mut app, "ra all").await;
+    settle(&mut app, &mut loads).await;
+
+    // p on Ada's Owner assignment: everything Ada can do.
+    let ada = app
+        .state()
+        .role_assignment_rows()
+        .iter()
+        .position(|r| r.assignment.principal_id == "principal-1")
+        .unwrap();
+    app.state_mut().list_state.selected = ada;
+    press(&mut app, KeyCode::Char('p')).await;
+    settle(&mut app, &mut loads).await;
+    let rows = app.state().role_assignment_rows();
+    let summary: Vec<(&str, &str, &str)> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.role_name.as_str(),
+                r.scope_label.as_str(),
+                r.origin_label.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("Owner", "tenant root (/)", "direct"),
+            ("Reader", "Platform", "via Group principal-2"),
+        ]
+    );
+    let text = screen(&mut app);
+    assert!(
+        text.contains(
+            "Access · Ada Lovelace (ada@contoso.com) (1 direct, 1 via groups, member of 2 groups)"
+        ),
+        "{text}"
+    );
+
+    // Esc: back to the tenant's list, unfiltered, on Ada's row.
+    press(&mut app, KeyCode::Esc).await;
+    assert_eq!(app.state().view, ViewMode::RoleAssignments);
+    assert_eq!(app.state().ra_principal, None);
+    assert_eq!(app.state().role_assignment_rows().len(), 5);
+    assert_eq!(
+        app.state()
+            .selected_role_assignment()
+            .unwrap()
+            .assignment
+            .principal_id,
+        "principal-1"
+    );
+
+    // :access by sign-in name finds the same principal.
+    command(&mut app, "access ada@contoso.com").await;
+    assert_eq!(app.state().ra_principal.as_deref(), Some("principal-1"));
+    command(&mut app, "access nobody").await;
+    assert!(app
+        .state()
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("No principal named nobody"));
 }
