@@ -7,6 +7,7 @@ pub mod config;
 pub mod detail;
 pub mod export;
 pub mod fuzzy;
+pub mod gcp;
 pub mod loader;
 pub mod models;
 pub mod palette;

@@ -17,6 +17,19 @@ crates/
 Dependencies only point downward: `c9s → c9s-tui → c9s-core → c9s-azure`.
 `c9s-azure` knows nothing about the UI or the cache.
 
+## c9s-gcp
+
+Google Cloud over plain REST (no Google SDK). `configurations` reads
+`gcloud config configurations list` (the contexts `:ctx` offers); `Tokens`
+gets access tokens from `gcloud auth print-access-token` (per
+configuration, cached 45 minutes); `GcpClient::projects` uses Cloud
+Resource Manager v3 `projects:search`, `GcpClient::assets` Cloud Asset
+`searchAllResources` (paged by `nextPageToken`). In core, `gcp::GcpFetcher`
+answers the generic requests: `Subscriptions` → projects, `Resources` →
+assets (location as the container), `ResourceDetail` → the asset found by
+name. `App::switch_to_gcp` swaps the fetcher through the `FetcherFactory`
+(now keyed by provider and context); the subscriptions cache stays Azure's.
+
 ## c9s-azure
 
 - `auth.rs`: `AzureAuth` uses `AzureCliCredential` and falls back to

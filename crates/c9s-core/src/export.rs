@@ -287,14 +287,15 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
             let lines = rows.iter().filter_map(|r| {
                 let id = r.id.as_deref()?;
                 Some(tsv(&[
+                    r.provider.as_str(),
                     &r.name,
                     r.domain.as_deref().unwrap_or(""),
                     id,
                     &r.subscriptions.to_string(),
                 ]))
             });
-            let lines = with_header("name\tdomain\tid\tsubscriptions", lines);
-            (count(lines.len().saturating_sub(1), "tenant"), lines)
+            let lines = with_header("cloud\tname\tdomain or account\tid\tsubscriptions", lines);
+            (count(lines.len().saturating_sub(1), "context"), lines)
         }
         ViewMode::TagSummary => {
             let rows = state.tag_summary();

@@ -1,4 +1,5 @@
 use crate::config::{self, Config, StartView};
+use crate::provider::Provider;
 use crate::{
     cache::{Cache, WriteJob},
     loader::{
@@ -42,7 +43,11 @@ pub struct App {
 }
 
 /// Builds a fetcher that talks to Azure as a given tenant.
-pub type FetcherFactory = Arc<dyn Fn(Option<&str>) -> Option<Arc<dyn Fetcher>> + Send + Sync>;
+/// Builds the fetcher for a context: its cloud, and the context within it
+/// (an Azure tenant, `None` for the CLI's default login; a gcloud
+/// configuration, `None` for gcloud's active one).
+pub type FetcherFactory =
+    Arc<dyn Fn(Provider, Option<&str>) -> Option<Arc<dyn Fetcher>> + Send + Sync>;
 
 /// A request in flight, as the App tracks it.
 struct Pending {
@@ -84,11 +89,19 @@ impl App {
         }
         let mut app = Self::with_fetcher(cache, fetcher);
         if let Some(auth) = auth {
-            app.set_fetcher_factory(Arc::new(move |tenant: Option<&str>| {
-                let fetcher = Self::azure_fetcher(auth.clone(), tenant);
-                fetcher.warm_up();
-                Some(fetcher)
-            }));
+            app.set_fetcher_factory(Arc::new(
+                move |provider: Provider, context: Option<&str>| {
+                    let fetcher: Arc<dyn Fetcher> = match provider {
+                        Provider::Azure => Self::azure_fetcher(auth.clone(), context),
+                        Provider::Gcp => {
+                            Arc::new(crate::gcp::GcpFetcher::new(context.map(str::to_string)))
+                        }
+                        Provider::Aws => return None,
+                    };
+                    fetcher.warm_up();
+                    Some(fetcher)
+                },
+            ));
         }
         app.apply_config(loaded);
         Ok(app)
@@ -100,7 +113,8 @@ impl App {
         self.state.config = loaded.config;
         if let Some(tenant) = self.state.config.tenant.clone() {
             if let Some(factory) = &self.fetcher_factory {
-                self.loader.replace_fetcher(factory(Some(&tenant)));
+                self.loader
+                    .replace_fetcher(factory(Provider::Azure, Some(&tenant)));
             }
             self.state.tenant = Some(tenant);
         }
@@ -190,7 +204,16 @@ impl App {
     pub fn switch_tenant(&mut self, tenant: Option<String>) {
         info!("Switching tenant to {:?}", tenant);
         if let Some(factory) = &self.fetcher_factory {
-            self.loader.replace_fetcher(factory(tenant.as_deref()));
+            self.loader
+                .replace_fetcher(factory(Provider::Azure, tenant.as_deref()));
+        }
+        // Coming from another cloud: its accounts aren't Azure's.
+        if self.state.provider != Provider::Azure {
+            self.state.provider = Provider::Azure;
+            self.state.gcp_configuration = None;
+            self.state.subscriptions.clear();
+            self.load_cached_subscriptions();
+            self.request(LoadRequest::Subscriptions);
         }
         self.pending.clear();
         let state = &mut self.state;
@@ -224,6 +247,47 @@ impl App {
             self.state.notice =
                 Some("Switched to all tenants (the Azure CLI's default login)".into());
         }
+    }
+
+    /// Work in a Google Cloud context from now on: a gcloud configuration
+    /// (`None`: gcloud's active one). The lists of the previous context are
+    /// dropped and the projects load.
+    pub fn switch_to_gcp(&mut self, configuration: Option<String>) {
+        info!("Switching to GCP configuration {:?}", configuration);
+        if let Some(factory) = &self.fetcher_factory {
+            self.loader
+                .replace_fetcher(factory(Provider::Gcp, configuration.as_deref()));
+        }
+        self.pending.clear();
+        let state = &mut self.state;
+        state.provider = Provider::Gcp;
+        state.gcp_configuration = configuration.clone();
+        state.tenant = None;
+        state.subscriptions.clear();
+        state.resource_groups.clear();
+        state.resources.clear();
+        state.scope_tree = None;
+        state.tree_expanded.clear();
+        state.scope_group = None;
+        state.selected_subscription = None;
+        state.selected_resource_detail = None;
+        state.resource_document = None;
+        state.resource_query = Default::default();
+        state.cross_subscription_mode = false;
+        state.clear_navigation();
+        state.filter.clear();
+        state.freshness.clear();
+        state.compliance_rollup = None;
+        state.set_loading(false);
+        state.view = ViewMode::SubscriptionList;
+        state.list_state.reset();
+        self.request(LoadRequest::Subscriptions);
+        self.state.notice = Some(format!(
+            "Switched to Google Cloud ({})",
+            configuration
+                .as_deref()
+                .unwrap_or("gcloud's active configuration")
+        ));
     }
 
     /// Cache key of the policy assignments for the current tenant.
@@ -624,6 +688,7 @@ impl App {
         let result = match request {
             LoadRequest::Subscriptions
             | LoadRequest::Tenants
+            | LoadRequest::CloudContexts
             | LoadRequest::PrincipalGroups { .. }
             | LoadRequest::GroupMembers { .. }
             | LoadRequest::AppDetail { .. }
@@ -781,6 +846,7 @@ impl App {
             LoadKind::ScopeTree => usize::from(self.state.scope_tree.is_some()),
             LoadKind::ResourceDetail => usize::from(self.state.resource_document.is_some()),
             LoadKind::Tenants => self.state.tenants.len(),
+            LoadKind::CloudContexts => self.state.gcp_configurations.len(),
             LoadKind::PolicyAssignments => self.state.policy_assignments.len(),
             LoadKind::PolicyExemptions => self.state.policy_exemptions.len(),
             LoadKind::RoleAssignments => self.state.role_assignments.len(),
@@ -944,6 +1010,9 @@ impl App {
                     self.state.notice = Some(format!(
                         "Principal names unavailable (Microsoft Graph): {e}"
                     ));
+                } else if kind == LoadKind::CloudContexts {
+                    // No gcloud (or no login): no Google Cloud contexts.
+                    warn!("Google Cloud contexts unavailable: {}", e);
                 } else if kind == LoadKind::RoleDefinitions
                     && self.state.view != ViewMode::RoleDefinitions
                 {
@@ -1007,6 +1076,7 @@ impl App {
             LoadedData::Resources(items) => put(&mut self.state.resources, items, append),
             LoadedData::ScopeTree(tree) => self.state.set_scope_tree(tree),
             LoadedData::Tenants(tenants) => self.state.tenants = tenants,
+            LoadedData::CloudContexts(configs) => self.state.gcp_configurations = configs,
             LoadedData::PolicyAssignments(items) => self.state.policy_assignments = items,
             LoadedData::PolicyExemptions(items) => self.state.policy_exemptions = items,
             LoadedData::RoleAssignments(items) => self.state.role_assignments = items,
@@ -1091,6 +1161,7 @@ impl App {
             // Tenant names are small and refreshed on each :ctx; policy
             // states change often and are always loaded fresh.
             LoadRequest::Tenants
+            | LoadRequest::CloudContexts
             | LoadRequest::PrincipalGroups { .. }
             | LoadRequest::GroupMembers { .. }
             | LoadRequest::PolicyStates { .. }
@@ -1190,6 +1261,9 @@ impl App {
                 },
                 _ => return,
             },
+            // The subscriptions cache is Azure's: another cloud's accounts
+            // must not show at the next start.
+            LoadRequest::Subscriptions if self.state.provider != Provider::Azure => return,
             LoadRequest::Subscriptions => WriteJob::Subscriptions(self.state.subscriptions.clone()),
             LoadRequest::ResourceGroups { subscription_ids } => WriteJob::ResourceGroups {
                 subscription_ids: scope(subscription_ids),
@@ -1260,7 +1334,7 @@ fn view_of(kind: LoadKind) -> ViewMode {
         LoadKind::ScopeTree => ViewMode::ManagementGroupTree,
         LoadKind::ResourceDetail | LoadKind::ResourcePolicy => ViewMode::ResourceDetail,
         LoadKind::PolicyStates => ViewMode::PolicyNonCompliant,
-        LoadKind::Tenants => ViewMode::TenantList,
+        LoadKind::Tenants | LoadKind::CloudContexts => ViewMode::TenantList,
         LoadKind::PolicyAssignments | LoadKind::PolicyCompliance | LoadKind::ComplianceSummary => {
             ViewMode::PolicyAssignments
         }

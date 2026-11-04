@@ -12,6 +12,23 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-04
+
+### Added
+- **Google Cloud browsing (preview).** `:ctx` now lists gcloud
+  configurations next to Azure tenants, with a cloud column; `Enter` or
+  `:ctx <configuration>` switches to Google Cloud. Projects come from Cloud
+  Resource Manager; `Enter` on a project lists its resources from Cloud
+  Asset Inventory (type, location, labels; `/`, `type=`, `tag=` filters
+  work), and `Enter` on a resource shows its document. Needs the Google
+  Cloud CLI (`gcloud auth login`) and the Cloud Asset API enabled on the
+  projects. `:ctx all` goes back to Azure.
+- Under Google Cloud, `:mg` and `:rg` say they aren't available there yet,
+  like the Azure-only views; `o` says console links are Azure only for now.
+
+### Changed
+- `:ctx` is titled "Contexts" (Azure tenants and gcloud configurations).
+
 ## [1.1.0] - 2026-11-04
 
 ### Added
@@ -678,7 +695,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/mrWiecek/c9s/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/mrWiecek/c9s/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/mrWiecek/c9s/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/mrWiecek/c9s/compare/v0.22.1...v1.0.0

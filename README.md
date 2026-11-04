@@ -125,6 +125,23 @@ crates/
 
 How it fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## Google Cloud (preview)
+
+c9s also browses Google Cloud: projects, their resources (type, location,
+labels) and each resource's document.
+
+1. Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install)
+   and run `gcloud auth login`.
+2. Resources come from Cloud Asset Inventory: enable it once per project
+   (`gcloud services enable cloudasset.googleapis.com --project <project>`).
+3. In c9s, `:ctx` lists your Azure tenants and gcloud configurations side by
+   side; `Enter` (or `:ctx <configuration>`) switches. The status bar shows
+   `gcp`; projects open straight onto their resources; `:ctx all` goes back
+   to Azure.
+
+Not yet for Google Cloud: folders (`:mg`), console links (`o`), and the
+Azure-only views (Policy, role assignments, Entra ID), which say so.
+
 ## Upgrading from az9s
 
 c9s v1.0.0 is az9s renamed; nothing else changed.

@@ -32,6 +32,8 @@ impl Fetcher for Azure {
                     domain: Some("fabrikam.onmicrosoft.com".into()),
                 },
             ])),
+            // gcloud's configurations: none in these tests (no gcloud).
+            LoadRequest::CloudContexts => Ok(LoadedData::CloudContexts(vec![])),
             _ => Err("not in this test".into()),
         };
         async move {
@@ -101,10 +103,12 @@ async fn ctx_lists_tenants_and_enter_switches() {
 
     command(&mut app, "ctx").await;
     assert_eq!(app.state().view, ViewMode::TenantList);
-    assert_eq!(last_request(&azure).await, LoadRequest::Tenants);
+    last_request(&azure).await;
+    assert!(azure.0.lock().unwrap().contains(&LoadRequest::Tenants));
     app.apply_load(loads.recv().await.unwrap());
+    app.apply_load(loads.recv().await.unwrap()); // gcloud configurations
     let text = screen(&mut app);
-    assert!(text.contains("● All tenants"), "{text}");
+    assert!(text.contains("● azure  All tenants"), "{text}");
     assert!(
         text.contains("Fabrikam") && text.contains("2 subscriptions"),
         "{text}"
@@ -157,7 +161,7 @@ async fn ctx_switches_by_name_domain_or_id_and_rejects_unknown() {
         .error
         .as_deref()
         .unwrap()
-        .contains("Tenant not found: nowhere"));
+        .contains("Context not found: nowhere"));
 }
 
 #[tokio::test]
@@ -173,4 +177,43 @@ async fn ctx_autocompletes_tenant_names() {
     }
     press(&mut app, KeyCode::Tab).await;
     assert_eq!(app.state().command_input, "ctx Fabrikam ");
+}
+
+#[tokio::test]
+async fn ctx_lists_gcloud_configurations_and_switches_cloud() {
+    let (mut app, _) = setup();
+    app.state_mut().gcp_configurations =
+        vec![c9s_gcp_config("work", "ada@acme.com", "billing-prod")];
+    command(&mut app, "ctx").await;
+    let text = screen(&mut app);
+    assert!(text.contains("gcp") && text.contains("work"), "{text}");
+    assert!(text.contains("ada@acme.com · billing-prod"), "{text}");
+    assert!(text.contains("Contexts ("), "{text}");
+
+    // The last row is the gcloud configuration: Enter switches to Google Cloud.
+    press(&mut app, KeyCode::Char('G')).await;
+    press(&mut app, KeyCode::Enter).await;
+    assert_eq!(app.state().provider, c9s_core::provider::Provider::Gcp);
+    assert_eq!(app.state().gcp_configuration.as_deref(), Some("work"));
+    assert_eq!(app.state().view, ViewMode::SubscriptionList);
+    assert!(
+        app.state().subscriptions.is_empty(),
+        "Azure's subscriptions are dropped"
+    );
+    assert!(screen(&mut app).contains("gcp ·") || screen(&mut app).contains("gcp |"));
+
+    // By name works too, and Azure is one :ctx away.
+    command(&mut app, "ctx all").await;
+    assert_eq!(app.state().provider, c9s_core::provider::Provider::Azure);
+    command(&mut app, "ctx work").await;
+    assert_eq!(app.state().provider, c9s_core::provider::Provider::Gcp);
+}
+
+fn c9s_gcp_config(name: &str, account: &str, project: &str) -> c9s_core::state::GcpConfiguration {
+    c9s_core::state::GcpConfiguration {
+        name: name.into(),
+        active: false,
+        account: account.into(),
+        project: project.into(),
+    }
 }

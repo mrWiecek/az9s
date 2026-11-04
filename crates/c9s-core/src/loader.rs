@@ -51,6 +51,8 @@ pub enum LoadRequest {
     },
     /// The tenants the user can access, with names.
     Tenants,
+    /// Contexts of other clouds' CLIs (gcloud configurations).
+    CloudContexts,
     /// Every policy assignment in the tenant.
     PolicyAssignments,
     /// Every policy exemption in the tenant.
@@ -120,6 +122,7 @@ pub enum LoadKind {
     ScopeTree,
     ResourceDetail,
     Tenants,
+    CloudContexts,
     PolicyAssignments,
     PolicyExemptions,
     RoleAssignments,
@@ -146,6 +149,7 @@ impl LoadKind {
             LoadKind::ScopeTree => "management group tree",
             LoadKind::ResourceDetail => "resource details",
             LoadKind::Tenants => "tenants",
+            LoadKind::CloudContexts => "cloud contexts",
             LoadKind::PolicyAssignments => "policy assignments",
             LoadKind::PolicyExemptions => "policy exemptions",
             LoadKind::RoleAssignments => "role assignments",
@@ -174,6 +178,7 @@ impl LoadRequest {
             LoadRequest::ScopeTree => LoadKind::ScopeTree,
             LoadRequest::ResourceDetail { .. } => LoadKind::ResourceDetail,
             LoadRequest::Tenants => LoadKind::Tenants,
+            LoadRequest::CloudContexts => LoadKind::CloudContexts,
             LoadRequest::PolicyAssignments => LoadKind::PolicyAssignments,
             LoadRequest::PolicyExemptions => LoadKind::PolicyExemptions,
             LoadRequest::RoleAssignments { .. } => LoadKind::RoleAssignments,
@@ -202,6 +207,7 @@ pub enum LoadedData {
     /// A resource's document (`Null` only as an empty placeholder).
     ResourceDetail(serde_json::Value),
     Tenants(Vec<crate::models::Tenant>),
+    CloudContexts(Vec<c9s_gcp::Configuration>),
     PolicyAssignments(Vec<PolicyAssignment>),
     PolicyExemptions(Vec<PolicyExemption>),
     RoleAssignments(Vec<crate::rbac::RoleAssignment>),
@@ -505,6 +511,14 @@ impl Fetcher for AzureFetcher {
                 },
                 LoadRequest::Tenants => FetchOutcome {
                     data: Err("tenant names are not available with C9S_BACKEND=arm".into()),
+                    failed_subscriptions: Vec::new(),
+                    notice: None,
+                },
+                LoadRequest::CloudContexts => FetchOutcome {
+                    data: c9s_gcp::configurations("gcloud")
+                        .await
+                        .map(LoadedData::CloudContexts)
+                        .map_err(|e| e.to_string()),
                     failed_subscriptions: Vec::new(),
                     notice: None,
                 },
@@ -1078,6 +1092,19 @@ impl Fetcher for GraphFetcher {
             }
             _ => {}
         }
+        if request == LoadRequest::CloudContexts {
+            return async move {
+                FetchOutcome {
+                    data: c9s_gcp::configurations("gcloud")
+                        .await
+                        .map(LoadedData::CloudContexts)
+                        .map_err(|e| e.to_string()),
+                    failed_subscriptions: vec![],
+                    notice: None,
+                }
+            }
+            .boxed();
+        }
         if request == LoadRequest::Tenants {
             let client = self.management_groups.clone();
             return async move {
@@ -1144,6 +1171,7 @@ impl Fetcher for GraphFetcher {
                 LoadRequest::Subscriptions
                 | LoadRequest::ScopeTree
                 | LoadRequest::Tenants
+                | LoadRequest::CloudContexts
                 | LoadRequest::PolicyAssignments
                 | LoadRequest::PolicyExemptions
                 | LoadRequest::RoleAssignments { .. }
@@ -1240,6 +1268,7 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::ScopeTree => LoadedData::ScopeTree(ScopeTree::default()),
         LoadKind::ResourceDetail => LoadedData::ResourceDetail(serde_json::Value::Null),
         LoadKind::Tenants => LoadedData::Tenants(vec![]),
+        LoadKind::CloudContexts => LoadedData::CloudContexts(vec![]),
         LoadKind::PolicyAssignments => LoadedData::PolicyAssignments(vec![]),
         LoadKind::PolicyExemptions => LoadedData::PolicyExemptions(vec![]),
         LoadKind::RoleAssignments => LoadedData::RoleAssignments(vec![]),

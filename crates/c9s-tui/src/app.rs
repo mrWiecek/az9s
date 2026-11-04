@@ -8,6 +8,7 @@ use c9s_core::detail;
 use c9s_core::loader::{LoadReceiver, LoadRequest, LoadResult};
 use c9s_core::palette::PaletteAction;
 use c9s_core::policy::PolicyScope;
+use c9s_core::provider::{Feature, Provider};
 use c9s_core::query::ResourceQuery;
 use c9s_core::scope_tree::TreeRowKind;
 use c9s_core::state::{AppTab, DetailTab, NavigationContext, ViewMode};
@@ -583,16 +584,28 @@ impl TuiApp {
                 state.clear_navigation();
                 state.view = ViewMode::TenantList;
                 state.list_state.reset();
-                self.core.request(LoadRequest::Tenants);
+                // Azure tenants (from Azure), and gcloud's configurations.
+                if self.state().provider == Provider::Azure {
+                    self.core.request(LoadRequest::Tenants);
+                }
+                self.core.request(LoadRequest::CloudContexts);
             }
             CommandKind::Context(Some(arg)) => {
                 if arg.eq_ignore_ascii_case("all") {
                     self.core.switch_tenant(None);
                 } else {
-                    match self.find_tenant(&arg) {
-                        Some(id) => self.core.switch_tenant(Some(id)),
-                        None => self.state_mut().set_error(Some(format!(
-                            "Tenant not found: {arg}\n\nType :ctx to list the tenants you can use."
+                    let gcp = self
+                        .state()
+                        .gcp_configurations
+                        .iter()
+                        .find(|c| c.name == arg)
+                        .map(|c| c.name.clone());
+                    match (gcp, self.find_tenant(&arg)) {
+                        (Some(configuration), _) => self.core.switch_to_gcp(Some(configuration)),
+                        (None, Some(id)) => self.core.switch_tenant(Some(id)),
+                        (None, None) => self.state_mut().set_error(Some(format!(
+                            "Context not found: {arg}\n\nType :ctx to list the tenants and \
+                             gcloud configurations you can use."
                         ))),
                     }
                 }
@@ -1647,6 +1660,11 @@ impl TuiApp {
         let Some(id) = self.state().selected_arm_id() else {
             return;
         };
+        if self.state().provider != Provider::Azure {
+            self.state_mut().notice =
+                Some("Opening in the console is Azure only for now (y copies the ID)".into());
+            return;
+        }
         let tenant = self.state().portal_tenant();
         // Directory objects open on their Entra page, not as a resource.
         let app = match self.state().view {
@@ -1837,7 +1855,10 @@ impl TuiApp {
             }
             ViewMode::TenantList => {
                 if let Some(row) = self.state().selected_tenant_row() {
-                    self.core.switch_tenant(row.id);
+                    match row.provider {
+                        Provider::Azure => self.core.switch_tenant(row.id),
+                        _ => self.core.switch_to_gcp(row.id),
+                    }
                 }
                 Ok(true)
             }
@@ -1945,7 +1966,13 @@ impl TuiApp {
             self.push_current_context(None);
             let id = subscription.id.clone();
             self.state_mut().selected_subscription = Some(subscription);
-            self.show_resource_groups(vec![id], false);
+            // Clouds without a level between accounts and resources (GCP)
+            // open straight onto the resources.
+            if self.state().provider.supports(Feature::Containers) {
+                self.show_resource_groups(vec![id], false);
+            } else {
+                self.show_resources(vec![id], None, false);
+            }
         }
         Ok(true)
     }
