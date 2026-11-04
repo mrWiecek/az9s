@@ -157,5 +157,8 @@ async fn aws_speaks_accounts_and_names_its_profile() {
     );
     command(&mut app, "mg").await;
     let error = app.state().error.clone().unwrap_or_default();
-    assert!(error.contains("isn't available for aws yet"), "{error}");
+    assert!(
+        !error.contains("available"),
+        ":mg is allowed (organizational units): {error}"
+    );
 }

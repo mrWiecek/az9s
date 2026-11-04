@@ -225,6 +225,7 @@ async fn ctx_lists_aws_profiles_and_switches_cloud() {
         name: "prod-admin".into(),
         region: "eu-west-1".into(),
         kind: "sso".into(),
+        account_id: "111122223333".into(),
     }];
     command(&mut app, "ctx").await;
     let text = screen(&mut app);

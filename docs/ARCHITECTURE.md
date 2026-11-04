@@ -44,6 +44,11 @@ profile's region and falls back to the Tagging API there. In core,
 `aws::AwsFetcher` answers `Subscriptions` (the one account), `Resources`
 (region as the container) and `ResourceDetail` (the document from the
 last list, since Resource Explorer has no lookup by ARN).
+`AwsClient::organization` walks AWS Organizations (roots, then units and
+accounts per parent); `Session::assume` gets a role's credentials from STS
+`AssumeRole` (XML) with another session's. The fetcher lists the
+organization's accounts when the profile can read it, and reaches each
+through a CLI profile with that account, else the configured role.
 `App::switch_to_aws` and `switch_to_gcp` share `switch_cloud`.
 `LoadRequest::CloudContexts` now returns both clouds' contexts.
 
