@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
@@ -45,6 +45,9 @@ pub fn help_lines() -> Vec<Line<'static>> {
         l("  :access <principal>                Everything one user, group or app can do"),
         l("  :group [name]                      Directory groups and their members"),
         l("  :app [name]                        App registrations and enterprise applications"),
+        l("  :theme [name]                      Switch colours: default, light, mono, high-contrast,"),
+        l("                                     dracula, nord, gruvbox, catppuccin, tokyo-night,"),
+        l("                                     solarized-dark, solarized-light (config: theme = …)"),
         l("  :ctx  [all|<tenant>]               Tenants: list them, or switch (name, domain or ID)"),
         l("  :mg                                Management group tree (the start view)"),
         l("  :sub                               Subscriptions"),
@@ -196,7 +199,7 @@ pub fn help_lines() -> Vec<Line<'static>> {
 /// (clamped and written back).
 pub fn render_help(f: &mut Frame, area: Rect, scroll: &mut usize) {
     let modal_area = centered_rect(90, 90, area);
-    f.render_widget(Clear, modal_area);
+    super::theme::clear(f, modal_area);
 
     let lines = help_lines();
     let viewport = modal_area.height.saturating_sub(2) as usize;

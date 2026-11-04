@@ -510,6 +510,34 @@ impl TuiApp {
                     ))),
                 }
             }
+            CommandKind::Theme(name) => {
+                use az9s_core::config::ThemeName;
+                let names = ThemeName::ALL
+                    .iter()
+                    .map(|t| t.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                match name.as_deref().map(ThemeName::parse) {
+                    None => {
+                        let current = self.state().config.theme.as_str();
+                        self.state_mut().notice = Some(format!("Theme {current}. Themes: {names}"));
+                    }
+                    Some(Some(theme)) => {
+                        crate::ui::theme::set_theme(theme);
+                        let state = self.state_mut();
+                        state.config.theme = theme;
+                        state.notice = Some(format!(
+                            "Theme {} (to keep it, set theme = \"{}\" in the config file)",
+                            theme.as_str(),
+                            theme.as_str()
+                        ));
+                    }
+                    Some(None) => self.state_mut().set_error(Some(format!(
+                        "No theme named {}.\n\nThemes: {names}",
+                        name.unwrap_or_default()
+                    ))),
+                }
+            }
             CommandKind::Apps(name) => {
                 debug!("Command: applications {:?}", name);
                 let state = self.state_mut();

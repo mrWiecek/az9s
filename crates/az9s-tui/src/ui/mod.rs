@@ -17,7 +17,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, StatefulWidget, Tabs, Wrap},
+    widgets::{Block, Borders, Paragraph, StatefulWidget, Tabs, Wrap},
     Frame,
 };
 use status_bar::StatusBar;
@@ -42,6 +42,7 @@ pub fn draw(f: &mut Frame, app: &mut TuiApp) -> Result<()> {
         ])
         .split(f.size());
 
+    theme::paint_background(f, f.size());
     draw_header(f, chunks[0], app);
     draw_content(f, chunks[1], app)?;
     draw_status_bar(f, chunks[2], app);
@@ -2207,7 +2208,7 @@ fn draw_command_suggestions(f: &mut Frame, footer: Rect, app: &TuiApp) {
             ])
         })
         .collect();
-    f.render_widget(Clear, area);
+    theme::clear(f, area);
     f.render_widget(
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(format!(
             " {} suggestion{} · Tab completes · ↑↓ choose ",
@@ -2232,7 +2233,7 @@ fn draw_palette(f: &mut Frame, area: Rect, app: &TuiApp) {
         width,
         height,
     };
-    f.render_widget(Clear, rect);
+    theme::clear(f, rect);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme().accent))
