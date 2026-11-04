@@ -681,6 +681,13 @@ impl Fetcher for GraphFetcher {
                         .await
                         .map(LoadedData::ResourceDetail)
                         .map_err(|arm_error| format!("{e}; ARM: {arm_error}")),
+                    // Role definitions likewise (built-in ones, or an ID
+                    // written at another scope than Resource Graph's).
+                    (Err(e), Some(arm)) if is_role_definition_id(&id) => arm
+                        .role_definition(&id)
+                        .await
+                        .map(LoadedData::ResourceDetail)
+                        .map_err(|arm_error| format!("{e}; ARM: {arm_error}")),
                     (data, _) => data,
                 };
                 FetchOutcome {
@@ -808,6 +815,7 @@ impl Fetcher for GraphFetcher {
             | LoadRequest::RoleDefinitions { subscription_ids } => {
                 let graph = self.graph.clone();
                 let cell = self.home_tenant.clone();
+                let arm = self.management_groups.clone();
                 let ids = subscription_ids.clone();
                 let assignments = matches!(request, LoadRequest::RoleAssignments { .. });
                 return async move {
@@ -822,7 +830,34 @@ impl Fetcher for GraphFetcher {
                         resource_graph::role_definitions_query()
                     };
                     let tenant = Self::resolve_tenant(&graph, &cell).await;
-                    let (rows, notice) = tenant_or_subscriptions(&graph, &query, tenant, ids).await;
+                    let first_subscription = ids.first().cloned();
+                    let (rows, notice) =
+                        tenant_or_subscriptions(&graph, &query, tenant.clone(), ids).await;
+                    // Resource Graph may not list the built-in roles: then
+                    // ask ARM for every role usable at the tenant root (or
+                    // a subscription), so assignments show role names.
+                    let rows = match (assignments, arm) {
+                        (false, Some(arm)) if !has_built_in_roles(&rows) => {
+                            let scope = match (&tenant, &first_subscription) {
+                                (Some(t), _) => {
+                                    format!("/providers/Microsoft.Management/managementGroups/{t}")
+                                }
+                                (None, Some(s)) => format!("/subscriptions/{s}"),
+                                (None, None) => String::new(),
+                            };
+                            let mut from_arm = arm.role_definitions(&scope).await;
+                            if from_arm.is_err() {
+                                if let (Some(_), Some(s)) = (&tenant, &first_subscription) {
+                                    // No access at the root: a subscription
+                                    // lists the same built-in roles.
+                                    from_arm =
+                                        arm.role_definitions(&format!("/subscriptions/{s}")).await;
+                                }
+                            }
+                            merge_role_rows(rows, from_arm)
+                        }
+                        _ => rows,
+                    };
                     let data = rows.map(|rows| {
                         if assignments {
                             LoadedData::RoleAssignments(
@@ -1224,6 +1259,51 @@ fn empty(kind: LoadKind) -> LoadedData {
         }
         LoadKind::PolicyStates => LoadedData::PolicyStates(vec![]),
         LoadKind::ResourcePolicy => LoadedData::ResourcePolicy(String::new(), vec![]),
+    }
+}
+
+fn is_role_definition_id(id: &str) -> bool {
+    id.to_ascii_lowercase()
+        .contains("/providers/microsoft.authorization/roledefinitions/")
+}
+
+/// Whether Resource Graph's role definitions include the built-in roles.
+fn has_built_in_roles(rows: &Result<Vec<serde_json::Value>, String>) -> bool {
+    rows.as_ref().is_ok_and(|rows| {
+        rows.iter().any(|r| {
+            r.get("roleType")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|t| t.eq_ignore_ascii_case("BuiltInRole"))
+        })
+    })
+}
+
+/// Resource Graph's role definitions plus ARM's, each role (by GUID) once.
+/// Either source alone is enough; both failing reports the first error.
+fn merge_role_rows(
+    graph: Result<Vec<serde_json::Value>, String>,
+    arm: az9s_azure::Result<Vec<serde_json::Value>>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let guid = |r: &serde_json::Value| {
+        r.get("id")
+            .and_then(serde_json::Value::as_str)
+            .map(crate::rbac::role_guid)
+    };
+    match (graph, arm) {
+        (Ok(mut rows), Ok(more)) => {
+            let known: HashSet<String> = rows.iter().filter_map(guid).collect();
+            rows.extend(
+                more.into_iter()
+                    .filter(|r| guid(r).is_some_and(|g| !known.contains(&g))),
+            );
+            Ok(rows)
+        }
+        (Ok(rows), Err(e)) => {
+            warn!("Built-in role names from ARM unavailable: {}", e);
+            Ok(rows)
+        }
+        (Err(_), Ok(rows)) => Ok(rows),
+        (Err(e), Err(_)) => Err(e),
     }
 }
 
