@@ -40,7 +40,7 @@ if [ "$unreleased" -eq 0 ]; then
   exit 1
 fi
 
-repo_url="https://github.com/mrWiecek/az9s"
+repo_url="https://github.com/mrWiecek/c9s"
 VERSION_CURRENT="$current" VERSION_NEXT="$next" TODAY="$today" REPO="$repo_url" perl -0pi -e '
   my ($cur, $next, $today, $repo) = @ENV{qw(VERSION_CURRENT VERSION_NEXT TODAY REPO)};
   s/^## \[Unreleased\]\n/## [Unreleased]\n\n## [$next] - $today\n/m or die "no Unreleased heading\n";

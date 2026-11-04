@@ -40,11 +40,11 @@ works for Kubernetes.
 ## Install
 
 Download a prebuilt binary for Linux, macOS or Windows from
-[Releases](https://github.com/mrWiecek/az9s/releases), or build from source:
+[Releases](https://github.com/mrWiecek/c9s/releases), or build from source:
 
 ```bash
-cargo install --git https://github.com/mrWiecek/az9s --locked c9s              # latest
-cargo install --git https://github.com/mrWiecek/az9s --tag v0.3.0 --locked c9s # a specific version
+cargo install --git https://github.com/mrWiecek/c9s --locked c9s              # latest
+cargo install --git https://github.com/mrWiecek/c9s --tag v0.3.0 --locked c9s # a specific version
 ```
 
 `c9s --version` shows the installed version and commit. Versions follow
