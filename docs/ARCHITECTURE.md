@@ -11,6 +11,8 @@ crates/
 ├── c9s         # binary: sets up tracing, builds c9s_core::App, calls c9s_tui::run
 ├── c9s-core    # app state, navigation, filtering, SQLite cache
 ├── c9s-azure   # authentication + Azure API client
+├── c9s-gcp     # Google Cloud over REST (gcloud for tokens)
+├── c9s-aws     # AWS over SigV4-signed HTTPS (the aws CLI for credentials)
 └── c9s-tui     # ratatui/crossterm UI: event loop, key handling, rendering
 ```
 
@@ -29,6 +31,21 @@ answers the generic requests: `Subscriptions` → projects, `Resources` →
 assets (location as the container), `ResourceDetail` → the asset found by
 name. `App::switch_to_gcp` swaps the fetcher through the `FetcherFactory`
 (now keyed by provider and context); the subscriptions cache stays Azure's.
+
+## c9s-aws
+
+AWS over plain HTTPS (no AWS SDK). `profiles` parses the CLI's config and
+credentials files (the contexts `:ctx` offers); `Session` gets credentials
+from `aws configure export-credentials` (cached until five minutes before
+they expire) and the account from `aws sts get-caller-identity`; `sigv4`
+signs requests (ring's HMAC-SHA256, checked against AWS's documented
+example). `AwsClient::resources` searches Resource Explorer in the
+profile's region and falls back to the Tagging API there. In core,
+`aws::AwsFetcher` answers `Subscriptions` (the one account), `Resources`
+(region as the container) and `ResourceDetail` (the document from the
+last list, since Resource Explorer has no lookup by ARN).
+`App::switch_to_aws` and `switch_to_gcp` share `switch_cloud`.
+`LoadRequest::CloudContexts` now returns both clouds' contexts.
 
 ## c9s-azure
 

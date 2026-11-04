@@ -384,6 +384,17 @@ pub fn gcp_console_url(id: &str, project: Option<&str>) -> String {
     }
 }
 
+/// AWS console link: a resource by its ARN (the console's ARN redirect),
+/// anything else (an account ID) the console home.
+pub fn aws_console_url(id: &str) -> String {
+    const CONSOLE: &str = "https://console.aws.amazon.com";
+    if id.starts_with("arn:") {
+        format!("{CONSOLE}/go/view?arn={}", encode(id))
+    } else {
+        format!("{CONSOLE}/console/home")
+    }
+}
+
 /// Percent-encode a URL query value or path segment.
 fn encode(s: &str) -> String {
     s.bytes()
@@ -476,6 +487,18 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::HashMap;
+
+    #[test]
+    fn aws_console_links() {
+        assert_eq!(
+            aws_console_url("arn:aws:ec2:eu-west-1:1:instance/i-0abc"),
+            "https://console.aws.amazon.com/go/view?arn=arn%3Aaws%3Aec2%3Aeu-west-1%3A1%3Ainstance%2Fi-0abc"
+        );
+        assert_eq!(
+            aws_console_url("111122223333"),
+            "https://console.aws.amazon.com/console/home"
+        );
+    }
 
     #[test]
     fn gcp_console_links() {

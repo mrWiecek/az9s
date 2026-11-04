@@ -198,6 +198,28 @@ impl LoadRequest {
     }
 }
 
+/// The other clouds' contexts for `:ctx`: gcloud configurations and AWS
+/// CLI profiles.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CloudContexts {
+    pub gcp: Vec<c9s_gcp::Configuration>,
+    pub aws: Vec<c9s_aws::Profile>,
+}
+
+/// gcloud's configurations and the AWS CLI's profiles. A missing CLI is
+/// no error while the other cloud answers.
+pub async fn cloud_contexts() -> Result<CloudContexts, String> {
+    let aws = c9s_aws::profiles();
+    match c9s_gcp::configurations("gcloud").await {
+        Ok(gcp) => Ok(CloudContexts { gcp, aws }),
+        Err(e) if !aws.is_empty() => {
+            tracing::debug!("No gcloud configurations: {e}");
+            Ok(CloudContexts { gcp: vec![], aws })
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[derive(Debug)]
 pub enum LoadedData {
     Subscriptions(Vec<Subscription>),
@@ -207,7 +229,7 @@ pub enum LoadedData {
     /// A resource's document (`Null` only as an empty placeholder).
     ResourceDetail(serde_json::Value),
     Tenants(Vec<crate::models::Tenant>),
-    CloudContexts(Vec<c9s_gcp::Configuration>),
+    CloudContexts(CloudContexts),
     PolicyAssignments(Vec<PolicyAssignment>),
     PolicyExemptions(Vec<PolicyExemption>),
     RoleAssignments(Vec<crate::rbac::RoleAssignment>),
@@ -515,10 +537,7 @@ impl Fetcher for AzureFetcher {
                     notice: None,
                 },
                 LoadRequest::CloudContexts => FetchOutcome {
-                    data: c9s_gcp::configurations("gcloud")
-                        .await
-                        .map(LoadedData::CloudContexts)
-                        .map_err(|e| e.to_string()),
+                    data: cloud_contexts().await.map(LoadedData::CloudContexts),
                     failed_subscriptions: Vec::new(),
                     notice: None,
                 },
@@ -1095,10 +1114,7 @@ impl Fetcher for GraphFetcher {
         if request == LoadRequest::CloudContexts {
             return async move {
                 FetchOutcome {
-                    data: c9s_gcp::configurations("gcloud")
-                        .await
-                        .map(LoadedData::CloudContexts)
-                        .map_err(|e| e.to_string()),
+                    data: cloud_contexts().await.map(LoadedData::CloudContexts),
                     failed_subscriptions: vec![],
                     notice: None,
                 }
@@ -1268,7 +1284,7 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::ScopeTree => LoadedData::ScopeTree(ScopeTree::default()),
         LoadKind::ResourceDetail => LoadedData::ResourceDetail(serde_json::Value::Null),
         LoadKind::Tenants => LoadedData::Tenants(vec![]),
-        LoadKind::CloudContexts => LoadedData::CloudContexts(vec![]),
+        LoadKind::CloudContexts => LoadedData::CloudContexts(CloudContexts::default()),
         LoadKind::PolicyAssignments => LoadedData::PolicyAssignments(vec![]),
         LoadKind::PolicyExemptions => LoadedData::PolicyExemptions(vec![]),
         LoadKind::RoleAssignments => LoadedData::RoleAssignments(vec![]),

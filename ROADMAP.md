@@ -304,7 +304,12 @@ How the clouds line up:
       Originally: Cloud Asset Inventory is close to Resource
       Graph (one paged search per organization, folder or project, with
       labels and locations); Resource Manager for the hierarchy.
-- [ ] **AWS browsing** (~4–6 days; most unknowns). No inventory that is always
+- [x] **AWS browsing, single profiles** (v1.4.0, preview). `:ctx` lists the
+      AWS CLI's profiles; a profile's account → resources (Resource
+      Explorer in the profile's region; the Tagging API there without it;
+      region as the container) → document; `o` opens the console by ARN.
+      Still to come: Organizations (OUs as the tree, a role per account).
+      Originally: No inventory that is always
       on: Resource Explorer needs an aggregator index enabled by an admin;
       the Tagging API is per region and misses some untagged resources.
       Several accounts need Organizations (from the management account) and
@@ -321,8 +326,8 @@ Open questions before starting:
 1. ~~Name~~: **c9s**, decided (free on crates.io; three keys, no Shift).
    No `az9s` binary is shipped; config, cache and `AZ9S_*` variables carry
    over, and `alias az9s=c9s` keeps old habits working.
-2. **AWS scope:** single profiles only, or Organizations with a role per
-   account (the biggest effort lever)?
+2. ~~AWS scope~~: **single profiles first**, decided; Organizations with a
+   role per account may follow.
 3. Azure-only features stay Azure-only (proposed): IAM views for GCP and
    AWS would be a separate, larger project.
 

@@ -96,7 +96,7 @@ impl App {
                         Provider::Gcp => {
                             Arc::new(crate::gcp::GcpFetcher::new(context.map(str::to_string)))
                         }
-                        Provider::Aws => return None,
+                        Provider::Aws => Arc::new(crate::aws::AwsFetcher::new(context?)),
                     };
                     fetcher.warm_up();
                     Some(fetcher)
@@ -211,6 +211,7 @@ impl App {
         if self.state.provider != Provider::Azure {
             self.state.provider = Provider::Azure;
             self.state.gcp_configuration = None;
+            self.state.aws_profile = None;
             self.state.subscriptions.clear();
             self.load_cached_subscriptions();
             self.request(LoadRequest::Subscriptions);
@@ -254,14 +255,39 @@ impl App {
     /// dropped and the projects load.
     pub fn switch_to_gcp(&mut self, configuration: Option<String>) {
         info!("Switching to GCP configuration {:?}", configuration);
+        let notice = format!(
+            "Switched to Google Cloud ({})",
+            configuration
+                .as_deref()
+                .unwrap_or("gcloud's active configuration")
+        );
+        self.switch_cloud(Provider::Gcp, configuration, notice);
+    }
+
+    /// Work in an AWS context from now on: an AWS CLI profile (its one
+    /// account). The lists of the previous context are dropped and the
+    /// account loads.
+    pub fn switch_to_aws(&mut self, profile: String) {
+        info!("Switching to AWS profile {}", profile);
+        let notice = format!("Switched to AWS (profile {profile})");
+        self.switch_cloud(Provider::Aws, Some(profile), notice);
+    }
+
+    fn switch_cloud(&mut self, provider: Provider, context: Option<String>, notice: String) {
         if let Some(factory) = &self.fetcher_factory {
             self.loader
-                .replace_fetcher(factory(Provider::Gcp, configuration.as_deref()));
+                .replace_fetcher(factory(provider, context.as_deref()));
         }
         self.pending.clear();
         let state = &mut self.state;
-        state.provider = Provider::Gcp;
-        state.gcp_configuration = configuration.clone();
+        state.provider = provider;
+        state.gcp_configuration = None;
+        state.aws_profile = None;
+        match provider {
+            Provider::Gcp => state.gcp_configuration = context,
+            Provider::Aws => state.aws_profile = context,
+            Provider::Azure => {}
+        }
         state.tenant = None;
         state.subscriptions.clear();
         state.resource_groups.clear();
@@ -282,12 +308,7 @@ impl App {
         state.view = ViewMode::SubscriptionList;
         state.list_state.reset();
         self.request(LoadRequest::Subscriptions);
-        self.state.notice = Some(format!(
-            "Switched to Google Cloud ({})",
-            configuration
-                .as_deref()
-                .unwrap_or("gcloud's active configuration")
-        ));
+        self.state.notice = Some(notice);
     }
 
     /// Cache key of the policy assignments for the current tenant.
@@ -850,7 +871,9 @@ impl App {
             LoadKind::ScopeTree => usize::from(self.state.scope_tree.is_some()),
             LoadKind::ResourceDetail => usize::from(self.state.resource_document.is_some()),
             LoadKind::Tenants => self.state.tenants.len(),
-            LoadKind::CloudContexts => self.state.gcp_configurations.len(),
+            LoadKind::CloudContexts => {
+                self.state.gcp_configurations.len() + self.state.aws_profiles.len()
+            }
             LoadKind::PolicyAssignments => self.state.policy_assignments.len(),
             LoadKind::PolicyExemptions => self.state.policy_exemptions.len(),
             LoadKind::RoleAssignments => self.state.role_assignments.len(),
@@ -1080,7 +1103,10 @@ impl App {
             LoadedData::Resources(items) => put(&mut self.state.resources, items, append),
             LoadedData::ScopeTree(tree) => self.state.set_scope_tree(tree),
             LoadedData::Tenants(tenants) => self.state.tenants = tenants,
-            LoadedData::CloudContexts(configs) => self.state.gcp_configurations = configs,
+            LoadedData::CloudContexts(contexts) => {
+                self.state.gcp_configurations = contexts.gcp;
+                self.state.aws_profiles = contexts.aws;
+            }
             LoadedData::PolicyAssignments(items) => self.state.policy_assignments = items,
             LoadedData::PolicyExemptions(items) => self.state.policy_exemptions = items,
             LoadedData::RoleAssignments(items) => self.state.role_assignments = items,

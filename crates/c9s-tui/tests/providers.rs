@@ -145,3 +145,17 @@ async fn gcp_folders_are_the_tree_and_open_onto_resources() {
     assert_eq!(app.state().view, ViewMode::ResourceList);
     assert_eq!(app.state().scope_group.as_deref(), Some("folders/2"));
 }
+
+#[tokio::test]
+async fn aws_speaks_accounts_and_names_its_profile() {
+    let mut app = app(Provider::Aws);
+    app.state_mut().aws_profile = Some("prod-admin".into());
+    let text = screen(&mut app);
+    assert!(
+        text.contains("aws · prod-admin") && text.contains("Accounts (1)"),
+        "{text}"
+    );
+    command(&mut app, "mg").await;
+    let error = app.state().error.clone().unwrap_or_default();
+    assert!(error.contains("isn't available for aws yet"), "{error}");
+}

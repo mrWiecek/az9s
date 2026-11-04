@@ -600,12 +600,20 @@ impl TuiApp {
                         .iter()
                         .find(|c| c.name == arg)
                         .map(|c| c.name.clone());
-                    match (gcp, self.find_tenant(&arg)) {
-                        (Some(configuration), _) => self.core.switch_to_gcp(Some(configuration)),
-                        (None, Some(id)) => self.core.switch_tenant(Some(id)),
-                        (None, None) => self.state_mut().set_error(Some(format!(
-                            "Context not found: {arg}\n\nType :ctx to list the tenants and \
-                             gcloud configurations you can use."
+                    // AWS profiles are read from the CLI's files, so they
+                    // work before :ctx has listed them.
+                    let aws = c9s_core::aws::profiles()
+                        .into_iter()
+                        .chain(self.state().aws_profiles.clone())
+                        .find(|p| p.name == arg)
+                        .map(|p| p.name);
+                    match (gcp, aws, self.find_tenant(&arg)) {
+                        (Some(configuration), _, _) => self.core.switch_to_gcp(Some(configuration)),
+                        (None, Some(profile), _) => self.core.switch_to_aws(profile),
+                        (None, None, Some(id)) => self.core.switch_tenant(Some(id)),
+                        (None, None, None) => self.state_mut().set_error(Some(format!(
+                            "Context not found: {arg}\n\nType :ctx to list the Azure tenants, \
+                             gcloud configurations and AWS profiles you can use."
                         ))),
                     }
                 }
@@ -1680,8 +1688,8 @@ impl TuiApp {
                 return;
             }
             Provider::Aws => {
-                self.state_mut().notice =
-                    Some("Opening in the AWS console isn't available yet (y copies the ID)".into());
+                let url = detail::aws_console_url(&id);
+                self.open_url(&url, "the AWS console");
                 return;
             }
         }
@@ -1882,7 +1890,12 @@ impl TuiApp {
                 if let Some(row) = self.state().selected_tenant_row() {
                     match row.provider {
                         Provider::Azure => self.core.switch_tenant(row.id),
-                        _ => self.core.switch_to_gcp(row.id),
+                        Provider::Gcp => self.core.switch_to_gcp(row.id),
+                        Provider::Aws => {
+                            if let Some(profile) = row.id {
+                                self.core.switch_to_aws(profile)
+                            }
+                        }
                     }
                 }
                 Ok(true)

@@ -236,10 +236,9 @@ impl Fetcher for GcpFetcher {
                     outcome(data)
                 }
                 LoadRequest::CloudContexts => outcome(
-                    c9s_gcp::configurations("gcloud")
+                    crate::loader::cloud_contexts()
                         .await
-                        .map(LoadedData::CloudContexts)
-                        .map_err(|e| e.to_string()),
+                        .map(LoadedData::CloudContexts),
                 ),
                 other => outcome(Err(format!(
                     "not available for Google Cloud yet ({})",

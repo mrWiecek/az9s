@@ -12,6 +12,26 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-04
+
+### Added
+- **AWS browsing (preview), one CLI profile at a time.** `:ctx` lists the
+  AWS CLI's profiles (from `~/.aws/config` and `~/.aws/credentials`, with
+  SSO, role or keys and the region) next to Azure tenants and gcloud
+  configurations; `Enter` or `:ctx <profile>` switches to AWS. The
+  profile's account is listed; `Enter` lists its resources from Resource
+  Explorer (type, region, tags; `/`, `type=`, `tag=` filters work), and
+  `Enter` on a resource shows its document. Without Resource Explorer, the
+  Tagging API in the profile's region stands in, with a notice. Needs AWS
+  CLI v2, signed in. `o` opens a resource in the AWS console by its ARN.
+  New crate `c9s-aws` signs requests itself (SigV4), no AWS SDK.
+
+### Changed
+- The status bar names the gcloud configuration or AWS profile
+  (`gcp · work`, `aws · prod-admin`).
+- `:ctx` still lists gcloud configurations when the AWS CLI is missing, and
+  AWS profiles when gcloud is.
+
 ## [1.3.0] - 2026-11-04
 
 ### Added
@@ -717,7 +737,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/mrWiecek/c9s/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/mrWiecek/c9s/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/mrWiecek/c9s/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/mrWiecek/c9s/compare/v1.0.1...v1.1.0

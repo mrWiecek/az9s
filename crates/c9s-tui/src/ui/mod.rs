@@ -1690,7 +1690,7 @@ fn draw_tenant_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         format!("Contexts ({}) - Filter: {}_", rows.len(), state.filter)
     } else {
         format!(
-            "Contexts ({}){names_note}: Azure tenants and gcloud configurations · Enter switches · ● current",
+            "Contexts ({}){names_note}: Azure tenants, gcloud configurations, AWS profiles · Enter switches · ● current",
             rows.len().saturating_sub(1)
         )
     };
