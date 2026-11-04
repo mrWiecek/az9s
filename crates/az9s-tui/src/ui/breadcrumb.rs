@@ -97,6 +97,8 @@ impl Breadcrumb {
             ViewMode::RoleAssignments => "Role assignments",
             ViewMode::RoleDefinitions => "Roles",
             ViewMode::GroupList => "Groups",
+            ViewMode::AppList => "Applications",
+            ViewMode::AppDetail => "Application",
             ViewMode::GroupMembers => "Members",
             ViewMode::MemberOf => "Member of",
             ViewMode::ResourceDetail => "Resource Detail",

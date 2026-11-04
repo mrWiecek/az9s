@@ -247,7 +247,7 @@ impl DirectoryClient {
     }
 
     /// Every item of a paged Graph list (`value`, `@odata.nextLink`).
-    async fn get_all(&self, mut url: String) -> Result<Vec<Value>> {
+    pub(crate) async fn get_all(&self, mut url: String) -> Result<Vec<Value>> {
         let mut items = Vec::new();
         loop {
             let token = self.tokens.token().await?;
@@ -272,6 +272,26 @@ impl DirectoryClient {
     }
 }
 
+impl DirectoryClient {
+    /// The Graph endpoint (for building URLs in sibling modules).
+    pub(crate) fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    /// One Graph object.
+    pub(crate) async fn get_one(&self, url: &str) -> Result<Value> {
+        let token = self.tokens.token().await?;
+        let response = self
+            .http
+            .get(url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| AzureError::ApiError(format!("Microsoft Graph request failed: {e}")))?;
+        read_body(response).await
+    }
+}
+
 /// A Microsoft Graph response's JSON, or its error message.
 async fn read_body(response: reqwest::Response) -> Result<Value> {
     let status = response.status();
@@ -293,7 +313,7 @@ async fn read_body(response: reqwest::Response) -> Result<Value> {
         .map_err(|e| AzureError::ApiError(format!("Invalid Microsoft Graph response: {e}")))
 }
 
-fn principal_from_item(item: &Value) -> Option<Principal> {
+pub(crate) fn principal_from_item(item: &Value) -> Option<Principal> {
     let text = |key: &str| item.get(key).and_then(Value::as_str).unwrap_or_default();
     let id = text("id");
     if id.is_empty() {

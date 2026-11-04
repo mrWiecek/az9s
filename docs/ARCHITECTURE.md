@@ -145,6 +145,15 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   of the principal or any of those groups, each with the group it comes
   `via`. Navigation contexts of `:ra` carry its scope, role and principal
   so `Esc` restores the list as it was.
+- Applications (`az9s_azure::apps`, `az9s_core::apps`, `app_view`):
+  `LoadRequest::Applications` loads every registration and service
+  principal (cached per tenant); `apps::app_rows` joins them by app ID into
+  one row per app (`AppKind`). Opening one loads `AppDetail` fresh: owners,
+  delegated grants, app role assignments (granted and assigned), and the
+  APIs involved, to name permissions. `permission_rows` merges requested
+  (registration) and granted (enterprise app) permissions with their
+  consent. `app_view::app_lines` renders each `AppTab` as toned lines,
+  shared by the screen and `c`.
 - Groups (Microsoft Graph via `DirectoryClient`): `LoadRequest::Groups`
   (paged `/groups`, cached per tenant), `GroupMembers { transitive }`
   (`members` or `transitiveMembers`, fresh each time) and the existing

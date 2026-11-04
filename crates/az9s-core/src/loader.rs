@@ -74,6 +74,14 @@ pub enum LoadRequest {
     },
     /// Every group in the directory (Microsoft Graph).
     Groups,
+    /// Every app registration and enterprise application (Microsoft Graph).
+    Applications,
+    /// One application's owners, grants, assignments and APIs.
+    AppDetail {
+        app_id: String,
+        application_id: Option<String>,
+        service_principal_id: Option<String>,
+    },
     /// A group's members, direct or (`transitive`) nested too.
     GroupMembers {
         group_id: String,
@@ -120,6 +128,8 @@ pub enum LoadKind {
     PrincipalGroups,
     Groups,
     GroupMembers,
+    Applications,
+    AppDetail,
     ComplianceRollup,
     PolicyCompliance,
     ComplianceSummary,
@@ -143,6 +153,8 @@ impl LoadKind {
             LoadKind::Principals => "principal names",
             LoadKind::PrincipalGroups => "group memberships",
             LoadKind::Groups => "groups",
+            LoadKind::Applications => "applications",
+            LoadKind::AppDetail => "application details",
             LoadKind::GroupMembers => "group members",
             LoadKind::ComplianceRollup => "compliance per subscription",
             LoadKind::PolicyCompliance => "policy compliance",
@@ -169,6 +181,8 @@ impl LoadRequest {
             LoadRequest::Principals { .. } => LoadKind::Principals,
             LoadRequest::PrincipalGroups { .. } => LoadKind::PrincipalGroups,
             LoadRequest::Groups => LoadKind::Groups,
+            LoadRequest::Applications => LoadKind::Applications,
+            LoadRequest::AppDetail { .. } => LoadKind::AppDetail,
             LoadRequest::GroupMembers { .. } => LoadKind::GroupMembers,
             LoadRequest::ComplianceRollup => LoadKind::ComplianceRollup,
             LoadRequest::PolicyCompliance { .. } => LoadKind::PolicyCompliance,
@@ -196,6 +210,12 @@ pub enum LoadedData {
     /// A principal (lowercase ID) and its groups
     PrincipalGroups(String, Vec<az9s_azure::directory::Principal>),
     Groups(Vec<az9s_azure::directory::Group>),
+    Applications(
+        Vec<az9s_azure::apps::Application>,
+        Vec<az9s_azure::apps::ServicePrincipal>,
+    ),
+    /// An application (its app ID) and its details
+    AppDetail(String, Box<az9s_azure::apps::AppDetail>),
     /// A group (lowercase ID), direct or transitive, and its members
     GroupMembers(String, bool, Vec<az9s_azure::directory::Principal>),
     /// Per subscription (lowercase ID), tenant-wide
@@ -493,7 +513,9 @@ impl Fetcher for AzureFetcher {
                 | LoadRequest::Principals { .. }
                 | LoadRequest::PrincipalGroups { .. }
                 | LoadRequest::Groups
-                | LoadRequest::GroupMembers { .. } => FetchOutcome {
+                | LoadRequest::GroupMembers { .. }
+                | LoadRequest::Applications
+                | LoadRequest::AppDetail { .. } => FetchOutcome {
                     data: Err("role assignments need Resource Graph \
                                    (not available with AZ9S_BACKEND=arm)"
                         .into()),
@@ -670,6 +692,39 @@ impl Fetcher for GraphFetcher {
             .boxed();
         }
         match &request {
+            LoadRequest::Applications | LoadRequest::AppDetail { .. } => {
+                let directory = self.directory.clone();
+                let request = request.clone();
+                return async move {
+                    let data = match (directory, request) {
+                        (None, _) => Err("Microsoft Graph is not configured".to_string()),
+                        (Some(d), LoadRequest::Applications) => d
+                            .applications()
+                            .await
+                            .map(|(apps, sps)| LoadedData::Applications(apps, sps))
+                            .map_err(|e| e.to_string()),
+                        (
+                            Some(d),
+                            LoadRequest::AppDetail {
+                                app_id,
+                                application_id,
+                                service_principal_id,
+                            },
+                        ) => d
+                            .app_detail(application_id.as_deref(), service_principal_id.as_deref())
+                            .await
+                            .map(|detail| LoadedData::AppDetail(app_id, Box::new(detail)))
+                            .map_err(|e| e.to_string()),
+                        (Some(_), _) => unreachable!("matched above"),
+                    };
+                    FetchOutcome {
+                        data,
+                        failed_subscriptions: vec![],
+                        notice: None,
+                    }
+                }
+                .boxed();
+            }
             LoadRequest::Groups | LoadRequest::GroupMembers { .. } => {
                 let directory = self.directory.clone();
                 let request = request.clone();
@@ -1062,6 +1117,8 @@ impl Fetcher for GraphFetcher {
                 | LoadRequest::PrincipalGroups { .. }
                 | LoadRequest::Groups
                 | LoadRequest::GroupMembers { .. }
+                | LoadRequest::Applications
+                | LoadRequest::AppDetail { .. }
                 | LoadRequest::ComplianceRollup
                 | LoadRequest::PolicyCompliance { .. }
                 | LoadRequest::ComplianceSummary { .. }
@@ -1155,6 +1212,8 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::Principals => LoadedData::Principals(vec![]),
         LoadKind::PrincipalGroups => LoadedData::PrincipalGroups(String::new(), vec![]),
         LoadKind::Groups => LoadedData::Groups(vec![]),
+        LoadKind::Applications => LoadedData::Applications(vec![], vec![]),
+        LoadKind::AppDetail => LoadedData::AppDetail(String::new(), Box::default()),
         LoadKind::GroupMembers => LoadedData::GroupMembers(String::new(), false, vec![]),
         LoadKind::ComplianceRollup => LoadedData::ComplianceRollup(HashMap::new()),
         LoadKind::PolicyCompliance => {

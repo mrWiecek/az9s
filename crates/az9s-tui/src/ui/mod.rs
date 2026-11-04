@@ -107,6 +107,8 @@ fn draw_content(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         ViewMode::RoleAssignments => draw_role_assignments(f, area, app),
         ViewMode::RoleDefinitions => draw_role_definitions(f, area, app),
         ViewMode::GroupList => draw_groups(f, area, app),
+        ViewMode::AppList => draw_apps(f, area, app),
+        ViewMode::AppDetail => draw_app(f, area, app),
         ViewMode::GroupMembers | ViewMode::MemberOf => draw_members(f, area, app),
         ViewMode::ResourceDetail => draw_resource_detail(f, area, app),
         ViewMode::Logs => draw_logs(f, area, app),
@@ -596,6 +598,149 @@ fn draw_list(
     };
     list.render(area, f.buffer_mut(), &mut widget_state);
     app.state_mut().list_state = list_state;
+}
+
+/// `:app`: registrations and enterprise applications, one row per app.
+fn draw_apps(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
+    use az9s_core::apps::AppKind;
+    let rows = app.state().app_rows();
+    let state = app.state();
+    let t = theme();
+    if rows.is_empty() {
+        let message = if state.loading {
+            "Loading applications…".to_string()
+        } else if !state.filter.is_empty() {
+            "No applications match the current filter.\n\nPress Esc to clear the filter.".into()
+        } else {
+            "No applications loaded (they come from Microsoft Graph). Press r to retry.".into()
+        };
+        draw_empty(f, area, "Applications".into(), message);
+        return Ok(());
+    }
+    let count = |k: AppKind| rows.iter().filter(|r| r.kind == k).count();
+    let expiring = rows
+        .iter()
+        .filter(|r| {
+            r.soonest.as_ref().is_some_and(|(e, _)| {
+                matches!(e, az9s_core::policy::Expiry::Expired(_))
+                    || matches!(e, az9s_core::policy::Expiry::In(d) if *d <= az9s_core::policy::EXPIRY_WARNING_DAYS)
+            })
+        })
+        .count();
+    let microsoft = if state.show_microsoft_apps {
+        "m hide Microsoft's"
+    } else {
+        "m show Microsoft's"
+    };
+    let title = if state.filter_mode {
+        format!("Applications ({}) - Filter: {}_", rows.len(), state.filter)
+    } else {
+        format!(
+            "Applications ({} registered, {} external, {} managed identities, {expiring} with \
+             credentials expired or expiring) · Enter open, p access, {microsoft}",
+            count(AppKind::Registered),
+            count(AppKind::External) + count(AppKind::Microsoft),
+            count(AppKind::ManagedIdentity),
+        )
+    };
+    let name_col = name_width(area.width, 18 + 38 + 36, 44);
+    draw_list(f, area, app, title, rows.len(), |i| {
+        let r = &rows[i];
+        let (expiry, style) = match &r.soonest {
+            Some((e, c)) => (
+                format!("{} ({})", az9s_core::policy::expiry_label(*e), c.kind),
+                expiry_span(*e, 0).style,
+            ),
+            None => ("no credentials".into(), Style::default().fg(t.muted)),
+        };
+        let kind_style = match r.kind {
+            AppKind::Registered => Style::default().fg(t.special),
+            AppKind::ManagedIdentity => Style::default().fg(t.accent),
+            _ => Style::default().fg(t.muted),
+        };
+        list_item_spans(vec![
+            Span::styled(
+                cell(&r.name, name_col),
+                Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(cell(r.kind.label(), 18), kind_style),
+            Span::styled(cell(&r.app_id, 38), Style::default().fg(t.muted)),
+            Span::styled(cell(&expiry, 36), style),
+        ])
+    });
+    Ok(())
+}
+
+/// One application: tabs over its registration and enterprise application.
+fn draw_app(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
+    use az9s_core::app_view::Tone;
+    use az9s_core::state::AppTab;
+    let state = app.state();
+    let Some(row) = state.app_open.clone() else {
+        draw_empty(
+            f,
+            area,
+            "Application".into(),
+            "No application selected.".into(),
+        );
+        return Ok(());
+    };
+    let t = theme();
+    let tone = |tone: Tone| match tone {
+        Tone::Heading => Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
+        Tone::Label => Style::default().fg(t.highlight),
+        Tone::Text => Style::default().fg(t.text),
+        Tone::Muted => Style::default().fg(t.muted),
+        Tone::Accent => Style::default().fg(t.special),
+        Tone::Good => Style::default().fg(t.ok),
+        Tone::Warn => Style::default().fg(t.highlight),
+        Tone::Bad => Style::default().fg(t.error).add_modifier(Modifier::BOLD),
+    };
+    let lines: Vec<Line> = az9s_core::app_view::app_lines(state)
+        .into_iter()
+        .map(|l| {
+            Line::from(
+                l.into_iter()
+                    .map(|(text, k)| Span::styled(text, tone(k)))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    let loading = if state.open_app_detail().is_none() && state.loading {
+        " · loading details…"
+    } else {
+        ""
+    };
+    let block = Block::default().borders(Borders::ALL).title(format!(
+        "{} · {}{loading} · p access, o Portal",
+        truncate_with_ellipsis(&row.name, 60),
+        row.kind.label()
+    ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let parts = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(0)])
+        .split(inner);
+    let titles: Vec<Line> = AppTab::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, tab)| Line::from(format!("{} {}", i + 1, tab.title())))
+        .collect();
+    let tabs = Tabs::new(titles)
+        .select(state.app_tab.index())
+        .style(Style::default().fg(t.subtle))
+        .highlight_style(t.selection())
+        .divider("│");
+    f.render_widget(tabs, parts[0]);
+    let viewport = parts[1].height as usize;
+    let scroll = state
+        .detail_scroll
+        .min(lines.len().saturating_sub(viewport));
+    let content = Paragraph::new(lines).scroll((scroll.min(u16::MAX as usize) as u16, 0));
+    f.render_widget(content, parts[1]);
+    app.state_mut().detail_scroll = scroll;
+    Ok(())
 }
 
 /// `:group`: directory groups.
@@ -2271,6 +2416,29 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("/", "Filter"),
                 ("c", "Copy"),
                 ("y", "Copy ID"),
+                ("o", "Portal"),
+                ("r", "Refresh"),
+                ("Esc", "Back"),
+                ("q", "Quit"),
+            ],
+            ViewMode::AppList => vec![
+                ("↑↓/jk", "Navigate"),
+                ("Enter", "Open"),
+                ("m", "Microsoft's"),
+                ("p", "Access"),
+                ("/", "Filter"),
+                ("c", "Copy"),
+                ("y", "Copy app ID"),
+                ("o", "Portal"),
+                ("r", "Refresh"),
+                ("q", "Quit"),
+            ],
+            ViewMode::AppDetail => vec![
+                ("Tab/1-7", "Tabs"),
+                ("↑↓/jk", "Scroll"),
+                ("p", "Access"),
+                ("c", "Copy tab"),
+                ("y", "Copy app ID"),
                 ("o", "Portal"),
                 ("r", "Refresh"),
                 ("Esc", "Back"),

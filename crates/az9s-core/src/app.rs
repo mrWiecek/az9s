@@ -320,6 +320,47 @@ impl App {
         }
     }
 
+    /// `:app`: every application (cached first).
+    pub fn open_apps(&mut self) {
+        self.state.view = ViewMode::AppList;
+        self.state.list_state.reset();
+        self.request(LoadRequest::Applications);
+    }
+
+    /// One application's tabs; its details load fresh.
+    pub fn open_app(&mut self, row: crate::apps::AppRow) {
+        let request = LoadRequest::AppDetail {
+            app_id: row.app_id.clone(),
+            application_id: row.app.as_ref().map(|a| a.id.clone()),
+            service_principal_id: row.sp.as_ref().map(|s| s.id.clone()),
+        };
+        let state = &mut self.state;
+        if state
+            .app_detail
+            .as_ref()
+            .is_some_and(|(id, _)| *id != row.app_id)
+        {
+            state.app_detail = None;
+        }
+        state.app_open = Some(row);
+        state.app_tab = Default::default();
+        state.detail_scroll = 0;
+        state.view = ViewMode::AppDetail;
+        self.request(request);
+    }
+
+    /// Reload the open application's details, keeping its tab.
+    pub fn refresh_app(&mut self) {
+        let Some(row) = self.state.app_open.clone() else {
+            return;
+        };
+        self.request(LoadRequest::AppDetail {
+            app_id: row.app_id.clone(),
+            application_id: row.app.as_ref().map(|a| a.id.clone()),
+            service_principal_id: row.sp.as_ref().map(|s| s.id.clone()),
+        });
+    }
+
     /// `:group`: every group in the directory (cached first).
     pub fn open_groups(&mut self) {
         self.state.view = ViewMode::GroupList;
@@ -585,8 +626,21 @@ impl App {
             | LoadRequest::Tenants
             | LoadRequest::PrincipalGroups { .. }
             | LoadRequest::GroupMembers { .. }
+            | LoadRequest::AppDetail { .. }
             | LoadRequest::PolicyStates { .. }
             | LoadRequest::ResourcePolicy { .. } => return,
+            LoadRequest::Applications => {
+                repo.document(&self.tenant_key("applications")).map(|doc| {
+                    match doc.and_then(|(json, at)| {
+                        serde_json::from_str::<(Vec<_>, Vec<_>)>(&json)
+                            .ok()
+                            .map(|v| (v, at))
+                    }) {
+                        Some(((apps, sps), at)) => (LoadedData::Applications(apps, sps), Some(at)),
+                        None => (LoadedData::Applications(vec![], vec![]), None),
+                    }
+                })
+            }
             LoadRequest::Groups => repo.document(&self.tenant_key("groups")).map(|doc| {
                 match doc.and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at))) {
                     Some((items, at)) => (LoadedData::Groups(items), Some(at)),
@@ -734,6 +788,10 @@ impl App {
             LoadKind::Principals => self.state.principals.len(),
             LoadKind::PrincipalGroups => self.state.principal_groups.len(),
             LoadKind::Groups => self.state.groups.len(),
+            LoadKind::Applications => {
+                self.state.applications.len() + self.state.service_principals.len()
+            }
+            LoadKind::AppDetail => usize::from(self.state.app_detail.is_some()),
             LoadKind::GroupMembers => self.state.group_members.len(),
             LoadKind::ComplianceRollup => usize::from(self.state.compliance_rollup.is_some()),
             LoadKind::PolicyCompliance => usize::from(self.state.policy_compliance.is_some()),
@@ -868,6 +926,9 @@ impl App {
                 // enough. Otherwise the list is empty or incomplete: error.
                 if kind == LoadKind::ScopeTree && !pending.staged {
                     self.fall_back_to_subscriptions(&e);
+                } else if kind == LoadKind::AppDetail && !pending.staged {
+                    // The overview and credentials still show.
+                    self.state.notice = Some(format!("Application details unavailable: {e}"));
                 } else if kind == LoadKind::PrincipalGroups && self.state.view == ViewMode::MemberOf
                 {
                     self.state
@@ -951,6 +1012,15 @@ impl App {
             LoadedData::RoleAssignments(items) => self.state.role_assignments = items,
             LoadedData::RoleDefinitions(items) => self.state.role_definitions = items,
             LoadedData::Groups(groups) => self.state.groups = groups,
+            LoadedData::Applications(apps, sps) => {
+                self.state.applications = apps;
+                self.state.service_principals = sps;
+            }
+            LoadedData::AppDetail(app_id, detail) => {
+                if !app_id.is_empty() {
+                    self.state.app_detail = Some((app_id, *detail));
+                }
+            }
             LoadedData::GroupMembers(id, transitive, members) => {
                 if !id.is_empty() {
                     for m in &members {
@@ -1025,6 +1095,17 @@ impl App {
             | LoadRequest::GroupMembers { .. }
             | LoadRequest::PolicyStates { .. }
             | LoadRequest::ResourcePolicy { .. } => return,
+            LoadRequest::AppDetail { .. } => return,
+            LoadRequest::Applications => match serde_json::to_string(&(
+                &self.state.applications,
+                &self.state.service_principals,
+            )) {
+                Ok(value) => WriteJob::Document {
+                    key: self.tenant_key("applications"),
+                    value,
+                },
+                Err(_) => return,
+            },
             LoadRequest::Groups => match serde_json::to_string(&self.state.groups) {
                 Ok(value) => WriteJob::Document {
                     key: self.tenant_key("groups"),
@@ -1190,6 +1271,8 @@ fn view_of(kind: LoadKind) -> ViewMode {
         LoadKind::RoleDefinitions => ViewMode::RoleDefinitions,
         LoadKind::Principals | LoadKind::PrincipalGroups => ViewMode::RoleAssignments,
         LoadKind::Groups => ViewMode::GroupList,
+        LoadKind::Applications => ViewMode::AppList,
+        LoadKind::AppDetail => ViewMode::AppDetail,
         LoadKind::GroupMembers => ViewMode::GroupMembers,
     }
 }

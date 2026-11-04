@@ -104,6 +104,19 @@ pub struct AppState {
     /// Principals named so far (Microsoft Graph), by lowercase ID
     pub principals: HashMap<String, az9s_azure::directory::Principal>,
 
+    /// App registrations and enterprise applications, once loaded
+    pub applications: Vec<crate::apps::Application>,
+    pub service_principals: Vec<crate::apps::ServicePrincipal>,
+
+    /// Show Microsoft's own applications in `:app` (`m`)
+    pub show_microsoft_apps: bool,
+
+    /// The application whose tabs are shown, its details once loaded (by
+    /// app ID), and the tab
+    pub app_open: Option<crate::apps::AppRow>,
+    pub app_detail: Option<(String, crate::apps::AppDetail)>,
+    pub app_tab: AppTab,
+
     /// Every group in the directory, once loaded
     pub groups: Vec<az9s_azure::directory::Group>,
 
@@ -420,6 +433,10 @@ pub enum ViewMode {
     RoleAssignments,
     /// Directory groups (`:group`)
     GroupList,
+    /// Applications: registrations and enterprise apps (`:app`)
+    AppList,
+    /// One application's tabs
+    AppDetail,
     /// A group's members
     GroupMembers,
     /// The groups a user, group or app belongs to
@@ -428,6 +445,53 @@ pub enum ViewMode {
     RoleDefinitions,
     ResourceDetail,
     Logs,
+}
+
+/// Tabs of an application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AppTab {
+    #[default]
+    Overview,
+    Permissions,
+    ExposedApi,
+    Owners,
+    Credentials,
+    Assigned,
+    Json,
+}
+
+impl AppTab {
+    pub const ALL: [AppTab; 7] = [
+        AppTab::Overview,
+        AppTab::Permissions,
+        AppTab::ExposedApi,
+        AppTab::Owners,
+        AppTab::Credentials,
+        AppTab::Assigned,
+        AppTab::Json,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            AppTab::Overview => "Overview",
+            AppTab::Permissions => "Permissions",
+            AppTab::ExposedApi => "Exposed API",
+            AppTab::Owners => "Owners",
+            AppTab::Credentials => "Credentials",
+            AppTab::Assigned => "Assigned",
+            AppTab::Json => "JSON",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|t| *t == self).unwrap_or(0)
+    }
+
+    /// The tab `step` places to the right (negative: left), wrapping.
+    pub fn cycle(self, step: isize) -> Self {
+        let n = Self::ALL.len() as isize;
+        Self::ALL[(self.index() as isize + step).rem_euclid(n) as usize]
+    }
 }
 
 /// Tabs of the resource detail view.
@@ -597,6 +661,7 @@ impl AppState {
             ViewMode::ExemptionList => self.exemption_rows().len(),
             ViewMode::RoleAssignments => self.role_assignment_rows().len(),
             ViewMode::GroupList => self.group_rows().len(),
+            ViewMode::AppList => self.app_rows().len(),
             ViewMode::GroupMembers => self.member_rows().map_or(0, |r| r.len()),
             ViewMode::MemberOf => self.member_of_rows().map_or(0, |r| r.len()),
             ViewMode::RoleDefinitions => self.role_definition_rows().len(),
@@ -916,6 +981,34 @@ impl AppState {
                     || contains_ignore_ascii_case(&r.group, &needle)
             })
             .collect()
+    }
+
+    /// Rows of `:app` (see [`crate::apps::app_rows`]).
+    pub fn app_rows(&self) -> Vec<crate::apps::AppRow> {
+        crate::apps::app_rows(
+            &self.applications,
+            &self.service_principals,
+            self.show_microsoft_apps,
+            &self.filter,
+            chrono::Utc::now().timestamp(),
+        )
+    }
+
+    /// The selected row of `:app`.
+    pub fn selected_app(&self) -> Option<crate::apps::AppRow> {
+        if self.view != ViewMode::AppList {
+            return None;
+        }
+        self.app_rows().into_iter().nth(self.list_state.selected)
+    }
+
+    /// The open application's details, once loaded.
+    pub fn open_app_detail(&self) -> Option<&crate::apps::AppDetail> {
+        let row = self.app_open.as_ref()?;
+        self.app_detail
+            .as_ref()
+            .filter(|(id, _)| *id == row.app_id)
+            .map(|(_, d)| d)
     }
 
     /// Rows of `:group`, by name; `/` narrows by name, description, mail or
@@ -1332,6 +1425,9 @@ impl AppState {
     /// Whether the detail view's current tab has selectable rows (Tags,
     /// Policy), and how many.
     pub fn detail_rows(&self) -> Option<usize> {
+        if self.view != ViewMode::ResourceDetail {
+            return None;
+        }
         let resource = self.selected_resource_detail.as_ref()?;
         match self.detail_tab {
             DetailTab::Tags => {
@@ -1637,6 +1733,9 @@ impl AppState {
             ViewMode::RoleAssignments => self.selected_role_assignment().map(|r| r.assignment.id),
             // Directory objects: their object ID (`y` copies it).
             ViewMode::GroupList => self.selected_group().map(|g| g.id),
+            // Applications: their app ID.
+            ViewMode::AppList => self.selected_app().map(|a| a.app_id),
+            ViewMode::AppDetail => self.app_open.as_ref().map(|a| a.app_id.clone()),
             ViewMode::GroupMembers => self.selected_member().map(|m| m.id),
             ViewMode::MemberOf => self.selected_member_of().map(|m| m.id),
             ViewMode::RoleDefinitions => self.selected_role_definition().map(|r| r.definition.id),
@@ -1695,7 +1794,8 @@ impl AppState {
             | ViewMode::RoleDefinitions
             | ViewMode::GroupList
             | ViewMode::GroupMembers
-            | ViewMode::MemberOf => self.selected_arm_id(),
+            | ViewMode::MemberOf
+            | ViewMode::AppList => self.selected_arm_id(),
             _ => None,
         }
     }
@@ -1734,6 +1834,7 @@ impl AppState {
                 .iter()
                 .position(|r| r.assignment.id == id),
             ViewMode::GroupList => self.group_rows().iter().position(|g| g.id == id),
+            ViewMode::AppList => self.app_rows().iter().position(|a| a.app_id == id),
             ViewMode::GroupMembers => self
                 .member_rows()
                 .and_then(|r| r.iter().position(|m| m.id == id)),

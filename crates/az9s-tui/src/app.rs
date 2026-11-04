@@ -10,7 +10,7 @@ use az9s_core::palette::PaletteAction;
 use az9s_core::policy::PolicyScope;
 use az9s_core::query::ResourceQuery;
 use az9s_core::scope_tree::TreeRowKind;
-use az9s_core::state::{DetailTab, NavigationContext, ViewMode};
+use az9s_core::state::{AppTab, DetailTab, NavigationContext, ViewMode};
 use az9s_core::{App, AppState};
 use std::time::{Duration, Instant};
 
@@ -509,6 +509,13 @@ impl TuiApp {
                          names are loaded, then press p on one of its rows."
                     ))),
                 }
+            }
+            CommandKind::Apps(name) => {
+                debug!("Command: applications {:?}", name);
+                let state = self.state_mut();
+                state.clear_navigation();
+                state.filter = name.unwrap_or_default();
+                self.core.open_apps();
             }
             CommandKind::Groups(name) => {
                 debug!("Command: groups {:?}", name);
@@ -1024,6 +1031,8 @@ impl TuiApp {
                 self.core.request(LoadRequest::ComplianceRollup);
             }
             (ViewMode::GroupList, _) => self.core.request(LoadRequest::Groups),
+            (ViewMode::AppList, _) => self.core.request(LoadRequest::Applications),
+            (ViewMode::AppDetail, _) => self.core.refresh_app(),
             (ViewMode::GroupMembers, _) => {
                 let state = self.state();
                 if let Some(group) = state.members_group.clone() {
@@ -1146,7 +1155,10 @@ impl TuiApp {
 
     /// Navigate down in the current list
     fn navigate_down(&mut self) {
-        if self.state().view == ViewMode::ResourceDetail {
+        if matches!(
+            self.state().view,
+            ViewMode::ResourceDetail | ViewMode::AppDetail
+        ) {
             if !self.move_detail_cursor(|c, _| c + 1) {
                 self.scroll_detail(1);
             }
@@ -1161,7 +1173,10 @@ impl TuiApp {
 
     /// Navigate up in the current list
     fn navigate_up(&mut self) {
-        if self.state().view == ViewMode::ResourceDetail {
+        if matches!(
+            self.state().view,
+            ViewMode::ResourceDetail | ViewMode::AppDetail
+        ) {
             if !self.move_detail_cursor(|c, _| c.saturating_sub(1)) {
                 self.scroll_detail(-1);
             }
@@ -1175,7 +1190,10 @@ impl TuiApp {
 
     /// Navigate to first item
     fn navigate_first(&mut self) {
-        if self.state().view == ViewMode::ResourceDetail {
+        if matches!(
+            self.state().view,
+            ViewMode::ResourceDetail | ViewMode::AppDetail
+        ) {
             if !self.move_detail_cursor(|_, _| 0) {
                 self.state_mut().detail_scroll = 0;
             }
@@ -1189,7 +1207,10 @@ impl TuiApp {
 
     /// Navigate to last item
     fn navigate_last(&mut self) {
-        if self.state().view == ViewMode::ResourceDetail {
+        if matches!(
+            self.state().view,
+            ViewMode::ResourceDetail | ViewMode::AppDetail
+        ) {
             if !self.move_detail_cursor(|_, n| n) {
                 self.state_mut().detail_scroll = usize::MAX;
             }
@@ -1204,7 +1225,10 @@ impl TuiApp {
 
     /// Navigate page down (viewport-aware)
     fn navigate_page_down(&mut self) {
-        if self.state().view == ViewMode::ResourceDetail {
+        if matches!(
+            self.state().view,
+            ViewMode::ResourceDetail | ViewMode::AppDetail
+        ) {
             self.scroll_detail(10);
             return;
         }
@@ -1219,7 +1243,10 @@ impl TuiApp {
 
     /// Navigate page up (viewport-aware)
     fn navigate_page_up(&mut self) {
-        if self.state().view == ViewMode::ResourceDetail {
+        if matches!(
+            self.state().view,
+            ViewMode::ResourceDetail | ViewMode::AppDetail
+        ) {
             self.scroll_detail(-10);
             return;
         }
@@ -1584,11 +1611,33 @@ impl TuiApp {
         };
         let tenant = self.state().portal_tenant();
         // Directory objects open on their Entra page, not as a resource.
+        let app = match self.state().view {
+            ViewMode::AppList => self.state().selected_app(),
+            ViewMode::AppDetail => self.state().app_open.clone(),
+            _ => None,
+        };
         let directory = match self.state().view {
+            ViewMode::AppList | ViewMode::AppDetail => app
+                .map(|a| match a.sp {
+                    // The enterprise app (by object ID), else the registration.
+                    Some(sp) => ("servicePrincipal".to_string(), a.app_id.clone(), sp.id),
+                    None => ("application".to_string(), a.app_id.clone(), a.app_id),
+                })
+                .map(|(kind, app_id, _)| (kind, app_id)),
             ViewMode::GroupList => Some(("group".to_string(), String::new())),
             ViewMode::GroupMembers => self.state().selected_member().map(|m| (m.kind, m.detail)),
             ViewMode::MemberOf => Some(("group".to_string(), String::new())),
             _ => None,
+        };
+        // Applications: the enterprise app's page needs its object ID.
+        let id = match self.state().view {
+            ViewMode::AppList | ViewMode::AppDetail => match self.state().view {
+                ViewMode::AppList => self.state().selected_app(),
+                _ => self.state().app_open.clone(),
+            }
+            .and_then(|a| a.sp.map(|s| s.id))
+            .unwrap_or(id),
+            _ => id,
         };
         let url = match directory {
             Some((kind, detail)) => {
@@ -1669,6 +1718,14 @@ impl TuiApp {
                 }
                 Ok(true)
             }
+            ViewMode::AppList => {
+                if let Some(row) = self.state().selected_app() {
+                    self.push_current_context(None);
+                    self.core.open_app(row);
+                }
+                Ok(true)
+            }
+            ViewMode::AppDetail => Ok(true),
             ViewMode::GroupList => {
                 if let Some(group) = self.state().selected_group() {
                     self.push_current_context(None);
@@ -1983,6 +2040,50 @@ impl TuiApp {
                 KeyCode::Char('n') => self.search_step(true),
                 KeyCode::Char('N') => self.search_step(false),
                 _ => {}
+            }
+            return Ok(true);
+        }
+        // Applications: `m` Microsoft's apps on/off; tabs; `p` Azure access.
+        if self.state().view == ViewMode::AppList && key.code == KeyCode::Char('m') {
+            let state = self.state_mut();
+            state.show_microsoft_apps = !state.show_microsoft_apps;
+            state.list_state.reset();
+            return Ok(true);
+        }
+        if self.state().view == ViewMode::AppDetail {
+            let tab = self.state().app_tab;
+            let next = match key.code {
+                KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => Some(tab.cycle(1)),
+                KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => Some(tab.cycle(-1)),
+                KeyCode::Char(c @ '1'..='7') => Some(AppTab::ALL[c as usize - '1' as usize]),
+                _ => None,
+            };
+            if let Some(next) = next.filter(|n| *n != tab) {
+                let state = self.state_mut();
+                state.app_tab = next;
+                state.detail_scroll = 0;
+                return Ok(true);
+            }
+        }
+        if matches!(self.state().view, ViewMode::AppList | ViewMode::AppDetail)
+            && key.code == KeyCode::Char('p')
+        {
+            let row = match self.state().view {
+                ViewMode::AppList => self.state().selected_app(),
+                _ => self.state().app_open.clone(),
+            };
+            match row.and_then(|r| r.sp) {
+                Some(sp) => {
+                    self.push_current_context(None);
+                    self.state_mut().filter.clear();
+                    self.core.open_access(&sp.id);
+                }
+                None => {
+                    self.state_mut().notice = Some(
+                        "No enterprise application in this tenant: it can't hold Azure roles"
+                            .into(),
+                    )
+                }
             }
             return Ok(true);
         }

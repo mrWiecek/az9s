@@ -12,6 +12,35 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-04
+
+### Added
+- **`:app [name]`: applications** (aliases `:application`,
+  `:enterpriseapp`). One row per app: an app registration and its
+  enterprise application are joined by app ID, so the two are one item.
+  Apps registered elsewhere (external) and managed identities are listed
+  too; Microsoft's own apps are hidden until `m`. Each row shows the
+  soonest credential to expire (red: expired, yellow: within 30 days); the
+  title counts apps by kind and those with credentials expired or
+  expiring.
+- **An application's tabs** (`Enter`; `1`-`7`, `Tab`):
+  - **Overview**: both object IDs, sign-in audience, created, enabled,
+    assignment required, publisher tenant, redirect URIs.
+  - **Permissions**: what the registration asks for next to what is
+    granted to the enterprise app, delegated and application, with
+    readable names (e.g. Microsoft Graph · User.Read.All) and consent:
+    not granted first (red), "granted by N users", or granted but no
+    longer requested (yellow).
+  - **Exposed API**: identifier URIs, scopes (who can consent) and app
+    roles (who can be given them).
+  - **Owners** of the registration and of the enterprise app.
+  - **Credentials**: every secret and certificate, soonest to expire first.
+  - **Assigned**: users, groups and apps assigned, with their role (and
+    whether assignment is required).
+  - **JSON**: both documents.
+- `p` shows the app's Azure access, `o` opens its Entra page, `y` copies
+  its app ID, `c` copies the list or the current tab.
+
 ## [0.20.0] - 2026-11-04
 
 ### Added
@@ -586,7 +615,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/mrWiecek/az9s/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/mrWiecek/az9s/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/mrWiecek/az9s/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/mrWiecek/az9s/compare/v0.17.0...v0.18.0
