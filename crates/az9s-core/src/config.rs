@@ -31,8 +31,11 @@ refresh_interval = 0
 # the Azure CLI's default login and lists every tenant's subscriptions.
 # tenant = "00000000-0000-0000-0000-000000000000"
 
-# Colours: "default" (dark terminals), "light" (light backgrounds) or "mono"
-# (no colours). Setting the NO_COLOR environment variable also means mono.
+# Colours. Using the terminal's background: "default" (dark terminals),
+# "light" (light backgrounds), "high-contrast", "mono" (no colours).
+# With their own background: "dracula", "nord", "gruvbox", "catppuccin",
+# "tokyo-night", "solarized-dark", "solarized-light". :theme <name> switches
+# while az9s runs. Setting the NO_COLOR environment variable means mono.
 theme = "default"
 
 # Read-only mode: actions that change Azure (planned, M4) are disabled.
@@ -42,7 +45,7 @@ read_only = true
 
 /// Colour theme (the TUI maps each to colours).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum ThemeName {
     /// For dark terminals (the original colours)
     #[default]
@@ -51,6 +54,55 @@ pub enum ThemeName {
     Light,
     /// No colours: bold, underline and reversed text only
     Mono,
+    /// Bright colours only, for low-contrast screens and projectors
+    HighContrast,
+    Dracula,
+    Nord,
+    Gruvbox,
+    /// Catppuccin Mocha
+    Catppuccin,
+    TokyoNight,
+    SolarizedDark,
+    SolarizedLight,
+}
+
+impl ThemeName {
+    pub const ALL: [ThemeName; 11] = [
+        ThemeName::Default,
+        ThemeName::Light,
+        ThemeName::Mono,
+        ThemeName::HighContrast,
+        ThemeName::Dracula,
+        ThemeName::Nord,
+        ThemeName::Gruvbox,
+        ThemeName::Catppuccin,
+        ThemeName::TokyoNight,
+        ThemeName::SolarizedDark,
+        ThemeName::SolarizedLight,
+    ];
+
+    /// The name as written in the config file and `:theme`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ThemeName::Default => "default",
+            ThemeName::Light => "light",
+            ThemeName::Mono => "mono",
+            ThemeName::HighContrast => "high-contrast",
+            ThemeName::Dracula => "dracula",
+            ThemeName::Nord => "nord",
+            ThemeName::Gruvbox => "gruvbox",
+            ThemeName::Catppuccin => "catppuccin",
+            ThemeName::TokyoNight => "tokyo-night",
+            ThemeName::SolarizedDark => "solarized-dark",
+            ThemeName::SolarizedLight => "solarized-light",
+        }
+    }
+
+    /// A theme by name (case-insensitive; `_` or space for `-`).
+    pub fn parse(name: &str) -> Option<ThemeName> {
+        let name = name.trim().to_ascii_lowercase().replace(['_', ' '], "-");
+        Self::ALL.into_iter().find(|t| t.as_str() == name)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -191,6 +243,19 @@ mod tests {
             ThemeName::Light
         );
         assert!(Config::parse("theme = \"neon\"").is_err());
+        assert_eq!(
+            Config::parse("theme = \"tokyo-night\"").unwrap().theme,
+            ThemeName::TokyoNight
+        );
+        for t in ThemeName::ALL {
+            assert_eq!(ThemeName::parse(t.as_str()), Some(t), "{}", t.as_str());
+            let line = format!("theme = \"{}\"", t.as_str());
+            assert_eq!(Config::parse(&line).unwrap().theme, t, "config names match");
+        }
+        assert_eq!(
+            ThemeName::parse("Solarized_Dark"),
+            Some(ThemeName::SolarizedDark)
+        );
         let with_tenant = Config::parse("tenant = \" AB-CD \"").unwrap();
         assert_eq!(with_tenant.tenant.as_deref(), Some("ab-cd"));
         assert_eq!(

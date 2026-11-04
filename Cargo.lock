@@ -85,7 +85,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "az9s"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "az9s-azure",
@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "az9s-azure"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "azure_core",
@@ -119,7 +119,7 @@ dependencies = [
 
 [[package]]
 name = "az9s-core"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "az9s-azure",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "az9s-tui"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "az9s-core",

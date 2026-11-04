@@ -30,7 +30,9 @@ works for Kubernetes.
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), logged in with
   `az login`
 - A terminal with colour support. On a light background use `theme = "light"`;
-  `theme = "mono"` (or `NO_COLOR=1`) uses no colours at all.
+  `theme = "mono"` (or `NO_COLOR=1`) uses no colours at all. The colour-scheme
+  themes (`dracula`, `nord`, …) need 24-bit colour, which most current
+  terminals have (Windows Terminal, iTerm2, GNOME Terminal, WezTerm, kitty).
 
 ## Install
 
@@ -132,13 +134,28 @@ use another file.
 start = "mg"                               # first view: "mg" (tree) or "sub"
 default_subscription = "prod-connectivity" # for :rg/:res/:type/:tag without context
 tenant = "<tenant-id>"                     # start in this tenant (like :ctx)
-theme = "default"                          # "default" (dark), "light" or "mono"; NO_COLOR forces mono
+theme = "default"                          # see Themes below; NO_COLOR forces mono
 refresh_interval = 120                     # auto-refresh every N s (min 30); 0 = off
 read_only = true                           # status bar shows RO; actions (M4) disabled
 ```
 
 A mistake in the file (unknown key, wrong type) doesn't stop az9s: it starts
 with the defaults and the status bar names the line and the problem.
+
+### Themes
+
+| Theme | Background | For |
+|---|---|---|
+| `default` | terminal's | dark terminals |
+| `light` | terminal's | light terminals |
+| `high-contrast` | terminal's | bright colours only: projectors, low-contrast screens |
+| `mono` | terminal's | no colours (also `NO_COLOR=1`) |
+| `dracula`, `nord`, `gruvbox`, `catppuccin`, `tokyo-night`, `solarized-dark` | its own, dark | the colour schemes of the same names |
+| `solarized-light` | its own, light | |
+
+Set one with `theme = "nord"` in the config file, or try them while az9s runs
+with `:theme <name>` (`:theme` lists them; Tab completes). `:theme` lasts until
+you quit; the config file keeps it.
 
 ## Troubleshooting
 

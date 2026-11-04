@@ -12,6 +12,18 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-04
+
+### Added
+- **Eight more themes**: `high-contrast` (bright terminal colours only) and
+  colour schemes with their own background, so they look the same on any
+  terminal: `dracula`, `nord`, `gruvbox`, `catppuccin` (Mocha),
+  `tokyo-night`, `solarized-dark` and `solarized-light`. Set one with
+  `theme = "…"` in the config file. The schemes use 24-bit colour.
+- **`:theme <name>`** switches the theme while az9s runs (`:theme` alone
+  lists them, with the current one; Tab completes names). It lasts until
+  you quit; the config file keeps it.
+
 ## [0.21.0] - 2026-11-04
 
 ### Added
@@ -615,7 +627,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/mrWiecek/az9s/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/mrWiecek/az9s/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/mrWiecek/az9s/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/mrWiecek/az9s/compare/v0.18.0...v0.19.0

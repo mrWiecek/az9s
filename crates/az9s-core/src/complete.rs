@@ -47,6 +47,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("access", "everything one user, group or app can do"),
     ("group", "directory groups and their members"),
     ("app", "app registrations and enterprise applications"),
+    ("theme", "switch the colour theme"),
     ("ctx", "switch tenant"),
 ];
 
@@ -72,6 +73,11 @@ pub fn complete(input: &str, state: &AppState) -> Completion {
                     Some((r.name, r.domain.unwrap_or(id)))
                 }));
                 prefixed(word, options.into_iter())
+            } else if cmd == "theme" {
+                let options = crate::config::ThemeName::ALL
+                    .iter()
+                    .map(|t| (t.as_str().to_string(), "theme".to_string()));
+                prefixed(word, options)
             } else if cmd == "group" {
                 let mut options: Vec<(String, String)> = state
                     .groups
@@ -361,10 +367,10 @@ mod tests {
         assert_eq!(texts("r"), ["rg", "res", "ra", "role", "group"]);
         assert_eq!(
             texts("t"),
-            ["type", "tag", "exemption", "ctx"],
+            ["type", "tag", "theme", "exemption", "ctx"],
             "starting with t, then containing t"
         );
-        assert_eq!(texts("").len(), 15);
+        assert_eq!(texts("").len(), 16);
         assert_eq!(texts("comp"), ["compliance"]);
         assert!(texts("xyz").is_empty());
     }
