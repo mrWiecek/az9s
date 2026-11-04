@@ -11,6 +11,9 @@ use ratatui::{backend::TestBackend, buffer::Buffer, style::Color, Terminal};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// The theme is global: tests that change it take turns.
+static THEME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn app() -> TuiApp {
     let mut core = App::offline(Cache::new(Path::new(":memory:")).unwrap());
     let state = core.state_mut();
@@ -55,6 +58,7 @@ fn colours(buf: &Buffer) -> Vec<Color> {
 
 #[test]
 fn each_theme_colours_the_screen_its_own_way() {
+    let _turn = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut app = app();
 
     ui::theme::set_theme(ThemeName::Default);
@@ -86,5 +90,67 @@ fn each_theme_colours_the_screen_its_own_way() {
         .any(|c| c.modifier.contains(ratatui::style::Modifier::REVERSED));
     assert!(reversed, "selection shown without colour");
 
+    // Schemes with their own background paint every cell with it, the
+    // selected row aside; all of them look different.
+    let mut seen = Vec::new();
+    for name in ThemeName::ALL {
+        ui::theme::set_theme(name);
+        let buf = render(&mut app);
+        if let Some(bg) = ui::theme::theme().background {
+            let painted = buf.content.iter().filter(|c| c.bg == bg).count();
+            assert!(
+                painted * 10 > buf.content.len() * 9,
+                "{}: {painted} of {} cells on its background",
+                name.as_str(),
+                buf.content.len()
+            );
+        }
+        let palette = colours(&buf);
+        assert!(
+            !seen.contains(&palette),
+            "{} looks like another theme",
+            name.as_str()
+        );
+        seen.push(palette);
+    }
+
     ui::theme::set_theme(ThemeName::Default);
+}
+
+#[test]
+fn theme_switches_while_running() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let _turn = THEME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let mut app = app();
+        let press = |code| az9s_tui::Event::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        for c in ":theme nord".chars() {
+            app.handle_event(press(KeyCode::Char(c))).await.unwrap();
+        }
+        app.handle_event(press(KeyCode::Enter)).await.unwrap();
+        assert_eq!(ui::theme::theme().name, ThemeName::Nord);
+        assert_eq!(app.state().config.theme, ThemeName::Nord);
+        assert!(app
+            .state()
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("theme = \"nord\""));
+
+        for c in ":theme neon".chars() {
+            app.handle_event(press(KeyCode::Char(c))).await.unwrap();
+        }
+        app.handle_event(press(KeyCode::Enter)).await.unwrap();
+        assert!(app
+            .state()
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("tokyo-night"));
+        assert_eq!(ui::theme::theme().name, ThemeName::Nord, "unchanged");
+        ui::theme::set_theme(ThemeName::Default);
+    });
 }
