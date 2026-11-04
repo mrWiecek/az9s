@@ -25,6 +25,11 @@ const SELECTED: &str = "selected";
 /// Navigation metadata key: the resource list request (JSON) a view showed,
 /// reloaded on going back when the list has since been replaced.
 const RESOURCES: &str = "resources";
+/// Navigation metadata keys: the group whose members a list showed (and
+/// "1" for nested members too), and the principal whose groups it showed.
+const MEMBERS_GROUP: &str = "members_group";
+const MEMBERS_TRANSITIVE: &str = "members_transitive";
+const MEMBER_OF: &str = "member_of";
 /// Navigation metadata keys: what a role assignment list showed (its scope
 /// as `g:<group>` or `s:<subscription>`, role GUID, principal ID).
 const RA_SCOPE: &str = "ra_scope";
@@ -504,6 +509,13 @@ impl TuiApp {
                          names are loaded, then press p on one of its rows."
                     ))),
                 }
+            }
+            CommandKind::Groups(name) => {
+                debug!("Command: groups {:?}", name);
+                let state = self.state_mut();
+                state.clear_navigation();
+                state.filter = name.unwrap_or_default();
+                self.core.open_groups();
             }
             CommandKind::RoleDefinitions => {
                 debug!("Command: role definitions");
@@ -1011,6 +1023,19 @@ impl TuiApp {
                 self.core.request(LoadRequest::ScopeTree);
                 self.core.request(LoadRequest::ComplianceRollup);
             }
+            (ViewMode::GroupList, _) => self.core.request(LoadRequest::Groups),
+            (ViewMode::GroupMembers, _) => {
+                let state = self.state();
+                if let Some(group) = state.members_group.clone() {
+                    let transitive = state.members_transitive;
+                    self.core.open_group_members(&group, transitive);
+                }
+            }
+            (ViewMode::MemberOf, _) => {
+                if let Some(principal) = self.state().member_of.clone() {
+                    self.core.open_member_of(&principal);
+                }
+            }
             (ViewMode::RoleAssignments | ViewMode::RoleDefinitions, _) => {
                 self.core.load_rbac();
             }
@@ -1048,6 +1073,14 @@ impl TuiApp {
             state.list_state.reset();
             state.cross_subscription_mode = ctx.metadata.contains_key(CROSS_SUBSCRIPTION);
             state.scope_group = ctx.metadata.get(SCOPE_GROUP).cloned();
+            // A group's members, or a principal's groups: whose.
+            if state.view == ViewMode::GroupMembers {
+                state.members_group = ctx.metadata.get(MEMBERS_GROUP).cloned();
+                state.members_transitive = ctx.metadata.contains_key(MEMBERS_TRANSITIVE);
+            }
+            if state.view == ViewMode::MemberOf {
+                state.member_of = ctx.metadata.get(MEMBER_OF).cloned();
+            }
             // A role assignment list: the scope, role and principal it showed.
             if state.view == ViewMode::RoleAssignments {
                 state.ra_scope =
@@ -1549,7 +1582,26 @@ impl TuiApp {
         let Some(id) = self.state().selected_arm_id() else {
             return;
         };
-        let url = detail::portal_url(&id, self.state().portal_tenant().as_deref());
+        let tenant = self.state().portal_tenant();
+        // Directory objects open on their Entra page, not as a resource.
+        let directory = match self.state().view {
+            ViewMode::GroupList => Some(("group".to_string(), String::new())),
+            ViewMode::GroupMembers => self.state().selected_member().map(|m| (m.kind, m.detail)),
+            ViewMode::MemberOf => Some(("group".to_string(), String::new())),
+            _ => None,
+        };
+        let url = match directory {
+            Some((kind, detail)) => {
+                match detail::entra_portal_url(&kind, &id, &detail, tenant.as_deref()) {
+                    Some(url) => url,
+                    None => {
+                        self.state_mut().notice = Some(format!("No Portal page for this {kind}"));
+                        return;
+                    }
+                }
+            }
+            None => detail::portal_url(&id, tenant.as_deref()),
+        };
         let notice = match self.desktop.open(&url) {
             Ok(()) => "Opened in the Azure Portal".to_string(),
             // The link is too long for the status bar: put it on the
@@ -1614,6 +1666,31 @@ impl TuiApp {
                         self.role_definition_resource(&a.role_guid(), &a.role_definition_id);
                     self.push_current_context(None);
                     self.core.open_resource_detail(resource);
+                }
+                Ok(true)
+            }
+            ViewMode::GroupList => {
+                if let Some(group) = self.state().selected_group() {
+                    self.push_current_context(None);
+                    self.state_mut().filter.clear();
+                    self.core.open_group_members(&group.id, false);
+                }
+                Ok(true)
+            }
+            ViewMode::GroupMembers | ViewMode::MemberOf => {
+                // A group: its members. Anyone else: their groups.
+                let selected = match self.state().view {
+                    ViewMode::GroupMembers => self.state().selected_member(),
+                    _ => self.state().selected_member_of(),
+                };
+                if let Some(p) = selected {
+                    self.push_current_context(None);
+                    self.state_mut().filter.clear();
+                    if p.kind == "group" {
+                        self.core.open_group_members(&p.id, false);
+                    } else {
+                        self.core.open_member_of(&p.id);
+                    }
                 }
                 Ok(true)
             }
@@ -1819,6 +1896,19 @@ impl TuiApp {
         if let Some(id) = state.selected_id() {
             metadata.insert(SELECTED.to_string(), id);
         }
+        if state.view == ViewMode::GroupMembers {
+            if let Some(group) = &state.members_group {
+                metadata.insert(MEMBERS_GROUP.to_string(), group.clone());
+            }
+            if state.members_transitive {
+                metadata.insert(MEMBERS_TRANSITIVE.to_string(), "1".into());
+            }
+        }
+        if state.view == ViewMode::MemberOf {
+            if let Some(principal) = &state.member_of {
+                metadata.insert(MEMBER_OF.to_string(), principal.clone());
+            }
+        }
         if state.view == ViewMode::RoleAssignments {
             if let Some(scope) = &state.ra_scope {
                 let encoded = match scope {
@@ -1894,6 +1984,27 @@ impl TuiApp {
                 KeyCode::Char('N') => self.search_step(false),
                 _ => {}
             }
+            return Ok(true);
+        }
+        // Directory views: `t` nested members on/off, `p` Azure access.
+        let directory_principal = match self.state().view {
+            ViewMode::GroupList => self.state().selected_group().map(|g| g.id),
+            ViewMode::GroupMembers => self.state().selected_member().map(|m| m.id),
+            ViewMode::MemberOf => self.state().selected_member_of().map(|m| m.id),
+            _ => None,
+        };
+        if self.state().view == ViewMode::GroupMembers && key.code == KeyCode::Char('t') {
+            let state = self.state();
+            if let Some(group) = state.members_group.clone() {
+                let transitive = !state.members_transitive;
+                self.core.open_group_members(&group, transitive);
+            }
+            return Ok(true);
+        }
+        if let (Some(id), KeyCode::Char('p')) = (directory_principal, key.code) {
+            self.push_current_context(None);
+            self.state_mut().filter.clear();
+            self.core.open_access(&id);
             return Ok(true);
         }
         if self.state().view == ViewMode::RoleAssignments && key.code == KeyCode::Char('p') {

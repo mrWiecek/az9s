@@ -45,6 +45,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("ra", "role assignments"),
     ("role", "role definitions, built-in and custom"),
     ("access", "everything one user, group or app can do"),
+    ("group", "directory groups and their members"),
     ("ctx", "switch tenant"),
 ];
 
@@ -69,6 +70,15 @@ pub fn complete(input: &str, state: &AppState) -> Completion {
                     let id = r.id?;
                     Some((r.name, r.domain.unwrap_or(id)))
                 }));
+                prefixed(word, options.into_iter())
+            } else if cmd == "group" {
+                let mut options: Vec<(String, String)> = state
+                    .groups
+                    .iter()
+                    .map(|g| (g.display_name.clone(), g.kind_label().to_string()))
+                    .collect();
+                options.sort();
+                options.dedup();
                 prefixed(word, options.into_iter())
             } else if cmd == "access" {
                 let mut options: Vec<(String, String)> = state
@@ -347,13 +357,13 @@ mod tests {
 
     #[test]
     fn command_names_first() {
-        assert_eq!(texts("r"), ["rg", "res", "ra", "role"]);
+        assert_eq!(texts("r"), ["rg", "res", "ra", "role", "group"]);
         assert_eq!(
             texts("t"),
             ["type", "tag", "exemption", "ctx"],
             "starting with t, then containing t"
         );
-        assert_eq!(texts("").len(), 13);
+        assert_eq!(texts("").len(), 14);
         assert_eq!(texts("comp"), ["compliance"]);
         assert!(texts("xyz").is_empty());
     }

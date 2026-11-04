@@ -145,6 +145,13 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   of the principal or any of those groups, each with the group it comes
   `via`. Navigation contexts of `:ra` carry its scope, role and principal
   so `Esc` restores the list as it was.
+- Groups (Microsoft Graph via `DirectoryClient`): `LoadRequest::Groups`
+  (paged `/groups`, cached per tenant), `GroupMembers { transitive }`
+  (`members` or `transitiveMembers`, fresh each time) and the existing
+  `PrincipalGroups` for a member's groups. Views `GroupList`,
+  `GroupMembers`, `MemberOf`; their navigation contexts carry whose
+  members or groups they showed. `detail::entra_portal_url` opens groups,
+  users and service principals on their Entra pages.
 - Exemptions: `LoadRequest::PolicyExemptions` (tenant-wide, cached as
   `policy_exemptions:<tenant>`) into `PolicyExemption`. `:exemption` lists
   those `within` a scope (`AppState::exemption_rows`, by `Expiry`); the
