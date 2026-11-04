@@ -1770,6 +1770,10 @@ impl AppState {
     /// `y` (copy) and `o` (open in the Portal).
     pub fn selected_arm_id(&self) -> Option<String> {
         match self.view {
+            // A GCP project by its resource name.
+            ViewMode::SubscriptionList if self.provider == crate::provider::Provider::Gcp => self
+                .selected_subscription()
+                .map(|s| format!("projects/{}", s.id)),
             ViewMode::SubscriptionList => self
                 .selected_subscription()
                 .map(|s| format!("/subscriptions/{}", s.id)),
@@ -1793,6 +1797,20 @@ impl AppState {
             }
             ViewMode::ManagementGroupTree => {
                 let row = self.selected_tree_row()?;
+                // GCP: folders and organizations are keyed by resource name.
+                if self.provider == crate::provider::Provider::Gcp {
+                    return match row.kind {
+                        crate::scope_tree::TreeRowKind::ManagementGroup
+                            if !row.key.starts_with('~') =>
+                        {
+                            Some(row.key)
+                        }
+                        crate::scope_tree::TreeRowKind::Subscription => {
+                            Some(format!("projects/{}", row.key))
+                        }
+                        _ => None,
+                    };
+                }
                 match row.kind {
                     crate::scope_tree::TreeRowKind::ManagementGroup => Some(format!(
                         "/providers/Microsoft.Management/managementGroups/{}",

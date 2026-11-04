@@ -1660,10 +1660,30 @@ impl TuiApp {
         let Some(id) = self.state().selected_arm_id() else {
             return;
         };
-        if self.state().provider != Provider::Azure {
-            self.state_mut().notice =
-                Some("Opening in the console is Azure only for now (y copies the ID)".into());
-            return;
+        match self.state().provider {
+            Provider::Azure => {}
+            Provider::Gcp => {
+                // Buckets' names carry no project: take the row's.
+                let state = self.state();
+                let project = match state.view {
+                    ViewMode::ResourceList => {
+                        state.selected_resource().map(|r| r.subscription_id.clone())
+                    }
+                    ViewMode::ResourceDetail => state
+                        .selected_resource_detail
+                        .as_ref()
+                        .map(|r| r.subscription_id.clone()),
+                    _ => None,
+                };
+                let url = detail::gcp_console_url(&id, project.as_deref());
+                self.open_url(&url, "the Google Cloud console");
+                return;
+            }
+            Provider::Aws => {
+                self.state_mut().notice =
+                    Some("Opening in the AWS console isn't available yet (y copies the ID)".into());
+                return;
+            }
         }
         let tenant = self.state().portal_tenant();
         // Directory objects open on their Entra page, not as a resource.
@@ -1707,12 +1727,17 @@ impl TuiApp {
             }
             None => detail::portal_url(&id, tenant.as_deref()),
         };
-        let notice = match self.desktop.open(&url) {
-            Ok(()) => "Opened in the Azure Portal".to_string(),
+        self.open_url(&url, "the Azure Portal");
+    }
+
+    /// Open `url` in a browser; without one, copy it to the clipboard.
+    fn open_url(&mut self, url: &str, place: &str) {
+        let notice = match self.desktop.open(url) {
+            Ok(()) => format!("Opened in {place}"),
             // The link is too long for the status bar: put it on the
             // clipboard instead, so it can be pasted into a browser.
-            Err(e) => match self.desktop.copy(&url) {
-                Ok(()) => format!("No browser could be started; Portal link copied ({e})"),
+            Err(e) => match self.desktop.copy(url) {
+                Ok(()) => format!("No browser could be started; link copied ({e})"),
                 Err(_) => format!("No browser could be started ({e}): {url}"),
             },
         };
@@ -1874,10 +1899,13 @@ impl TuiApp {
 
     /// Enter on the tree: a subscription opens its resource groups; a group
     /// opens the resource groups of every enabled subscription below it.
+    /// Under GCP, a project or folder opens its resources.
     fn handle_tree_select(&mut self) -> Result<bool> {
         let Some(row) = self.state().selected_tree_row() else {
             return Ok(true);
         };
+        // Clouds without containers (GCP) open straight onto resources.
+        let containers = self.state().provider.supports(Feature::Containers);
         if row.kind == TreeRowKind::Subscription {
             let sub = self
                 .state()
@@ -1896,20 +1924,29 @@ impl TuiApp {
             let state = self.state_mut();
             state.selected_subscription = Some(sub);
             state.scope_group = None;
-            self.show_resource_groups(vec![id], false);
+            if containers {
+                self.show_resource_groups(vec![id], false);
+            } else {
+                self.show_resources(vec![id], None, false);
+            }
             return Ok(true);
         }
 
         let ids = self.enabled_subscriptions_under(Some(&row.key));
         if ids.is_empty() {
-            self.state_mut().notice = Some(format!("No enabled subscriptions under {}", row.label));
+            let accounts = self.state().provider.terms().accounts.to_lowercase();
+            self.state_mut().notice = Some(format!("No enabled {accounts} under {}", row.label));
             return Ok(true);
         }
         self.push_current_context(None);
         let state = self.state_mut();
         state.scope_group = Some(row.key.clone());
         state.selected_subscription = None;
-        self.show_resource_groups(ids, true);
+        if containers {
+            self.show_resource_groups(ids, true);
+        } else {
+            self.show_resources(ids, None, true);
+        }
         Ok(true)
     }
 

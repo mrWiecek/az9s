@@ -310,6 +310,92 @@ pub fn portal_url(arm_id: &str, tenant_id: Option<&str>) -> String {
     format!("https://portal.azure.com/#{tenant}/resource{arm_id}")
 }
 
+/// Google Cloud console link for a project (`projects/ID`), folder
+/// (`folders/N`), organization (`organizations/N`) or Cloud Asset resource
+/// name (`//service.googleapis.com/…`) in `project`. Common resources open
+/// on their own page; others on the Asset Inventory search for their name.
+pub fn gcp_console_url(id: &str, project: Option<&str>) -> String {
+    const CONSOLE: &str = "https://console.cloud.google.com";
+    if let Some(p) = id.strip_prefix("projects/") {
+        return format!("{CONSOLE}/home/dashboard?project={}", encode(p));
+    }
+    if let Some(f) = id.strip_prefix("folders/") {
+        return format!("{CONSOLE}/cloud-resource-manager?folder={}", encode(f));
+    }
+    if let Some(o) = id.strip_prefix("organizations/") {
+        return format!(
+            "{CONSOLE}/cloud-resource-manager?organizationId={}",
+            encode(o)
+        );
+    }
+    let project = project
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .or_else(|| c9s_gcp::project_of(id).map(str::to_string))
+        .unwrap_or_default();
+    let q = format!("project={}", encode(&project));
+    let (service, path) = id
+        .strip_prefix("//")
+        .and_then(|rest| rest.split_once('/'))
+        .unwrap_or(("", ""));
+    let parts: Vec<&str> = path.split('/').collect();
+    // `segment(key)`: the part after `key` in the resource path.
+    let segment = |key: &str| parts.windows(2).find(|w| w[0] == key).map(|w| encode(w[1]));
+    let page = match service {
+        "compute.googleapis.com" => match (segment("zones"), segment("instances")) {
+            (Some(zone), Some(vm)) => Some(format!(
+                "compute/instancesDetail/zones/{zone}/instances/{vm}"
+            )),
+            _ => None,
+        },
+        "storage.googleapis.com" => parts
+            .first()
+            .filter(|b| !b.is_empty())
+            .map(|bucket| format!("storage/browser/{}", encode(bucket))),
+        "container.googleapis.com" => match (segment("locations"), segment("clusters")) {
+            (Some(loc), Some(c)) => Some(format!("kubernetes/clusters/details/{loc}/{c}/details")),
+            _ => None,
+        },
+        "cloudsql.googleapis.com" | "sqladmin.googleapis.com" => {
+            segment("instances").map(|i| format!("sql/instances/{i}/overview"))
+        }
+        "run.googleapis.com" => match (segment("locations"), segment("services")) {
+            (Some(loc), Some(svc)) => Some(format!("run/detail/{loc}/{svc}")),
+            _ => None,
+        },
+        "cloudfunctions.googleapis.com" => match (segment("locations"), segment("functions")) {
+            (Some(loc), Some(f)) => Some(format!("functions/details/{loc}/{f}")),
+            _ => None,
+        },
+        "pubsub.googleapis.com" => {
+            segment("topics").map(|t| format!("cloudpubsub/topic/detail/{t}"))
+        }
+        "bigquery.googleapis.com" if segment("tables").is_none() => segment("datasets")
+            .map(|d| format!("bigquery?p={}&d={d}&page=dataset", encode(&project))),
+        _ => None,
+    };
+    match page {
+        Some(page) if page.contains('?') => format!("{CONSOLE}/{page}&{q}"),
+        Some(page) => format!("{CONSOLE}/{page}?{q}"),
+        None => format!(
+            "{CONSOLE}/iam-admin/asset-inventory/resources?{q}&query={}",
+            encode(&format!("name:\"{id}\""))
+        ),
+    }
+}
+
+/// Percent-encode a URL query value or path segment.
+fn encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 /// The Entra admin page of a directory object in the Azure Portal: a group,
 /// a user, or a service principal (enterprise application, with its app
 /// ID). `None` for kinds without one (e.g. devices).
@@ -390,6 +476,50 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::HashMap;
+
+    #[test]
+    fn gcp_console_links() {
+        const C: &str = "https://console.cloud.google.com";
+        let url = |id: &str, p: Option<&str>| gcp_console_url(id, p);
+        assert_eq!(
+            url("projects/billing-prod", None),
+            format!("{C}/home/dashboard?project=billing-prod")
+        );
+        assert_eq!(
+            url("folders/12", None),
+            format!("{C}/cloud-resource-manager?folder=12")
+        );
+        assert_eq!(
+            url(
+                "//compute.googleapis.com/projects/p1/zones/europe-west1-b/instances/vm-1",
+                None
+            ),
+            format!("{C}/compute/instancesDetail/zones/europe-west1-b/instances/vm-1?project=p1")
+        );
+        assert_eq!(
+            url("//storage.googleapis.com/logs-eu", Some("p1")),
+            format!("{C}/storage/browser/logs-eu?project=p1"),
+            "buckets carry no project: the row's"
+        );
+        assert_eq!(
+            url(
+                "//container.googleapis.com/projects/p1/locations/europe-west1/clusters/gke",
+                None
+            ),
+            format!("{C}/kubernetes/clusters/details/europe-west1/gke/details?project=p1")
+        );
+        assert_eq!(
+            url("//bigquery.googleapis.com/projects/p1/datasets/sales", None),
+            format!("{C}/bigquery?p=p1&d=sales&page=dataset&project=p1")
+        );
+        let other = url("//dns.googleapis.com/projects/p1/managedZones/z", None);
+        assert!(
+            other.starts_with(&format!(
+                "{C}/iam-admin/asset-inventory/resources?project=p1&query=name%3A%22%2F%2Fdns"
+            )),
+            "{other}"
+        );
+    }
 
     fn resource() -> Resource {
         Resource {

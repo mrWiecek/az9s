@@ -268,7 +268,7 @@ async fn y_copies_and_o_opens_the_portal_with_the_tenant() {
     );
     let notice = app.state().notice.clone().unwrap();
     assert!(
-        notice.contains("No browser could be started") && notice.contains("Portal link copied"),
+        notice.contains("No browser could be started") && notice.contains("link copied"),
         "{notice}"
     );
 }

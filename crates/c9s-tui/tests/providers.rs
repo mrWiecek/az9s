@@ -98,3 +98,50 @@ async fn another_cloud_uses_its_words_and_refuses_azure_only_features() {
     command(&mut app, "sub").await;
     assert!(app.state().error.is_none(), "{:?}", app.state().error);
 }
+
+#[tokio::test]
+async fn gcp_folders_are_the_tree_and_open_onto_resources() {
+    use c9s_core::scope_tree::{GroupNode, ScopeTree, SubscriptionNode};
+    let mut app = app(Provider::Gcp);
+    command(&mut app, "mg").await;
+    let error = app.state().error.clone().unwrap_or_default();
+    assert!(!error.contains("Azure only"), ":mg is allowed: {error}");
+
+    let state = app.state_mut();
+    state.set_scope_tree(ScopeTree {
+        root: "organizations/1".into(),
+        root_display_name: "acme.com".into(),
+        groups: vec![GroupNode {
+            name: "folders/2".into(),
+            display_name: "Prod".into(),
+            parent: "organizations/1".into(),
+        }],
+        subscriptions: vec![SubscriptionNode {
+            id: "p1".into(),
+            display_name: "billing-prod".into(),
+            parent: "folders/2".into(),
+        }],
+    });
+    state.error = None;
+    state.view = ViewMode::ManagementGroupTree;
+    state.list_state.reset();
+    let text = screen(&mut app);
+    assert!(
+        text.contains("Folders (2) - Enter opens resources") && text.contains("1 projects"),
+        "{text}"
+    );
+
+    // The folder row: Enter lists the resources of every project below it.
+    let rows = app.state().tree_rows();
+    let folder = rows.iter().position(|r| r.key == "folders/2").unwrap();
+    app.state_mut().list_state.selected = folder;
+    assert_eq!(app.state().selected_arm_id().as_deref(), Some("folders/2"));
+    app.handle_event(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))
+    .await
+    .unwrap();
+    assert_eq!(app.state().view, ViewMode::ResourceList);
+    assert_eq!(app.state().scope_group.as_deref(), Some("folders/2"));
+}

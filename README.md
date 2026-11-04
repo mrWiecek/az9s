@@ -127,8 +127,9 @@ How it fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Google Cloud (preview)
 
-c9s also browses Google Cloud: projects, their resources (type, location,
-labels) and each resource's document.
+c9s also browses Google Cloud: the organization's folders (`:mg`),
+projects, their resources (type, location, labels) and each resource's
+document; `o` opens the selected item in the Google Cloud console.
 
 1. Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install)
    and run `gcloud auth login`.
@@ -139,8 +140,11 @@ labels) and each resource's document.
    `gcp`; projects open straight onto their resources; `:ctx all` goes back
    to Azure.
 
-Not yet for Google Cloud: folders (`:mg`), console links (`o`), and the
-Azure-only views (Policy, role assignments, Entra ID), which say so.
+Folders need `resourcemanager.folders.list` (e.g. Folder Viewer) on the
+organization; without it, `:mg` lists projects under one root.
+
+Not for Google Cloud: the Azure-only views (Policy, role assignments,
+Entra ID), which say so.
 
 ## Upgrading from az9s
 
