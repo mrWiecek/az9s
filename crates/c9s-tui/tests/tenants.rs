@@ -33,7 +33,7 @@ impl Fetcher for Azure {
                 },
             ])),
             // gcloud's configurations: none in these tests (no gcloud).
-            LoadRequest::CloudContexts => Ok(LoadedData::CloudContexts(vec![])),
+            LoadRequest::CloudContexts => Ok(LoadedData::CloudContexts(Default::default())),
             _ => Err("not in this test".into()),
         };
         async move {
@@ -216,4 +216,35 @@ fn c9s_gcp_config(name: &str, account: &str, project: &str) -> c9s_core::state::
         account: account.into(),
         project: project.into(),
     }
+}
+
+#[tokio::test]
+async fn ctx_lists_aws_profiles_and_switches_cloud() {
+    let (mut app, _) = setup();
+    app.state_mut().aws_profiles = vec![c9s_core::aws::Profile {
+        name: "prod-admin".into(),
+        region: "eu-west-1".into(),
+        kind: "sso".into(),
+    }];
+    command(&mut app, "ctx").await;
+    let text = screen(&mut app);
+    assert!(
+        text.contains("aws") && text.contains("prod-admin"),
+        "{text}"
+    );
+    assert!(text.contains("sso · eu-west-1"), "{text}");
+
+    // The last row is the profile: Enter switches to AWS.
+    press(&mut app, KeyCode::Char('G')).await;
+    press(&mut app, KeyCode::Enter).await;
+    assert_eq!(app.state().provider, c9s_core::provider::Provider::Aws);
+    assert_eq!(app.state().aws_profile.as_deref(), Some("prod-admin"));
+    assert_eq!(app.state().view, ViewMode::SubscriptionList);
+    assert!(app.state().subscriptions.is_empty());
+
+    command(&mut app, "ctx all").await;
+    assert_eq!(app.state().provider, c9s_core::provider::Provider::Azure);
+    assert_eq!(app.state().aws_profile, None);
+    command(&mut app, "ctx prod-admin").await;
+    assert_eq!(app.state().provider, c9s_core::provider::Provider::Aws);
 }

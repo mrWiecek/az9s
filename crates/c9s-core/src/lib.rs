@@ -1,6 +1,7 @@
 pub mod app;
 pub mod app_view;
 pub mod apps;
+pub mod aws;
 pub mod cache;
 pub mod complete;
 pub mod config;

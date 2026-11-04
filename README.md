@@ -146,6 +146,32 @@ organization; without it, `:mg` lists projects under one root.
 Not for Google Cloud: the Azure-only views (Policy, role assignments,
 Entra ID), which say so.
 
+## AWS (preview)
+
+c9s also browses AWS, one CLI profile (one account) at a time: the
+account's resources (type, region, tags) and each resource's document; `o`
+opens the selected resource in the AWS console.
+
+1. Install [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+   and sign in (`aws sso login --profile <profile>`, or `aws configure`).
+   c9s reads the profiles from `~/.aws/config` and `~/.aws/credentials`
+   and asks the CLI for their credentials.
+2. Resources come from
+   [Resource Explorer](https://docs.aws.amazon.com/resource-explorer/latest/userguide/getting-started-setting-up.html),
+   searched in the profile's region (`us-east-1` if it names none). With an
+   aggregator index in that region, every region is listed; a search
+   returns 1,000 resources at most. Without Resource Explorer, c9s falls
+   back to the Tagging API in the profile's region and says so (untagged
+   resources may be missing).
+3. In c9s, `:ctx` lists AWS profiles next to Azure tenants and gcloud
+   configurations; `Enter` (or `:ctx <profile>`) switches. The status bar
+   shows `aws · <profile>`; the account opens straight onto its resources;
+   `:ctx all` goes back to Azure.
+
+Not yet for AWS: several accounts through Organizations (`:mg`). Not for
+AWS: the Azure-only views (Policy, role assignments, Entra ID), which say
+so.
+
 ## Upgrading from az9s
 
 c9s v1.0.0 is az9s renamed; nothing else changed.

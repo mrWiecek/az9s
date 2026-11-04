@@ -180,6 +180,12 @@ pub struct AppState {
     /// gcloud's configurations, offered by `:ctx`, once loaded
     pub gcp_configurations: Vec<c9s_gcp::Configuration>,
 
+    /// The AWS CLI profile of an AWS context
+    pub aws_profile: Option<String>,
+
+    /// The AWS CLI's profiles, offered by `:ctx`, once loaded
+    pub aws_profiles: Vec<c9s_aws::Profile>,
+
     /// Help screen state
     pub help_open: bool,
 
@@ -819,6 +825,25 @@ impl AppState {
                 current: false,
             }
         }));
+        // AWS: the CLI's profiles.
+        rows.extend(self.aws_profiles.iter().map(|p| {
+            TenantRow {
+                provider: crate::provider::Provider::Aws,
+                id: Some(p.name.clone()),
+                name: p.name.clone(),
+                domain: Some(
+                    [p.kind.as_str(), p.region.as_str()]
+                        .iter()
+                        .filter(|s| !s.is_empty())
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                )
+                .filter(|d| !d.is_empty()),
+                subscriptions: 0,
+                current: false,
+            }
+        }));
         for row in &mut rows {
             row.current = match row.provider {
                 crate::provider::Provider::Azure => {
@@ -829,9 +854,13 @@ impl AppState {
                             _ => false,
                         }
                 }
-                _ => {
+                crate::provider::Provider::Gcp => {
                     self.provider == row.provider
                         && row.id.as_deref() == self.gcp_configuration.as_deref()
+                }
+                crate::provider::Provider::Aws => {
+                    self.provider == row.provider
+                        && row.id.as_deref() == self.aws_profile.as_deref()
                 }
             };
         }
@@ -1770,6 +1799,10 @@ impl AppState {
     /// `y` (copy) and `o` (open in the Portal).
     pub fn selected_arm_id(&self) -> Option<String> {
         match self.view {
+            // An AWS account by its ID.
+            ViewMode::SubscriptionList if self.provider == crate::provider::Provider::Aws => {
+                self.selected_subscription().map(|s| s.id.clone())
+            }
             // A GCP project by its resource name.
             ViewMode::SubscriptionList if self.provider == crate::provider::Provider::Gcp => self
                 .selected_subscription()

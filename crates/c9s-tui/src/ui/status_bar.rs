@@ -30,6 +30,10 @@ impl StatusBar {
                 .map(|t| t.name.clone())
                 .unwrap_or_else(|| id.clone())
         });
+        // Other clouds: the gcloud configuration or AWS profile.
+        let tenant = tenant
+            .or_else(|| state.gcp_configuration.clone())
+            .or_else(|| state.aws_profile.clone());
         spans.push(Span::styled(
             match tenant {
                 Some(t) => format!("{} · {} ", state.provider.as_str(), Self::truncate(&t, 24)),
