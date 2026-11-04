@@ -461,6 +461,16 @@ impl TuiApp {
             return Ok(());
         }
 
+        // Azure-only features say so under another cloud.
+        if let Some(why) = command
+            .kind
+            .feature()
+            .and_then(|f| self.state().provider.unsupported(f))
+        {
+            self.state_mut().set_error(Some(why));
+            return Ok(());
+        }
+
         // A command without a scope means "where I am": decide that before
         // the command resets the navigation.
         let context = self.current_context();

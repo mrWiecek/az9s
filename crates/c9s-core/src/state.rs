@@ -170,6 +170,9 @@ pub struct AppState {
     /// login, with subscriptions of every tenant listed
     pub tenant: Option<String>,
 
+    /// The cloud of the current context (Azure until other clouds come)
+    pub provider: crate::provider::Provider,
+
     /// Help screen state
     pub help_open: bool,
 

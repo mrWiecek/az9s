@@ -21,10 +21,34 @@ impl StatusBar {
     pub fn render(state: &AppState) -> Line<'static> {
         let mut spans = vec![Self::connection_indicator(state), Span::raw(" | ")];
 
+        // The context: its cloud, and the tenant when one is chosen.
+        let tenant = state.tenant.as_ref().map(|id| {
+            state
+                .tenants
+                .iter()
+                .find(|t| t.id.eq_ignore_ascii_case(id))
+                .map(|t| t.name.clone())
+                .unwrap_or_else(|| id.clone())
+        });
+        spans.push(Span::styled(
+            match tenant {
+                Some(t) => format!("{} · {} ", state.provider.as_str(), Self::truncate(&t, 24)),
+                None => format!("{} ", state.provider.as_str()),
+            },
+            Style::default()
+                .fg(theme().accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw("| "));
+
         // Current subscription context
         if let Some(sub) = &state.selected_subscription {
             spans.push(Span::styled(
-                format!("Sub: {} ", Self::truncate(&sub.name, 20)),
+                format!(
+                    "{}: {} ",
+                    state.provider.terms().account_short,
+                    Self::truncate(&sub.name, 20)
+                ),
                 Style::default().fg(theme().highlight),
             ));
             spans.push(Span::raw("| "));
@@ -164,7 +188,7 @@ mod tests {
         let line = StatusBar::render(&state);
         let text = format!("{:?}", line);
 
-        assert!(text.contains("Sub:"));
+        assert!(text.contains("sub:"));
         assert!(text.contains("Production"));
     }
 
@@ -302,6 +326,6 @@ mod tests {
             tenant_id: "t".into(),
         });
         let text = format!("{:?}", StatusBar::render(&state));
-        assert!(text.contains("Sub:"));
+        assert!(text.contains("sub:"));
     }
 }
