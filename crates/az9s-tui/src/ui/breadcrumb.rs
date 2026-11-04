@@ -96,6 +96,9 @@ impl Breadcrumb {
             ViewMode::ExemptionList => "Exemptions",
             ViewMode::RoleAssignments => "Role assignments",
             ViewMode::RoleDefinitions => "Roles",
+            ViewMode::GroupList => "Groups",
+            ViewMode::GroupMembers => "Members",
+            ViewMode::MemberOf => "Member of",
             ViewMode::ResourceDetail => "Resource Detail",
             ViewMode::Logs => "Logs",
         }

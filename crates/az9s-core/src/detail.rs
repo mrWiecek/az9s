@@ -310,6 +310,32 @@ pub fn portal_url(arm_id: &str, tenant_id: Option<&str>) -> String {
     format!("https://portal.azure.com/#{tenant}/resource{arm_id}")
 }
 
+/// The Entra admin page of a directory object in the Azure Portal: a group,
+/// a user, or a service principal (enterprise application, with its app
+/// ID). `None` for kinds without one (e.g. devices).
+pub fn entra_portal_url(
+    kind: &str,
+    id: &str,
+    app_id: &str,
+    tenant_id: Option<&str>,
+) -> Option<String> {
+    let tenant = tenant_id
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("@{t}"))
+        .unwrap_or_default();
+    let blade = match kind {
+        "group" => format!("Microsoft_AAD_IAM/GroupDetailsMenuBlade/~/Overview/groupId/{id}"),
+        "user" => {
+            format!("Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/{id}")
+        }
+        "servicePrincipal" => {
+            format!("Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Overview/objectId/{id}/appId/{app_id}")
+        }
+        _ => return None,
+    };
+    Some(format!("https://portal.azure.com/#{tenant}/view/{blade}"))
+}
+
 /// Text for a JSON scalar; `None` for objects, arrays and null.
 fn scalar(value: &Value) -> Option<String> {
     match value {
@@ -567,5 +593,21 @@ mod tests {
             get("Effect"),
             Some("Audit (allowed: Audit, Deny, Disabled)")
         );
+    }
+
+    #[test]
+    fn directory_objects_open_on_their_entra_page() {
+        let url = |kind: &str| super::entra_portal_url(kind, "id-1", "app-1", Some("t-1"));
+        assert_eq!(
+            url("group").unwrap(),
+            "https://portal.azure.com/#@t-1/view/Microsoft_AAD_IAM/GroupDetailsMenuBlade/~/Overview/groupId/id-1"
+        );
+        assert!(url("user")
+            .unwrap()
+            .contains("UserProfileMenuBlade/~/overview/userId/id-1"));
+        assert!(url("servicePrincipal")
+            .unwrap()
+            .ends_with("objectId/id-1/appId/app-1"));
+        assert_eq!(url("device"), None);
     }
 }

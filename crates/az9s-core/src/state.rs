@@ -104,6 +104,19 @@ pub struct AppState {
     /// Principals named so far (Microsoft Graph), by lowercase ID
     pub principals: HashMap<String, az9s_azure::directory::Principal>,
 
+    /// Every group in the directory, once loaded
+    pub groups: Vec<az9s_azure::directory::Group>,
+
+    /// Members of groups, by (lowercase group ID, transitive), as loaded
+    pub group_members: HashMap<(String, bool), Vec<az9s_azure::directory::Principal>>,
+
+    /// The group whose members are shown, and whether nested members too
+    pub members_group: Option<String>,
+    pub members_transitive: bool,
+
+    /// The principal whose groups are shown (lowercase ID)
+    pub member_of: Option<String>,
+
     /// The scope `:ra` shows (`None`: the whole tenant)
     pub ra_scope: Option<crate::policy::PolicyScope>,
 
@@ -258,6 +271,38 @@ pub struct PolicyRow {
     pub compliance: Option<crate::policy::Compliance>,
 }
 
+/// Principals sorted for a list (groups, users, service principals, then
+/// the rest; by name) and narrowed by `filter`.
+fn principal_rows<'a>(
+    items: impl Iterator<Item = &'a az9s_azure::directory::Principal>,
+    filter: &str,
+) -> Vec<az9s_azure::directory::Principal> {
+    let order = |kind: &str| match kind {
+        "group" => 0,
+        "user" => 1,
+        "servicePrincipal" => 2,
+        _ => 3,
+    };
+    let needle = filter.to_ascii_lowercase();
+    let mut rows: Vec<az9s_azure::directory::Principal> = items
+        .filter(|p| {
+            needle.is_empty()
+                || [p.display_name.as_str(), &p.detail, &p.kind, &p.id]
+                    .iter()
+                    .any(|f| contains_ignore_ascii_case(f, &needle))
+        })
+        .cloned()
+        .collect();
+    rows.sort_by(|a, b| {
+        order(&a.kind).cmp(&order(&b.kind)).then_with(|| {
+            a.display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase())
+        })
+    });
+    rows
+}
+
 /// One row of `:ra`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoleAssignmentRow {
@@ -373,6 +418,12 @@ pub enum ViewMode {
     ExemptionList,
     /// Role assignments that matter at a scope (`:ra`)
     RoleAssignments,
+    /// Directory groups (`:group`)
+    GroupList,
+    /// A group's members
+    GroupMembers,
+    /// The groups a user, group or app belongs to
+    MemberOf,
     /// Role definitions, built-in and custom (`:role`)
     RoleDefinitions,
     ResourceDetail,
@@ -545,6 +596,9 @@ impl AppState {
             ViewMode::ComplianceRanking => self.compliance_rows().len(),
             ViewMode::ExemptionList => self.exemption_rows().len(),
             ViewMode::RoleAssignments => self.role_assignment_rows().len(),
+            ViewMode::GroupList => self.group_rows().len(),
+            ViewMode::GroupMembers => self.member_rows().map_or(0, |r| r.len()),
+            ViewMode::MemberOf => self.member_of_rows().map_or(0, |r| r.len()),
             ViewMode::RoleDefinitions => self.role_definition_rows().len(),
             ViewMode::ManagementGroupTree => self.tree_rows().len(),
             _ => 0,
@@ -862,6 +916,101 @@ impl AppState {
                     || contains_ignore_ascii_case(&r.group, &needle)
             })
             .collect()
+    }
+
+    /// Rows of `:group`, by name; `/` narrows by name, description, mail or
+    /// kind ("security", "Microsoft 365", "dynamic", "role-assignable").
+    pub fn group_rows(&self) -> Vec<&az9s_azure::directory::Group> {
+        let mut rows: Vec<&az9s_azure::directory::Group> = self.groups.iter().collect();
+        rows.sort_by_cached_key(|g| g.display_name.to_lowercase());
+        if self.filter.is_empty() {
+            return rows;
+        }
+        let needle = self.filter.to_ascii_lowercase();
+        rows.into_iter()
+            .filter(|g| {
+                let flags = format!(
+                    "{}{}{}",
+                    g.kind_label(),
+                    if g.dynamic { " dynamic" } else { "" },
+                    if g.role_assignable {
+                        " role-assignable"
+                    } else {
+                        ""
+                    }
+                );
+                [g.display_name.as_str(), &g.description, &g.mail, &flags]
+                    .iter()
+                    .any(|f| contains_ignore_ascii_case(f, &needle))
+            })
+            .collect()
+    }
+
+    /// The selected row of `:group`.
+    pub fn selected_group(&self) -> Option<az9s_azure::directory::Group> {
+        if self.view != ViewMode::GroupList {
+            return None;
+        }
+        self.group_rows()
+            .get(self.list_state.selected)
+            .map(|g| (*g).clone())
+    }
+
+    /// A group by ID, if listed.
+    pub fn group(&self, id: &str) -> Option<&az9s_azure::directory::Group> {
+        self.groups.iter().find(|g| g.id.eq_ignore_ascii_case(id))
+    }
+
+    /// Members of the shown group (`None` while loading): groups first, then
+    /// users, service principals and devices, by name. `/` narrows by name,
+    /// sign-in name, app ID or kind.
+    pub fn member_rows(&self) -> Option<Vec<az9s_azure::directory::Principal>> {
+        let id = self.members_group.as_ref()?;
+        let members = self
+            .group_members
+            .get(&(id.clone(), self.members_transitive))?;
+        Some(principal_rows(members.iter(), &self.filter))
+    }
+
+    /// The selected member.
+    pub fn selected_member(&self) -> Option<az9s_azure::directory::Principal> {
+        if self.view != ViewMode::GroupMembers {
+            return None;
+        }
+        self.member_rows()?
+            .into_iter()
+            .nth(self.list_state.selected)
+    }
+
+    /// Groups the shown principal belongs to (`None` while loading).
+    pub fn member_of_rows(&self) -> Option<Vec<az9s_azure::directory::Principal>> {
+        let id = self.member_of.as_ref()?;
+        let groups = self.principal_groups.get(id)?;
+        Some(principal_rows(groups.iter(), &self.filter))
+    }
+
+    /// The selected group of the "member of" view.
+    pub fn selected_member_of(&self) -> Option<az9s_azure::directory::Principal> {
+        if self.view != ViewMode::MemberOf {
+            return None;
+        }
+        self.member_of_rows()?
+            .into_iter()
+            .nth(self.list_state.selected)
+    }
+
+    /// A principal's name for titles: its display name, else its ID.
+    pub fn principal_label(&self, id: &str) -> String {
+        if let Some(g) = self.group(id) {
+            return g.display_name.clone();
+        }
+        self.principals
+            .get(&id.to_ascii_lowercase())
+            .map(|p| match p.detail.as_str() {
+                "" => p.display_name.clone(),
+                d => format!("{} ({d})", p.display_name),
+            })
+            .unwrap_or_else(|| id.to_string())
     }
 
     /// A role definition by the GUID at the end of its ID.
@@ -1486,6 +1635,10 @@ impl AppState {
                 .map(|r| format!("/subscriptions/{}", r.subscription_id)),
             ViewMode::ExemptionList => self.selected_exemption().map(|r| r.exemption.id),
             ViewMode::RoleAssignments => self.selected_role_assignment().map(|r| r.assignment.id),
+            // Directory objects: their object ID (`y` copies it).
+            ViewMode::GroupList => self.selected_group().map(|g| g.id),
+            ViewMode::GroupMembers => self.selected_member().map(|m| m.id),
+            ViewMode::MemberOf => self.selected_member_of().map(|m| m.id),
             ViewMode::RoleDefinitions => self.selected_role_definition().map(|r| r.definition.id),
             ViewMode::ResourceGroupList => self.selected_resource_group().map(|r| r.id.clone()),
             ViewMode::ResourceList => self.selected_resource().map(|r| r.id.clone()),
@@ -1539,7 +1692,10 @@ impl AppState {
             | ViewMode::ComplianceRanking
             | ViewMode::ExemptionList
             | ViewMode::RoleAssignments
-            | ViewMode::RoleDefinitions => self.selected_arm_id(),
+            | ViewMode::RoleDefinitions
+            | ViewMode::GroupList
+            | ViewMode::GroupMembers
+            | ViewMode::MemberOf => self.selected_arm_id(),
             _ => None,
         }
     }
@@ -1577,6 +1733,13 @@ impl AppState {
                 .role_assignment_rows()
                 .iter()
                 .position(|r| r.assignment.id == id),
+            ViewMode::GroupList => self.group_rows().iter().position(|g| g.id == id),
+            ViewMode::GroupMembers => self
+                .member_rows()
+                .and_then(|r| r.iter().position(|m| m.id == id)),
+            ViewMode::MemberOf => self
+                .member_of_rows()
+                .and_then(|r| r.iter().position(|m| m.id == id)),
             ViewMode::RoleDefinitions => self
                 .role_definition_rows()
                 .iter()

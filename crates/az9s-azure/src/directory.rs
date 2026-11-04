@@ -142,6 +142,136 @@ impl DirectoryClient {
     }
 }
 
+/// A directory group.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Group {
+    pub id: String,
+    pub display_name: String,
+    pub description: String,
+    pub mail: String,
+    /// Microsoft 365 group (`groupTypes` has "Unified"); else a security
+    /// or distribution group
+    pub unified: bool,
+    pub security_enabled: bool,
+    /// Members come from a rule (`groupTypes` has "DynamicMembership")
+    pub dynamic: bool,
+    /// Can be given Entra ID roles
+    pub role_assignable: bool,
+    pub created: String,
+}
+
+impl Group {
+    fn from_item(item: &Value) -> Option<Self> {
+        let text = |key: &str| {
+            item.get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let flag = |key: &str| item.get(key).and_then(Value::as_bool).unwrap_or(false);
+        let types: Vec<&str> = item
+            .get("groupTypes")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let id = text("id");
+        if id.is_empty() {
+            return None;
+        }
+        Some(Self {
+            display_name: Some(text("displayName"))
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| id.clone()),
+            id,
+            description: text("description"),
+            mail: text("mail"),
+            unified: types.iter().any(|t| t.eq_ignore_ascii_case("Unified")),
+            security_enabled: flag("securityEnabled"),
+            dynamic: types
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case("DynamicMembership")),
+            role_assignable: flag("isAssignableToRole"),
+            created: text("createdDateTime"),
+        })
+    }
+
+    /// "Microsoft 365", "security" or "distribution".
+    pub fn kind_label(&self) -> &'static str {
+        if self.unified {
+            "Microsoft 365"
+        } else if self.security_enabled {
+            "security"
+        } else {
+            "distribution"
+        }
+    }
+}
+
+impl DirectoryClient {
+    /// Every group in the directory, paged.
+    pub async fn groups(&self) -> Result<Vec<Group>> {
+        let _t = timing::timer("azure.groups");
+        let url = format!(
+            "{}/v1.0/groups?$select=id,displayName,description,mail,groupTypes,\
+             securityEnabled,isAssignableToRole,createdDateTime&$top=999",
+            self.endpoint
+        );
+        Ok(self
+            .get_all(url)
+            .await?
+            .iter()
+            .filter_map(Group::from_item)
+            .collect())
+    }
+
+    /// A group's members: direct, or with `transitive` also the members of
+    /// its member groups (and theirs).
+    pub async fn members(&self, group_id: &str, transitive: bool) -> Result<Vec<Principal>> {
+        let _t = timing::timer("azure.group_members");
+        let relation = if transitive {
+            "transitiveMembers"
+        } else {
+            "members"
+        };
+        let url = format!(
+            "{}/v1.0/groups/{group_id}/{relation}\
+             ?$select=id,displayName,userPrincipalName,appId,mail&$top=999",
+            self.endpoint
+        );
+        Ok(self
+            .get_all(url)
+            .await?
+            .iter()
+            .filter_map(principal_from_item)
+            .collect())
+    }
+
+    /// Every item of a paged Graph list (`value`, `@odata.nextLink`).
+    async fn get_all(&self, mut url: String) -> Result<Vec<Value>> {
+        let mut items = Vec::new();
+        loop {
+            let token = self.tokens.token().await?;
+            let response = self
+                .http
+                .get(&url)
+                .bearer_auth(token)
+                .send()
+                .await
+                .map_err(|e| {
+                    AzureError::ApiError(format!("Microsoft Graph request failed: {e}"))
+                })?;
+            let body = read_body(response).await?;
+            if let Some(Value::Array(page)) = body.get("value") {
+                items.extend(page.iter().cloned());
+            }
+            match body.get("@odata.nextLink").and_then(Value::as_str) {
+                Some(next) if !next.is_empty() => url = next.to_string(),
+                _ => return Ok(items),
+            }
+        }
+    }
+}
+
 /// A Microsoft Graph response's JSON, or its error message.
 async fn read_body(response: reqwest::Response) -> Result<Value> {
     let status = response.status();
@@ -175,6 +305,7 @@ fn principal_from_item(item: &Value) -> Option<Principal> {
     let detail = match kind.as_str() {
         "user" => text("userPrincipalName"),
         "servicePrincipal" => text("appId"),
+        "group" => text("mail"),
         _ => "",
     };
     Some(Principal {
@@ -263,6 +394,49 @@ mod tests {
             .map(|g| (g.display_name.as_str(), g.kind.as_str()))
             .collect();
         assert_eq!(names, [("Platform Admins", "group"), ("Nested", "group")]);
+    }
+
+    #[tokio::test]
+    async fn groups_and_their_members() {
+        let (endpoint, _) = serve_paths(|path, _| {
+            if path.starts_with("/v1.0/groups?") {
+                ok(json!({"value": [
+                    {"id": "g1", "displayName": "Platform Admins", "groupTypes": [],
+                     "securityEnabled": true, "isAssignableToRole": true},
+                    {"id": "g2", "displayName": "Team Site", "groupTypes": ["Unified", "DynamicMembership"],
+                     "securityEnabled": false, "mail": "team@contoso.com"}
+                ]}))
+            } else if path.starts_with("/v1.0/groups/g1/transitiveMembers?") {
+                ok(json!({"value": [
+                    {"@odata.type": "#microsoft.graph.user", "id": "u1", "displayName": "Ada",
+                     "userPrincipalName": "ada@contoso.com"},
+                    {"@odata.type": "#microsoft.graph.device", "id": "d1", "displayName": "laptop-1"}
+                ]}))
+            } else if path.starts_with("/v1.0/groups/g1/members?") {
+                ok(json!({"value": [
+                    {"@odata.type": "#microsoft.graph.user", "id": "u1", "displayName": "Ada",
+                     "userPrincipalName": "ada@contoso.com"}
+                ]}))
+            } else {
+                error(404, "unexpected")
+            }
+        })
+        .await;
+        let client = client(&endpoint);
+        let groups = client.groups().await.unwrap();
+        assert_eq!(
+            groups
+                .iter()
+                .map(|g| (g.kind_label(), g.dynamic, g.role_assignable))
+                .collect::<Vec<_>>(),
+            [("security", false, true), ("Microsoft 365", true, false)]
+        );
+        assert_eq!(client.members("g1", false).await.unwrap().len(), 1);
+        let all = client.members("g1", true).await.unwrap();
+        assert_eq!(
+            all.iter().map(|m| m.kind.as_str()).collect::<Vec<_>>(),
+            ["user", "device"]
+        );
     }
 
     #[tokio::test]

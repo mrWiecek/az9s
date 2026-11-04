@@ -106,6 +106,8 @@ fn draw_content(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         ViewMode::ExemptionList => draw_exemptions(f, area, app),
         ViewMode::RoleAssignments => draw_role_assignments(f, area, app),
         ViewMode::RoleDefinitions => draw_role_definitions(f, area, app),
+        ViewMode::GroupList => draw_groups(f, area, app),
+        ViewMode::GroupMembers | ViewMode::MemberOf => draw_members(f, area, app),
         ViewMode::ResourceDetail => draw_resource_detail(f, area, app),
         ViewMode::Logs => draw_logs(f, area, app),
     }
@@ -569,6 +571,173 @@ fn draw_empty(f: &mut Frame, area: Rect, title: String, message: String) {
         .style(Style::default().fg(theme().subtle))
         .wrap(Wrap { trim: true });
     f.render_widget(content, area);
+}
+
+/// A list of rows in a bordered box with the selection, as every list view
+/// draws it.
+fn draw_list(
+    f: &mut Frame,
+    area: Rect,
+    app: &mut TuiApp,
+    title: String,
+    rows: usize,
+    item: impl Fn(usize) -> widgets::ListItem<'static>,
+) {
+    let viewport = area.height.saturating_sub(2) as usize;
+    let mut list_state = app.state().list_state.clone();
+    let visible = list_state.visible_range(rows, viewport);
+    let items: Vec<_> = visible.clone().map(item).collect();
+    let list = SelectableList::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(theme().selection());
+    let mut widget_state = SelectableListState {
+        selected: list_state.selected - visible.start,
+        offset: 0,
+    };
+    list.render(area, f.buffer_mut(), &mut widget_state);
+    app.state_mut().list_state = list_state;
+}
+
+/// `:group`: directory groups.
+fn draw_groups(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
+    let rows: Vec<az9s_core::rbac::Group> = app.state().group_rows().into_iter().cloned().collect();
+    let state = app.state();
+    let t = theme();
+    if rows.is_empty() {
+        let message = if state.loading {
+            "Loading groups…".to_string()
+        } else if !state.filter.is_empty() {
+            "No groups match the current filter.\n\nPress Esc to clear the filter.".into()
+        } else {
+            "No groups loaded (they come from Microsoft Graph). Press r to retry.".into()
+        };
+        draw_empty(f, area, "Groups".into(), message);
+        return Ok(());
+    }
+    let name_col = name_width(area.width, 16 + 10 + 4 + 34, 48);
+    let title = if state.filter_mode {
+        format!("Groups ({}) - Filter: {}_", rows.len(), state.filter)
+    } else {
+        let dynamic = rows.iter().filter(|g| g.dynamic).count();
+        let assignable = rows.iter().filter(|g| g.role_assignable).count();
+        format!(
+            "Groups ({}, {dynamic} dynamic, {assignable} role-assignable) · R role-assignable · \
+             Enter members, p access",
+            rows.len()
+        )
+    };
+    draw_list(f, area, app, title, rows.len(), |i| {
+        let g = &rows[i];
+        list_item_spans(vec![
+            Span::styled(
+                if g.role_assignable { "R " } else { "  " },
+                Style::default()
+                    .fg(t.highlight)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                cell(&g.display_name, name_col),
+                Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(cell(g.kind_label(), 16), Style::default().fg(t.accent)),
+            Span::styled(
+                cell(if g.dynamic { "dynamic" } else { "assigned" }, 10),
+                Style::default().fg(if g.dynamic { t.special } else { t.muted }),
+            ),
+            Span::styled(cell(&g.mail, 34), Style::default().fg(t.muted)),
+            Span::styled(g.description.clone(), Style::default().fg(t.muted)),
+        ])
+    });
+    Ok(())
+}
+
+/// A directory principal's kind, short: "user", "group", "app", "device".
+fn kind_short(kind: &str) -> &str {
+    match kind {
+        "servicePrincipal" => "app",
+        k => k,
+    }
+}
+
+/// A group's members, or the groups a principal belongs to.
+fn draw_members(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
+    let state = app.state();
+    let t = theme();
+    let members = state.view == ViewMode::GroupMembers;
+    let (rows, whose) = if members {
+        (
+            state.member_rows(),
+            state
+                .members_group
+                .as_deref()
+                .map(|g| state.principal_label(g)),
+        )
+    } else {
+        (
+            state.member_of_rows(),
+            state.member_of.as_deref().map(|p| state.principal_label(p)),
+        )
+    };
+    let whose = whose.unwrap_or_default();
+    let heading = if members {
+        let mode = if state.members_transitive {
+            "nested included"
+        } else {
+            "direct"
+        };
+        format!("Members · {whose} · {mode}")
+    } else {
+        format!("Member of · {whose} · nested included")
+    };
+    let Some(rows) = rows.filter(|r| !r.is_empty()) else {
+        let message = match (state.loading, state.filter.is_empty(), members) {
+            (true, _, _) => "Loading…".to_string(),
+            (false, false, _) => {
+                "Nothing matches the current filter.\n\nPress Esc to clear the filter.".into()
+            }
+            (false, true, true) => "No members.".into(),
+            (false, true, false) => "Not a member of any group.".into(),
+        };
+        draw_empty(f, area, heading, message);
+        return Ok(());
+    };
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for r in &rows {
+        let kind = kind_short(&r.kind).to_string();
+        match counts.iter_mut().find(|(k, _)| *k == kind) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((kind, 1)),
+        }
+    }
+    let counts = counts
+        .iter()
+        .map(|(k, n)| format!("{n} {k}{}", if *n == 1 { "" } else { "s" }))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let keys = if members {
+        "Enter open, t nested on/off, p access"
+    } else {
+        "Enter members, p access"
+    };
+    let title = if state.filter_mode {
+        format!("{heading} ({}) - Filter: {}_", rows.len(), state.filter)
+    } else {
+        format!("{heading} ({counts}) · {keys}")
+    };
+    let name_col = name_width(area.width, 8 + 40, 48);
+    draw_list(f, area, app, title, rows.len(), |i| {
+        let p = &rows[i];
+        list_item_spans(vec![
+            Span::styled(cell(kind_short(&p.kind), 8), Style::default().fg(t.accent)),
+            Span::styled(
+                cell(&p.display_name, name_col),
+                Style::default().fg(t.text).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(cell(&p.detail, 40), Style::default().fg(t.muted)),
+            Span::styled(p.id.clone(), Style::default().fg(t.muted)),
+        ])
+    });
+    Ok(())
 }
 
 /// `:ra`: role assignments that matter at a scope.
@@ -2104,6 +2273,29 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("y", "Copy ID"),
                 ("o", "Portal"),
                 ("r", "Refresh"),
+                ("Esc", "Back"),
+                ("q", "Quit"),
+            ],
+            ViewMode::GroupList => vec![
+                ("↑↓/jk", "Navigate"),
+                ("Enter", "Members"),
+                ("p", "Access"),
+                ("/", "Filter"),
+                ("c", "Copy"),
+                ("y", "Copy ID"),
+                ("o", "Portal"),
+                ("r", "Refresh"),
+                ("q", "Quit"),
+            ],
+            ViewMode::GroupMembers | ViewMode::MemberOf => vec![
+                ("↑↓/jk", "Navigate"),
+                ("Enter", "Open"),
+                ("t", "Nested"),
+                ("p", "Access"),
+                ("/", "Filter"),
+                ("c", "Copy"),
+                ("y", "Copy ID"),
+                ("o", "Portal"),
                 ("Esc", "Back"),
                 ("q", "Quit"),
             ],

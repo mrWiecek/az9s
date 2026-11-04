@@ -41,6 +41,8 @@ pub enum CommandKind {
     RoleAssignments { scope: Scope },
     /// Role definitions, built-in and custom
     RoleDefinitions,
+    /// Directory groups, optionally narrowed by name
+    Groups(Option<String>),
     /// One principal's access across the tenant (name, sign-in name, app
     /// ID or object ID)
     Access(String),
@@ -114,6 +116,11 @@ impl Command {
                         Some(_) => Scope::Subscription(parts[1..].join(" ")),
                     },
                 },
+            },
+            "group" => Self {
+                kind: CommandKind::Groups(
+                    Some(parts[1..].join(" ")).filter(|name| !name.is_empty()),
+                ),
             },
             "access" => Self {
                 kind: match parts[1..].join(" ") {
@@ -202,7 +209,7 @@ impl Command {
         match &self.kind {
             CommandKind::Unknown(cmd) if !cmd.is_empty() => {
                 Some(format!(
-                    "Unknown command: '{}'\n\nAvailable commands:\n  :policy [all|<sub>] - Policy assignments and compliance\n  :compliance [all|<mg>] - Subscriptions by non-compliant resources\n  :exemption [all|<mg>|<sub>] - Policy exemptions and when they expire\n  :ra [all|<mg>|<sub>] - Role assignments (inherited, here, below)\n  :role - Role definitions, built-in and custom\n  :access <principal> - Everything one user, group or app can do\n  :ctx [all|<tenant>] - Tenants\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type\n  :tag [all|<sub>] - Tags and how many resources carry them",
+                    "Unknown command: '{}'\n\nAvailable commands:\n  :policy [all|<sub>] - Policy assignments and compliance\n  :compliance [all|<mg>] - Subscriptions by non-compliant resources\n  :exemption [all|<mg>|<sub>] - Policy exemptions and when they expire\n  :ra [all|<mg>|<sub>] - Role assignments (inherited, here, below)\n  :role - Role definitions, built-in and custom\n  :access <principal> - Everything one user, group or app can do\n  :group [name] - Directory groups and their members\n  :ctx [all|<tenant>] - Tenants\n  :mg - Management group tree\n  :sub - Subscriptions\n  :rg [all|<sub>] [loc=… tag=…] - Resource groups\n  :res [all|<sub>] [type=… loc=… tag=…] - Resources\n  :type [all|<sub>] - Resource counts per type\n  :tag [all|<sub>] - Tags and how many resources carry them",
                     cmd
                 ))
             }

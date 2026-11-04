@@ -12,6 +12,23 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-04
+
+### Added
+- **`:group [name]`: directory groups** from Microsoft Graph, by name: kind
+  (security, Microsoft 365, distribution), dynamic or assigned membership,
+  role-assignable (`R`), mail and description; the title counts dynamic
+  and role-assignable groups. `/` also matches "dynamic" and
+  "role-assignable". Cached per tenant.
+- **Group members**: `Enter` on a group lists its members (groups first,
+  then users, apps and devices, with sign-in name or app ID), counted by
+  kind in the title. `t` switches between direct and nested members.
+  `Enter` on a member group opens its members; on a user or app, the
+  groups it belongs to (nested too). `Esc` goes back the same way.
+- `p` in these views shows the group's or member's Azure access (as in
+  `:ra`); `o` opens its Entra page in the Azure Portal; `y` copies its
+  object ID; `c` copies the list.
+
 ## [0.19.0] - 2026-11-03
 
 ### Added
@@ -569,7 +586,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/mrWiecek/az9s/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/mrWiecek/az9s/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/mrWiecek/az9s/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/mrWiecek/az9s/compare/v0.16.0...v0.17.0

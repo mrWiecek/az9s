@@ -72,6 +72,13 @@ pub enum LoadRequest {
     PrincipalGroups {
         principal_id: String,
     },
+    /// Every group in the directory (Microsoft Graph).
+    Groups,
+    /// A group's members, direct or (`transitive`) nested too.
+    GroupMembers {
+        group_id: String,
+        transitive: bool,
+    },
     /// Resources evaluated / non-compliant per subscription, tenant-wide:
     /// the compliance roll-up of the management group tree and `:compliance`.
     ComplianceRollup,
@@ -111,6 +118,8 @@ pub enum LoadKind {
     RoleDefinitions,
     Principals,
     PrincipalGroups,
+    Groups,
+    GroupMembers,
     ComplianceRollup,
     PolicyCompliance,
     ComplianceSummary,
@@ -133,6 +142,8 @@ impl LoadKind {
             LoadKind::RoleDefinitions => "role definitions",
             LoadKind::Principals => "principal names",
             LoadKind::PrincipalGroups => "group memberships",
+            LoadKind::Groups => "groups",
+            LoadKind::GroupMembers => "group members",
             LoadKind::ComplianceRollup => "compliance per subscription",
             LoadKind::PolicyCompliance => "policy compliance",
             LoadKind::ComplianceSummary => "compliance summary",
@@ -157,6 +168,8 @@ impl LoadRequest {
             LoadRequest::RoleDefinitions { .. } => LoadKind::RoleDefinitions,
             LoadRequest::Principals { .. } => LoadKind::Principals,
             LoadRequest::PrincipalGroups { .. } => LoadKind::PrincipalGroups,
+            LoadRequest::Groups => LoadKind::Groups,
+            LoadRequest::GroupMembers { .. } => LoadKind::GroupMembers,
             LoadRequest::ComplianceRollup => LoadKind::ComplianceRollup,
             LoadRequest::PolicyCompliance { .. } => LoadKind::PolicyCompliance,
             LoadRequest::ComplianceSummary { .. } => LoadKind::ComplianceSummary,
@@ -182,6 +195,9 @@ pub enum LoadedData {
     Principals(Vec<az9s_azure::directory::Principal>),
     /// A principal (lowercase ID) and its groups
     PrincipalGroups(String, Vec<az9s_azure::directory::Principal>),
+    Groups(Vec<az9s_azure::directory::Group>),
+    /// A group (lowercase ID), direct or transitive, and its members
+    GroupMembers(String, bool, Vec<az9s_azure::directory::Principal>),
     /// Per subscription (lowercase ID), tenant-wide
     ComplianceRollup(HashMap<String, Compliance>),
     PolicyCompliance(PolicyScope, HashMap<String, Compliance>),
@@ -475,7 +491,9 @@ impl Fetcher for AzureFetcher {
                 LoadRequest::RoleAssignments { .. }
                 | LoadRequest::RoleDefinitions { .. }
                 | LoadRequest::Principals { .. }
-                | LoadRequest::PrincipalGroups { .. } => FetchOutcome {
+                | LoadRequest::PrincipalGroups { .. }
+                | LoadRequest::Groups
+                | LoadRequest::GroupMembers { .. } => FetchOutcome {
                     data: Err("role assignments need Resource Graph \
                                    (not available with AZ9S_BACKEND=arm)"
                         .into()),
@@ -652,6 +670,44 @@ impl Fetcher for GraphFetcher {
             .boxed();
         }
         match &request {
+            LoadRequest::Groups | LoadRequest::GroupMembers { .. } => {
+                let directory = self.directory.clone();
+                let request = request.clone();
+                return async move {
+                    let data = match (directory, request) {
+                        (None, _) => Err("Microsoft Graph is not configured".to_string()),
+                        (Some(d), LoadRequest::Groups) => d
+                            .groups()
+                            .await
+                            .map(LoadedData::Groups)
+                            .map_err(|e| e.to_string()),
+                        (
+                            Some(d),
+                            LoadRequest::GroupMembers {
+                                group_id,
+                                transitive,
+                            },
+                        ) => d
+                            .members(&group_id, transitive)
+                            .await
+                            .map(|m| {
+                                LoadedData::GroupMembers(
+                                    group_id.to_ascii_lowercase(),
+                                    transitive,
+                                    m,
+                                )
+                            })
+                            .map_err(|e| e.to_string()),
+                        (Some(_), _) => unreachable!("matched above"),
+                    };
+                    FetchOutcome {
+                        data,
+                        failed_subscriptions: vec![],
+                        notice: None,
+                    }
+                }
+                .boxed();
+            }
             LoadRequest::PrincipalGroups { principal_id } => {
                 let directory = self.directory.clone();
                 let id = principal_id.to_ascii_lowercase();
@@ -1004,6 +1060,8 @@ impl Fetcher for GraphFetcher {
                 | LoadRequest::RoleDefinitions { .. }
                 | LoadRequest::Principals { .. }
                 | LoadRequest::PrincipalGroups { .. }
+                | LoadRequest::Groups
+                | LoadRequest::GroupMembers { .. }
                 | LoadRequest::ComplianceRollup
                 | LoadRequest::PolicyCompliance { .. }
                 | LoadRequest::ComplianceSummary { .. }
@@ -1096,6 +1154,8 @@ fn empty(kind: LoadKind) -> LoadedData {
         LoadKind::RoleDefinitions => LoadedData::RoleDefinitions(vec![]),
         LoadKind::Principals => LoadedData::Principals(vec![]),
         LoadKind::PrincipalGroups => LoadedData::PrincipalGroups(String::new(), vec![]),
+        LoadKind::Groups => LoadedData::Groups(vec![]),
+        LoadKind::GroupMembers => LoadedData::GroupMembers(String::new(), false, vec![]),
         LoadKind::ComplianceRollup => LoadedData::ComplianceRollup(HashMap::new()),
         LoadKind::PolicyCompliance => {
             LoadedData::PolicyCompliance(PolicyScope::Group(String::new()), HashMap::new())

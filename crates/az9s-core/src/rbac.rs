@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// A principal's name from the directory (Microsoft Graph).
-pub use az9s_azure::directory::Principal;
+pub use az9s_azure::directory::{Group, Principal};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoleAssignment {

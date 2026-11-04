@@ -320,6 +320,39 @@ impl App {
         }
     }
 
+    /// `:group`: every group in the directory (cached first).
+    pub fn open_groups(&mut self) {
+        self.state.view = ViewMode::GroupList;
+        self.state.list_state.reset();
+        self.request(LoadRequest::Groups);
+    }
+
+    /// A group's members, direct or nested too; loaded fresh each time.
+    pub fn open_group_members(&mut self, group_id: &str, transitive: bool) {
+        let id = group_id.to_ascii_lowercase();
+        let state = &mut self.state;
+        state.members_group = Some(id.clone());
+        state.members_transitive = transitive;
+        state.view = ViewMode::GroupMembers;
+        state.list_state.reset();
+        state.group_members.remove(&(id.clone(), transitive));
+        self.request(LoadRequest::GroupMembers {
+            group_id: id,
+            transitive,
+        });
+    }
+
+    /// The groups a user, group or app belongs to, nested ones too.
+    pub fn open_member_of(&mut self, principal_id: &str) {
+        let id = principal_id.to_ascii_lowercase();
+        let state = &mut self.state;
+        state.member_of = Some(id.clone());
+        state.view = ViewMode::MemberOf;
+        state.list_state.reset();
+        state.principal_groups.remove(&id);
+        self.request(LoadRequest::PrincipalGroups { principal_id: id });
+    }
+
     /// `:role`: every role definition, custom first.
     pub fn open_role_definitions(&mut self) {
         self.state.view = ViewMode::RoleDefinitions;
@@ -551,8 +584,15 @@ impl App {
             LoadRequest::Subscriptions
             | LoadRequest::Tenants
             | LoadRequest::PrincipalGroups { .. }
+            | LoadRequest::GroupMembers { .. }
             | LoadRequest::PolicyStates { .. }
             | LoadRequest::ResourcePolicy { .. } => return,
+            LoadRequest::Groups => repo.document(&self.tenant_key("groups")).map(|doc| {
+                match doc.and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at))) {
+                    Some((items, at)) => (LoadedData::Groups(items), Some(at)),
+                    None => (LoadedData::Groups(vec![]), None),
+                }
+            }),
             LoadRequest::Principals { .. } => {
                 repo.document(&self.tenant_key("principals")).map(|doc| {
                     match doc.and_then(|(json, at)| Some((serde_json::from_str(&json).ok()?, at))) {
@@ -693,6 +733,8 @@ impl App {
             LoadKind::RoleDefinitions => self.state.role_definitions.len(),
             LoadKind::Principals => self.state.principals.len(),
             LoadKind::PrincipalGroups => self.state.principal_groups.len(),
+            LoadKind::Groups => self.state.groups.len(),
+            LoadKind::GroupMembers => self.state.group_members.len(),
             LoadKind::ComplianceRollup => usize::from(self.state.compliance_rollup.is_some()),
             LoadKind::PolicyCompliance => usize::from(self.state.policy_compliance.is_some()),
             LoadKind::ComplianceSummary => usize::from(self.state.compliance_summary.is_some()),
@@ -826,6 +868,10 @@ impl App {
                 // enough. Otherwise the list is empty or incomplete: error.
                 if kind == LoadKind::ScopeTree && !pending.staged {
                     self.fall_back_to_subscriptions(&e);
+                } else if kind == LoadKind::PrincipalGroups && self.state.view == ViewMode::MemberOf
+                {
+                    self.state
+                        .set_error(Some(format!("Failed to load group memberships: {e}")));
                 } else if kind == LoadKind::PrincipalGroups {
                     // Direct assignments still show.
                     self.state.notice = Some(format!(
@@ -904,6 +950,17 @@ impl App {
             LoadedData::PolicyExemptions(items) => self.state.policy_exemptions = items,
             LoadedData::RoleAssignments(items) => self.state.role_assignments = items,
             LoadedData::RoleDefinitions(items) => self.state.role_definitions = items,
+            LoadedData::Groups(groups) => self.state.groups = groups,
+            LoadedData::GroupMembers(id, transitive, members) => {
+                if !id.is_empty() {
+                    for m in &members {
+                        self.state
+                            .principals
+                            .insert(m.id.to_ascii_lowercase(), m.clone());
+                    }
+                    self.state.group_members.insert((id, transitive), members);
+                }
+            }
             LoadedData::PrincipalGroups(id, groups) => {
                 if !id.is_empty() {
                     // Their names are known now too.
@@ -965,8 +1022,16 @@ impl App {
             // states change often and are always loaded fresh.
             LoadRequest::Tenants
             | LoadRequest::PrincipalGroups { .. }
+            | LoadRequest::GroupMembers { .. }
             | LoadRequest::PolicyStates { .. }
             | LoadRequest::ResourcePolicy { .. } => return,
+            LoadRequest::Groups => match serde_json::to_string(&self.state.groups) {
+                Ok(value) => WriteJob::Document {
+                    key: self.tenant_key("groups"),
+                    value,
+                },
+                Err(_) => return,
+            },
             LoadRequest::Principals { .. } => {
                 let all: Vec<&az9s_azure::directory::Principal> =
                     self.state.principals.values().collect();
@@ -1124,6 +1189,8 @@ fn view_of(kind: LoadKind) -> ViewMode {
         LoadKind::RoleAssignments => ViewMode::RoleAssignments,
         LoadKind::RoleDefinitions => ViewMode::RoleDefinitions,
         LoadKind::Principals | LoadKind::PrincipalGroups => ViewMode::RoleAssignments,
+        LoadKind::Groups => ViewMode::GroupList,
+        LoadKind::GroupMembers => ViewMode::GroupMembers,
     }
 }
 

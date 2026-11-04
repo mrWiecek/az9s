@@ -217,6 +217,13 @@ Work items, in order:
 - [x] A principal's access across the tenant: `p` in `:ra` or `:access
       <principal>`, its own assignments and its groups' (nested too) (v0.19.0).
 - [ ] Access next: PIM eligible assignments, deny assignments.
+- [x] **Directory: groups.** `:group [name]` lists groups (security, Microsoft
+      365, distribution; dynamic; role-assignable); members direct or nested
+      (`t`); a member's groups; `p` Azure access, `o` Entra page (v0.20.0).
+- [ ] **Directory: applications.** `:app`: app registration and enterprise
+      application as one item with tabs (overview, requested vs granted
+      permissions, exposed API, owners, credentials with expiry, assigned
+      users and groups).
 - Policy *actions* (trigger a compliance scan, create or extend exemptions, start
   remediation) come in M4 on top of the action framework.
 

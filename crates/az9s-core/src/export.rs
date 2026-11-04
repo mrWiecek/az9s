@@ -111,6 +111,41 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
                 ),
             )
         }
+        ViewMode::GroupList => {
+            let rows = state.group_rows();
+            let lines = rows.iter().map(|g| {
+                tsv(&[
+                    &g.display_name,
+                    g.kind_label(),
+                    if g.dynamic { "dynamic" } else { "assigned" },
+                    if g.role_assignable { "yes" } else { "" },
+                    &g.mail,
+                    &g.description,
+                    &g.id,
+                ])
+            });
+            (
+                count(rows.len(), "group"),
+                with_header(
+                    "group\tkind\tmembership\trole-assignable\tmail\tdescription\tid",
+                    lines,
+                ),
+            )
+        }
+        ViewMode::GroupMembers | ViewMode::MemberOf => {
+            let (rows, noun) = if state.view == ViewMode::GroupMembers {
+                (state.member_rows()?, "member")
+            } else {
+                (state.member_of_rows()?, "group")
+            };
+            let lines = rows
+                .iter()
+                .map(|p| tsv(&[&p.display_name, &p.kind, &p.detail, &p.id]));
+            (
+                count(rows.len(), noun),
+                with_header("name\tkind\tsign-in, app id or mail\tid", lines),
+            )
+        }
         ViewMode::RoleAssignments => {
             let rows = state.role_assignment_rows();
             let lines = rows.iter().map(|r| {
