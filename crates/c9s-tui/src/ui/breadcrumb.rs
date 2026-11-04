@@ -89,7 +89,7 @@ impl Breadcrumb {
             ViewMode::ResourceList => "Resources",
             ViewMode::ResourceTypeSummary => "Resource Types",
             ViewMode::TagSummary => "Tags",
-            ViewMode::TenantList => "Tenants",
+            ViewMode::TenantList => "Contexts",
             ViewMode::PolicyAssignments => "Policy",
             ViewMode::PolicyNonCompliant => "Non-compliant",
             ViewMode::ComplianceRanking => "Compliance",

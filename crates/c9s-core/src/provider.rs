@@ -45,6 +45,10 @@ pub enum Feature {
     Rbac,
     /// Entra ID directory: `:group`, `:app`
     Directory,
+    /// The tree above accounts (`:mg`)
+    Tree,
+    /// A level between accounts and resources (`:rg`)
+    Containers,
 }
 
 impl Feature {
@@ -54,6 +58,8 @@ impl Feature {
             Feature::Policy => "Azure Policy",
             Feature::Rbac => "Azure role assignments",
             Feature::Directory => "Entra ID (groups and applications)",
+            Feature::Tree => "The management group tree",
+            Feature::Containers => "Resource groups",
         }
     }
 }
@@ -105,7 +111,11 @@ impl Provider {
     /// Whether c9s can show `feature` for this cloud.
     pub fn supports(self, feature: Feature) -> bool {
         match feature {
-            Feature::Policy | Feature::Rbac | Feature::Directory => self == Provider::Azure,
+            Feature::Policy
+            | Feature::Rbac
+            | Feature::Directory
+            | Feature::Tree
+            | Feature::Containers => self == Provider::Azure,
         }
     }
 

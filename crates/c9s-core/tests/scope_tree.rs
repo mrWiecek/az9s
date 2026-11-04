@@ -215,7 +215,7 @@ async fn switching_tenant_rebuilds_the_fetcher_and_keeps_a_tree_per_tenant() {
     let mut app = app(&url, cache);
     let asked: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
     let asked_in_factory = asked.clone();
-    let factory: FetcherFactory = Arc::new(move |tenant: Option<&str>| {
+    let factory: FetcherFactory = Arc::new(move |_provider, tenant: Option<&str>| {
         asked_in_factory
             .lock()
             .unwrap()
@@ -308,7 +308,7 @@ async fn config_tenant_starts_in_that_tenant() {
     let mut app = app(&url, Cache::new(Path::new(":memory:")).unwrap());
     let asked: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
     let asked_in_factory = asked.clone();
-    let factory: FetcherFactory = Arc::new(move |tenant: Option<&str>| {
+    let factory: FetcherFactory = Arc::new(move |_provider, tenant: Option<&str>| {
         asked_in_factory
             .lock()
             .unwrap()

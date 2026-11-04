@@ -170,8 +170,15 @@ pub struct AppState {
     /// login, with subscriptions of every tenant listed
     pub tenant: Option<String>,
 
-    /// The cloud of the current context (Azure until other clouds come)
+    /// The cloud of the current context
     pub provider: crate::provider::Provider,
+
+    /// The gcloud configuration of a Google Cloud context (`None`: gcloud's
+    /// active one)
+    pub gcp_configuration: Option<String>,
+
+    /// gcloud's configurations, offered by `:ctx`, once loaded
+    pub gcp_configurations: Vec<c9s_gcp::Configuration>,
 
     /// Help screen state
     pub help_open: bool,
@@ -373,10 +380,16 @@ pub struct ComplianceRow {
     pub compliance: crate::policy::Compliance,
 }
 
+/// A gcloud configuration (a Google Cloud context).
+pub use c9s_gcp::Configuration as GcpConfiguration;
+
 /// One row of the tenant view (`:ctx`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TenantRow {
-    /// `None`: all tenants (the CLI's default login)
+    /// The context's cloud
+    pub provider: crate::provider::Provider,
+    /// Azure: the tenant (`None`: all tenants, the CLI's default login).
+    /// Google Cloud: the gcloud configuration.
     pub id: Option<String>,
     pub name: String,
     pub domain: Option<String>,
@@ -750,6 +763,7 @@ impl AppState {
             .tenants
             .iter()
             .map(|t| TenantRow {
+                provider: crate::provider::Provider::Azure,
                 id: Some(t.id.clone()),
                 name: t.name.clone(),
                 domain: t.domain.clone(),
@@ -764,6 +778,7 @@ impl AppState {
             }) {
                 Some(row) => row.subscriptions += 1,
                 None if !sub.tenant_id.is_empty() => rows.push(TenantRow {
+                    provider: crate::provider::Provider::Azure,
                     id: Some(sub.tenant_id.clone()),
                     name: sub.tenant_id.clone(),
                     domain: None,
@@ -777,6 +792,7 @@ impl AppState {
         rows.insert(
             0,
             TenantRow {
+                provider: crate::provider::Provider::Azure,
                 id: None,
                 name: "All tenants".into(),
                 domain: Some("the Azure CLI's default login".into()),
@@ -784,11 +800,39 @@ impl AppState {
                 current: false,
             },
         );
+        // Google Cloud: gcloud's configurations.
+        rows.extend(self.gcp_configurations.iter().map(|c| {
+            TenantRow {
+                provider: crate::provider::Provider::Gcp,
+                id: Some(c.name.clone()),
+                name: c.name.clone(),
+                domain: Some(
+                    [c.account.as_str(), c.project.as_str()]
+                        .iter()
+                        .filter(|s| !s.is_empty())
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                )
+                .filter(|d| !d.is_empty()),
+                subscriptions: 0,
+                current: false,
+            }
+        }));
         for row in &mut rows {
-            row.current = match (&row.id, &self.tenant) {
-                (None, None) => true,
-                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
-                _ => false,
+            row.current = match row.provider {
+                crate::provider::Provider::Azure => {
+                    self.provider == crate::provider::Provider::Azure
+                        && match (&row.id, &self.tenant) {
+                            (None, None) => true,
+                            (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                            _ => false,
+                        }
+                }
+                _ => {
+                    self.provider == row.provider
+                        && row.id.as_deref() == self.gcp_configuration.as_deref()
+                }
             };
         }
         if self.filter.is_empty() {

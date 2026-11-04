@@ -1,0 +1,19 @@
+[package]
+name = "c9s-gcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots"] }
+
+[dev-dependencies]
+c9s-azure = { path = "../c9s-azure", features = ["test-util"] }
+tempfile = "3.8"
+tokio = { workspace = true, features = ["test-util"] }

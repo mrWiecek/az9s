@@ -1633,18 +1633,25 @@ fn draw_tenant_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         .iter()
         .map(|r| {
             let marker = if r.current { "● " } else { "  " };
+            let accounts = match r.provider {
+                c9s_core::provider::Provider::Azure => {
+                    format!("{} subscriptions", r.subscriptions)
+                }
+                _ => "gcloud config".to_string(),
+            };
             list_item_spans(vec![
                 Span::styled(marker, Style::default().fg(theme().ok)),
+                Span::styled(
+                    cell(r.provider.as_str(), 7),
+                    Style::default().fg(theme().special),
+                ),
                 Span::styled(
                     cell(&r.name, name_col),
                     Style::default()
                         .fg(theme().text)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(
-                    cell(&format!("{} subscriptions", r.subscriptions), 18),
-                    Style::default().fg(theme().highlight),
-                ),
+                Span::styled(cell(&accounts, 18), Style::default().fg(theme().highlight)),
                 Span::styled(
                     cell(r.domain.as_deref().unwrap_or(""), 32),
                     Style::default().fg(theme().accent),
@@ -1662,10 +1669,10 @@ fn draw_tenant_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         ""
     };
     let title = if state.filter_mode {
-        format!("Tenants ({}) - Filter: {}_", rows.len(), state.filter)
+        format!("Contexts ({}) - Filter: {}_", rows.len(), state.filter)
     } else {
         format!(
-            "Tenants ({}){names_note} - Enter switches · ● current",
+            "Contexts ({}){names_note}: Azure tenants and gcloud configurations · Enter switches · ● current",
             rows.len().saturating_sub(1)
         )
     };

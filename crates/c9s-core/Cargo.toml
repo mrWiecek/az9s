@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 directories = { workspace = true }
 c9s-azure = { path = "../c9s-azure" }
+c9s-gcp = { path = "../c9s-gcp" }
 
 tokio = { workspace = true }
 futures = { workspace = true }
@@ -23,6 +24,7 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+c9s-gcp = { path = "../c9s-gcp" }
 c9s-azure = { path = "../c9s-azure", features = ["test-util"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

@@ -98,6 +98,8 @@ impl CommandKind {
             | CommandKind::RoleDefinitions
             | CommandKind::Access(_) => Some(Feature::Rbac),
             CommandKind::Groups(_) | CommandKind::Apps(_) => Some(Feature::Directory),
+            CommandKind::ManagementGroups => Some(Feature::Tree),
+            CommandKind::ResourceGroups { .. } => Some(Feature::Containers),
             _ => None,
         }
     }

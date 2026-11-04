@@ -297,7 +297,11 @@ How the clouds line up:
       status bar and breadcrumb start with it (`azure · Contoso`,
       `gcp · acme.com`); a cache migration adding the provider. No visible
       change for Azure; the existing tests guard it.
-- [ ] **GCP browsing** (~3–4 days). Cloud Asset Inventory is close to Resource
+- [x] **GCP browsing** (~3–4 days; v1.2.0, preview). `:ctx` lists gcloud
+      configurations beside Azure tenants; projects → resources (Cloud Asset
+      `searchAllResources`, location as the container) → document. Still to
+      come for GCP: folders as the tree, console links.
+      Originally: Cloud Asset Inventory is close to Resource
       Graph (one paged search per organization, folder or project, with
       labels and locations); Resource Manager for the hierarchy.
 - [ ] **AWS browsing** (~4–6 days; most unknowns). No inventory that is always
