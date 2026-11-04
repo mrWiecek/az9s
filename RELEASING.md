@@ -28,7 +28,7 @@ version with no tag and does the rest:
 - builds binaries for Linux x86_64, macOS (Apple Silicon and Intel) and Windows
   x86_64
 - tags the merged commit `vX.Y.Z`
-- publishes a [GitHub Release](https://github.com/mrWiecek/az9s/releases) with the
+- publishes a [GitHub Release](https://github.com/mrWiecek/c9s/releases) with the
   binaries, `SHA256SUMS`, and that version's CHANGELOG section as release notes
 
 CI fails a PR that changes code under `crates/` or `Cargo.*` without bumping an
@@ -42,7 +42,7 @@ For any version you can answer *what shipped, when, from which code*:
 |---|---|
 | What changed in `vX.Y.Z`? | `CHANGELOG.md` section, also on the GitHub Release page |
 | Which code is it? | Tag `vX.Y.Z` → commit → the PR that merged it |
-| What changed between two versions? | `https://github.com/mrWiecek/az9s/compare/vA...vB`, also linked at the bottom of `CHANGELOG.md` |
+| What changed between two versions? | `https://github.com/mrWiecek/c9s/compare/vA...vB`, also linked at the bottom of `CHANGELOG.md` |
 | Which build is a user running? | `c9s --version` prints the version and commit, e.g. `c9s 0.1.1 (3f2c1a9b0d4e)` |
 | Is a downloaded binary genuine? | Compare its hash with `SHA256SUMS` on the release |
 
@@ -54,10 +54,10 @@ so the history stays complete.
 ### Users: go back to an earlier version
 
 Download the archive for your platform from that version's
-[release page](https://github.com/mrWiecek/az9s/releases), or build it from its tag:
+[release page](https://github.com/mrWiecek/c9s/releases), or build it from its tag:
 
 ```bash
-cargo install --git https://github.com/mrWiecek/az9s --tag v0.1.0 --locked c9s
+cargo install --git https://github.com/mrWiecek/c9s --tag v0.1.0 --locked c9s
 ```
 
 Check with `c9s --version`. The local cache is only a cache: if an older
