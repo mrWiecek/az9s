@@ -550,3 +550,68 @@ async fn role_assignments_fall_back_to_the_subscriptions_without_tenant_root_acc
         .iter()
         .any(|b| b["subscriptions"] == json!(["sub-1"])));
 }
+
+#[tokio::test]
+async fn built_in_role_names_come_from_arm_when_resource_graph_lists_none() {
+    use serde_json::json;
+    let reader = "/providers/Microsoft.Authorization/roleDefinitions/acdd72a7";
+    let (url, _) = serve_paths(move |path, body| {
+        let query = body["query"].as_str().unwrap_or_default();
+        if path.contains("/providers/Microsoft.Authorization/roleDefinitions?") {
+            // ARM: every role usable at the tenant root, built-in ones too.
+            ok(json!({"value": [{"id": reader, "name": "acdd72a7",
+                "properties": {"roleName": "Reader", "type": "BuiltInRole"}}]}))
+        } else if path.contains("/roleDefinitions/acdd72a7?") {
+            ok(json!({"id": reader, "name": "acdd72a7", "type": "Microsoft.Authorization/roleDefinitions",
+                "properties": {"roleName": "Reader", "type": "BuiltInRole"}}))
+        } else if query.contains("roledefinitions") {
+            // Resource Graph: only the custom role.
+            ok(json!({"totalRecords": 1, "count": 1, "data": [{
+                "id": "/subscriptions/sub-1/providers/Microsoft.Authorization/roleDefinitions/c1",
+                "roleName": "App Deployer", "roleType": "CustomRole"}]}))
+        } else if query.contains("roleassignments") {
+            ok(json!({"totalRecords": 0, "count": 0, "data": []}))
+        } else if query.contains("authorizationresources | where id") {
+            // The definition by ID: not in Resource Graph.
+            ok(json!({"totalRecords": 0, "count": 0, "data": []}))
+        } else {
+            error(400, "unexpected")
+        }
+    })
+    .await;
+    let mut app = app(&url, Cache::new(Path::new(":memory:")).unwrap());
+    let mut rx = app.take_load_receiver().unwrap();
+    app.open_role_definitions();
+    while app.state().loading {
+        app.apply(rx.recv().await.unwrap());
+    }
+    let mut names: Vec<String> = app
+        .state()
+        .role_definitions
+        .iter()
+        .map(|d| format!("{} ({})", d.role_name, d.kind_label()))
+        .collect();
+    names.sort();
+    assert_eq!(names, ["App Deployer (custom)", "Reader (built-in)"]);
+
+    // Opening a role named at a subscription: found through ARM.
+    app.open_resource_detail(az9s_core::models::Resource {
+        id: "/subscriptions/sub-1/providers/Microsoft.Authorization/roleDefinitions/acdd72a7"
+            .into(),
+        name: "acdd72a7".into(),
+        resource_type: "Microsoft.Authorization/roleDefinitions".into(),
+        location: String::new(),
+        resource_group: String::new(),
+        subscription_id: String::new(),
+        tags: Default::default(),
+    });
+    while app.state().loading {
+        app.apply(rx.recv().await.unwrap());
+    }
+    let doc = app
+        .state()
+        .resource_document
+        .clone()
+        .expect("the definition from ARM");
+    assert_eq!(doc["properties"]["roleName"], "Reader");
+}

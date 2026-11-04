@@ -118,10 +118,17 @@ pub fn app_rows(
         })
         .filter(|r| microsoft || r.kind != AppKind::Microsoft)
         .collect();
+    // Fully ordered: apps of the same name (e.g. managed identities) keep
+    // their places instead of trading them on every redraw.
     rows.sort_by(|a, b| {
         a.kind
             .cmp(&b.kind)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.app_id.cmp(&b.app_id))
+            .then_with(|| {
+                let id = |r: &AppRow| r.sp.as_ref().map(|s| s.id.clone()).unwrap_or_default();
+                id(a).cmp(&id(b))
+            })
     });
     if filter.is_empty() {
         return rows;
@@ -365,6 +372,28 @@ mod tests {
         assert_eq!((expiry, cred.name.as_str()), (Expiry::Expired(2), "old"));
         assert_eq!(app_rows(&apps, &sps, true, "", now).len(), 4);
         assert_eq!(app_rows(&apps, &sps, false, "managed", now).len(), 1);
+    }
+
+    #[test]
+    fn apps_of_the_same_name_keep_their_order() {
+        let mi = |id: &str, app_id: &str| ServicePrincipal {
+            id: id.into(),
+            app_id: app_id.into(),
+            display_name: "vm-identity".into(),
+            sp_type: "ManagedIdentity".into(),
+            ..Default::default()
+        };
+        let a = vec![mi("s1", "b"), mi("s2", "a"), mi("s3", "c")];
+        let mut b = a.clone();
+        b.reverse();
+        let ids = |sps: &[ServicePrincipal]| -> Vec<String> {
+            app_rows(&[], sps, false, "", 0)
+                .into_iter()
+                .map(|r| r.app_id)
+                .collect()
+        };
+        assert_eq!(ids(&a), ["a", "b", "c"], "then by app ID");
+        assert_eq!(ids(&a), ids(&b), "whatever order Graph returned them in");
     }
 
     #[test]

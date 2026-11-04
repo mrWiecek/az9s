@@ -934,8 +934,40 @@ fn draw_role_assignments(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<
         return Ok(());
     }
 
-    let (type_w, principal_w, scope_w) = (18, 38, 34);
-    let name_col = name_width(area.width, 2 + type_w + principal_w + scope_w + 12, 40);
+    // Columns as wide as their values (within limits); the scope comes last
+    // and gets the rest of the line, so it is shown whole.
+    let principal_text = |r: &az9s_core::state::RoleAssignmentRow| {
+        if r.principal_detail.is_empty() {
+            r.principal_name.clone()
+        } else {
+            format!("{} ({})", r.principal_name, r.principal_detail)
+        }
+    };
+    let widest = |values: &mut dyn Iterator<Item = usize>, min: usize, max: usize| {
+        values.max().unwrap_or(0).clamp(min, max) + 2
+    };
+    let name_col = widest(
+        &mut rows.iter().map(|r| r.role_name.chars().count()),
+        10,
+        40,
+    );
+    let type_w = widest(
+        &mut rows
+            .iter()
+            .map(|r| r.assignment.principal_type.chars().count()),
+        4,
+        16,
+    );
+    let principal_w = widest(
+        &mut rows.iter().map(|r| principal_text(r).chars().count()),
+        10,
+        56,
+    );
+    let origin_w = widest(
+        &mut rows.iter().map(|r| r.origin_label.chars().count()),
+        0,
+        30,
+    );
     let viewport = area.height.saturating_sub(2) as usize;
     let mut list_state = state.list_state.clone();
     let visible = list_state.visible_range(rows.len(), viewport);
@@ -959,18 +991,11 @@ fn draw_role_assignments(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<
                     Style::default().fg(t.accent),
                 ),
                 Span::styled(
-                    cell(
-                        &if r.principal_detail.is_empty() {
-                            r.principal_name.clone()
-                        } else {
-                            format!("{} ({})", r.principal_name, r.principal_detail)
-                        },
-                        principal_w,
-                    ),
+                    cell(&principal_text(r), principal_w),
                     Style::default().fg(t.text),
                 ),
-                Span::styled(cell(&r.scope_label, scope_w), Style::default().fg(t.muted)),
-                Span::styled(r.origin_label.clone(), origin_style),
+                Span::styled(cell(&r.origin_label, origin_w), origin_style),
+                Span::styled(r.scope_label.clone(), Style::default().fg(t.muted)),
             ])
         })
         .collect();
@@ -1003,7 +1028,7 @@ fn draw_role_assignments(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<
     let title = if state.filter_mode {
         format!("{heading} ({}) - Filter: {}_", rows.len(), state.filter)
     } else {
-        format!("{heading} ({summary}) · C custom, B built-in · Enter role, d details, p principal")
+        format!("{heading} ({summary}) · p: all this principal's access · Enter role · d details")
     };
     let list = SelectableList::new(items)
         .block(Block::default().borders(Borders::ALL).title(title))
@@ -2410,10 +2435,10 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("q", "Quit"),
             ],
             ViewMode::RoleAssignments => vec![
-                ("↑↓/jk", "Navigate"),
+                ("p", "Principal's access"),
                 ("Enter", "Role"),
                 ("d", "Details"),
-                ("p", "Principal's access"),
+                ("↑↓/jk", "Navigate"),
                 ("/", "Filter"),
                 ("c", "Copy"),
                 ("y", "Copy ID"),

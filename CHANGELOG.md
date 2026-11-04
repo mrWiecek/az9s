@@ -12,6 +12,21 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-11-04
+
+### Fixed
+- **Role assignments showed role IDs instead of names** when Resource Graph
+  didn't list the built-in roles. Their names now come from ARM (every
+  role usable at the tenant root, or at a subscription without root
+  access), and `Enter` on such a role opens its definition through ARM.
+- **Role assignment columns cut off the scope.** Columns are now as wide
+  as their contents, and the scope comes last with the rest of the line,
+  so it shows whole.
+- **`p` was hard to find.** It shows everything the row's user, group or
+  app can do across the tenant; it now leads the title and the key bar.
+- **`:app` reshuffled apps of the same name** (e.g. managed identities)
+  on every redraw. They are now ordered by name, then app ID.
+
 ## [0.22.0] - 2026-11-04
 
 ### Added
@@ -627,7 +642,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.22.1...HEAD
+[0.22.1]: https://github.com/mrWiecek/az9s/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/mrWiecek/az9s/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/mrWiecek/az9s/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/mrWiecek/az9s/compare/v0.19.0...v0.20.0

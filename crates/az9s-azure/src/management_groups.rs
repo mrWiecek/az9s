@@ -27,6 +27,7 @@ pub struct TenantInfo {
 
 const TENANTS_API_VERSION: &str = "2022-12-01";
 const POLICY_API_VERSION: &str = "2023-04-01";
+const ROLE_API_VERSION: &str = "2022-04-01";
 
 /// What a node in the hierarchy is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +150,62 @@ impl ManagementGroupClient {
             )));
         }
         let url = format!("{}{}?api-version={}", self.endpoint, id, POLICY_API_VERSION);
+        self.get(&url).await
+    }
+
+    /// Every role definition (built-in and custom) usable at `scope` (an
+    /// ARM ID: a management group or subscription), from ARM, as rows like
+    /// `resource_graph::role_definitions_query` returns. Resource Graph may
+    /// leave out the built-in roles.
+    pub async fn role_definitions(&self, scope: &str) -> Result<Vec<Value>> {
+        let _t = timing::timer("azure.role_definitions_arm");
+        let mut url = format!(
+            "{}{}/providers/Microsoft.Authorization/roleDefinitions?api-version={}",
+            self.endpoint,
+            scope.trim_end_matches('/'),
+            ROLE_API_VERSION
+        );
+        let mut rows = Vec::new();
+        loop {
+            let page = self.get(&url).await?;
+            for item in page
+                .get("value")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let p = item.get("properties");
+                let get = |key: &str| p.and_then(|p| p.get(key)).cloned().unwrap_or_default();
+                rows.push(serde_json::json!({
+                    "id": item.get("id").cloned().unwrap_or_default(),
+                    "name": item.get("name").cloned().unwrap_or_default(),
+                    "roleName": get("roleName"),
+                    "roleType": get("type"),
+                    "description": get("description"),
+                    "assignableScopes": get("assignableScopes"),
+                    "permissions": get("permissions"),
+                }));
+            }
+            match page.get("nextLink").and_then(Value::as_str) {
+                Some(next) if !next.is_empty() => url = next.to_string(),
+                _ => return Ok(rows),
+            }
+        }
+    }
+
+    /// One role definition by any of its IDs (it can be written at any
+    /// scope: `/subscriptions/…/providers/Microsoft.Authorization/roleDefinitions/<guid>`).
+    pub async fn role_definition(&self, id: &str) -> Result<Value> {
+        let _t = timing::timer("azure.role_definition");
+        if !id
+            .to_ascii_lowercase()
+            .contains("/providers/microsoft.authorization/roledefinitions/")
+        {
+            return Err(AzureError::InvalidConfig(format!(
+                "not a role definition ID: {id}"
+            )));
+        }
+        let url = format!("{}{}?api-version={}", self.endpoint, id, ROLE_API_VERSION);
         self.get(&url).await
     }
 
@@ -297,6 +354,42 @@ mod tests {
             client.policy_object("/subscriptions/s").await.is_err(),
             "only policy definitions and initiatives"
         );
+    }
+
+    #[tokio::test]
+    async fn role_definitions_come_from_arm_in_resource_graph_shape() {
+        let (endpoint, _) = serve_paths(|path, _| {
+            assert!(
+                path.starts_with("/providers/Microsoft.Management/managementGroups/t/providers/Microsoft.Authorization/roleDefinitions?api-version=2022-04-01")
+                    || path.starts_with("/subscriptions/s/providers/Microsoft.Authorization/roleDefinitions/abc?"),
+                "{path}"
+            );
+            if path.contains("/roleDefinitions/abc") {
+                return ok(json!({"id": "x", "properties": {"roleName": "Reader"}}));
+            }
+            ok(json!({"value": [{
+                "id": "/providers/Microsoft.Authorization/roleDefinitions/abc", "name": "abc",
+                "properties": {"roleName": "Reader", "type": "BuiltInRole",
+                    "assignableScopes": ["/"], "permissions": [{"actions": ["*/read"]}]}
+            }]}))
+        })
+        .await;
+        let client = client(&endpoint);
+        let rows = client
+            .role_definitions("/providers/Microsoft.Management/managementGroups/t")
+            .await
+            .unwrap();
+        assert_eq!(rows[0]["roleName"], "Reader");
+        assert_eq!(rows[0]["roleType"], "BuiltInRole");
+        assert_eq!(rows[0]["permissions"][0]["actions"][0], "*/read");
+        let one = client
+            .role_definition(
+                "/subscriptions/s/providers/Microsoft.Authorization/roleDefinitions/abc",
+            )
+            .await
+            .unwrap();
+        assert_eq!(one["properties"]["roleName"], "Reader");
+        assert!(client.role_definition("/subscriptions/s").await.is_err());
     }
 
     #[tokio::test]
