@@ -22,7 +22,18 @@ async fn projects_resources_and_detail() {
     let (endpoint, _) = serve_paths(|path, _| {
         if path.starts_with("/v3/projects:search") {
             return ok(json!({"projects": [
-                {"projectId": "billing-prod", "displayName": "Billing", "state": "ACTIVE"}
+                {"projectId": "billing-prod", "displayName": "Billing", "state": "ACTIVE",
+                 "parent": "folders/2"}
+            ]}));
+        }
+        // The login may not see the organization; folders still come.
+        if path.starts_with("/v3/organizations:search") {
+            return error(403, "denied");
+        }
+        if path.starts_with("/v3/folders:search") {
+            return ok(json!({"folders": [
+                {"name": "folders/2", "displayName": "Finance", "parent": "organizations/1",
+                 "state": "ACTIVE"}
             ]}));
         }
         if path.starts_with("/v1/projects/billing-prod:searchAllResources") {
@@ -95,6 +106,13 @@ async fn projects_resources_and_detail() {
     settle(&mut app, &mut rx).await;
     let doc = app.state().resource_document.clone().expect("a document");
     assert_eq!(doc["state"], "RUNNING");
+
+    // Folders are the tree; without the organization, a root holds them.
+    app.request(LoadRequest::ScopeTree);
+    settle(&mut app, &mut rx).await;
+    let tree = app.state().scope_tree.clone().expect("a tree");
+    assert_eq!(tree.root_display_name, "No organization");
+    assert_eq!(tree.subscriptions_under("folders/2", &[]), ["billing-prod"]);
 
     // The subscriptions cache is Azure's: projects are not written to it.
     let cached = app.cache().repository().cached_subscriptions().unwrap();

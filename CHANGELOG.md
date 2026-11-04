@@ -12,6 +12,28 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-04
+
+### Added
+- **Google Cloud folders as the tree.** Under Google Cloud, `:mg` shows the
+  organization, its folders and their projects (Cloud Resource Manager).
+  `Enter` on a folder lists the resources of every project below it; on a
+  project, its resources. Without access to the organization (or with
+  several), a root above them holds what the login can see, and folders or
+  projects whose parent is hidden sit directly under it.
+- **Console links for Google Cloud.** `o` opens the Google Cloud console:
+  a project's dashboard, a folder or organization in Resource Manager, and
+  common resources on their own page (VM instances, buckets, GKE clusters,
+  Cloud SQL, Cloud Run, Cloud Functions, Pub/Sub topics, BigQuery datasets).
+  Other resources open the project's Asset Inventory searching for their
+  name. `y` on a project or folder copies its resource name
+  (`projects/…`, `folders/…`).
+
+### Changed
+- The tree view speaks the context's words: "Folders", "N projects",
+  "Enter opens resources" under Google Cloud.
+- Without a browser, `o` copies the link for any cloud ("link copied").
+
 ## [1.2.0] - 2026-11-04
 
 ### Added
@@ -695,7 +717,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/mrWiecek/c9s/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/mrWiecek/c9s/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/mrWiecek/c9s/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/mrWiecek/c9s/compare/v1.0.0...v1.0.1

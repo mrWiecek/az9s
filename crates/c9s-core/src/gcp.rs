@@ -4,6 +4,7 @@
 
 use crate::loader::{ChunkSink, FetchOutcome, Fetcher, LoadRequest, LoadedData};
 use crate::models::{Resource, Subscription};
+use crate::scope_tree::{GroupNode, ScopeTree, SubscriptionNode};
 use c9s_gcp::{GcpClient, Tokens};
 use futures::future::BoxFuture;
 use futures::{stream, FutureExt, StreamExt};
@@ -54,6 +55,72 @@ fn resource(project: &str, a: c9s_gcp::Asset) -> Resource {
         location: a.location,
         subscription_id: project.to_string(),
         tags: a.labels.into_iter().collect(),
+    }
+}
+
+/// Root of the tree when the login sees no organization, or several.
+pub const ALL_ORGANIZATIONS: &str = "~gcp";
+
+/// The tree above projects: one organization is the root; with none or
+/// several, a root above them holds each organization and the projects
+/// outside any.
+fn tree(
+    organizations: Vec<c9s_gcp::Node>,
+    folders: Vec<c9s_gcp::Node>,
+    projects: &[c9s_gcp::Project],
+) -> ScopeTree {
+    let (root, root_display_name, groups_from_orgs) = match organizations.as_slice() {
+        [only] => (only.name.clone(), only.display_name.clone(), vec![]),
+        _ => (
+            ALL_ORGANIZATIONS.to_string(),
+            if organizations.is_empty() {
+                "No organization".to_string()
+            } else {
+                "All organizations".to_string()
+            },
+            organizations,
+        ),
+    };
+    let mut known: std::collections::HashSet<String> = folders
+        .iter()
+        .chain(&groups_from_orgs)
+        .map(|n| n.name.clone())
+        .collect();
+    known.insert(root.clone());
+    // A parent the login can't see hangs off the root, so nothing is lost.
+    let parent_of = |parent: &str| {
+        if known.contains(parent) {
+            parent.to_string()
+        } else {
+            root.clone()
+        }
+    };
+    let groups = groups_from_orgs
+        .iter()
+        .map(|o| GroupNode {
+            name: o.name.clone(),
+            display_name: o.display_name.clone(),
+            parent: root.clone(),
+        })
+        .chain(folders.iter().map(|f| GroupNode {
+            name: f.name.clone(),
+            display_name: f.display_name.clone(),
+            parent: parent_of(&f.parent),
+        }))
+        .collect();
+    let subscriptions = projects
+        .iter()
+        .map(|p| SubscriptionNode {
+            id: p.id.to_ascii_lowercase(),
+            display_name: p.name.clone(),
+            parent: parent_of(&p.parent),
+        })
+        .collect();
+    ScopeTree {
+        root,
+        root_display_name,
+        groups,
+        subscriptions,
     }
 }
 
@@ -147,6 +214,27 @@ impl Fetcher for GcpFetcher {
                     };
                     outcome(data)
                 }
+                LoadRequest::ScopeTree => {
+                    // Organizations and folders may be hidden from the
+                    // login (no permission): projects then hang off the root.
+                    let (orgs, folders, projects) =
+                        futures::join!(client.organizations(), client.folders(), client.projects());
+                    let data = match projects {
+                        Ok(projects) => Ok(LoadedData::ScopeTree(tree(
+                            orgs.unwrap_or_else(|e| {
+                                tracing::warn!("GCP organizations: {e}");
+                                vec![]
+                            }),
+                            folders.unwrap_or_else(|e| {
+                                tracing::warn!("GCP folders: {e}");
+                                vec![]
+                            }),
+                            &projects,
+                        ))),
+                        Err(e) => Err(e.to_string()),
+                    };
+                    outcome(data)
+                }
                 LoadRequest::CloudContexts => outcome(
                     c9s_gcp::configurations("gcloud")
                         .await
@@ -197,5 +285,84 @@ mod tests {
         );
         assert_eq!(r.subscription_id, "billing-prod");
         assert_eq!(r.tags.get("env").map(String::as_str), Some("prod"));
+    }
+
+    fn node(name: &str, display: &str, parent: &str) -> c9s_gcp::Node {
+        c9s_gcp::Node {
+            name: name.into(),
+            display_name: display.into(),
+            parent: parent.into(),
+        }
+    }
+
+    fn project(id: &str, parent: &str) -> c9s_gcp::Project {
+        c9s_gcp::Project {
+            id: id.into(),
+            name: id.into(),
+            state: "ACTIVE".into(),
+            parent: parent.into(),
+        }
+    }
+
+    #[test]
+    fn one_organization_is_the_root_of_folders_and_projects() {
+        let t = tree(
+            vec![node("organizations/1", "acme.com", "")],
+            vec![
+                node("folders/2", "Prod", "organizations/1"),
+                node("folders/3", "Payments", "folders/2"),
+                node("folders/9", "Hidden child", "folders/8"),
+            ],
+            &[
+                project("pay-prod", "folders/3"),
+                project("sandbox", "organizations/1"),
+                project("orphan", "folders/404"),
+            ],
+        );
+        assert_eq!(
+            (t.root.as_str(), t.root_display_name.as_str()),
+            ("organizations/1", "acme.com")
+        );
+        let parent = |name: &str| {
+            t.groups
+                .iter()
+                .find(|g| g.name == name)
+                .map(|g| g.parent.clone())
+                .or_else(|| {
+                    t.subscriptions
+                        .iter()
+                        .find(|s| s.id == name)
+                        .map(|s| s.parent.clone())
+                })
+                .unwrap()
+        };
+        assert_eq!(parent("folders/3"), "folders/2");
+        assert_eq!(parent("pay-prod"), "folders/3");
+        assert_eq!(
+            parent("folders/9"),
+            "organizations/1",
+            "unseen parent: the root"
+        );
+        assert_eq!(parent("orphan"), "organizations/1");
+        assert_eq!(t.subscriptions_under("folders/2", &[]), ["pay-prod"]);
+    }
+
+    #[test]
+    fn without_one_organization_a_root_holds_them_all() {
+        let none = tree(vec![], vec![], &[project("lab", "")]);
+        assert_eq!(none.root, ALL_ORGANIZATIONS);
+        assert_eq!(none.root_display_name, "No organization");
+        assert_eq!(none.subscriptions[0].parent, ALL_ORGANIZATIONS);
+        let two = tree(
+            vec![
+                node("organizations/1", "a.com", ""),
+                node("organizations/2", "b.com", ""),
+            ],
+            vec![],
+            &[project("b-prod", "organizations/2")],
+        );
+        assert_eq!(two.root_display_name, "All organizations");
+        assert_eq!(two.groups.len(), 2);
+        assert_eq!(two.subscriptions_under("organizations/2", &[]), ["b-prod"]);
     }
 }

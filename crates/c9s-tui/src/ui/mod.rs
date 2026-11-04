@@ -10,6 +10,7 @@ use crate::TuiApp;
 use anyhow::Result;
 use breadcrumb::Breadcrumb;
 use c9s_core::detail;
+use c9s_core::provider::{Feature, Provider};
 use c9s_core::scope_tree::TreeRowKind;
 use c9s_core::state::{AppState, DetailTab, ViewMode};
 use help::render_help;
@@ -136,6 +137,19 @@ fn scope_info(state: &AppState) -> String {
     info
 }
 
+/// What Enter on a tree row opens: the containers, or (GCP) resources.
+fn opens_onto(provider: Provider) -> String {
+    opens_onto_title(provider).to_lowercase()
+}
+
+fn opens_onto_title(provider: Provider) -> &'static str {
+    if provider.supports(Feature::Containers) {
+        provider.terms().containers
+    } else {
+        "Resources"
+    }
+}
+
 /// Draw the management group tree
 fn draw_tree(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     let rows = app.state().tree_rows();
@@ -143,13 +157,16 @@ fn draw_tree(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     if rows.is_empty() {
         let state = app.state();
         let message = if state.loading && state.scope_tree.is_none() {
-            "Loading the management group tree...".to_string()
+            format!("Loading {}...", state.provider.terms().tree.to_lowercase())
         } else if !state.filter.is_empty() {
             "Nothing in the tree matches the current filter.\n\nPress Esc to clear the filter."
                 .to_string()
         } else {
-            "No management groups loaded.\n\nPress 'r' to retry or ':sub' for subscriptions."
-                .to_string()
+            format!(
+                "No {} loaded.\n\nPress 'r' to retry or ':sub' for {}.",
+                state.provider.terms().tree.to_lowercase(),
+                state.provider.terms().accounts.to_lowercase()
+            )
         };
         let content = Paragraph::new(message)
             .block(
@@ -166,6 +183,7 @@ fn draw_tree(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     let viewport = area.height.saturating_sub(2) as usize;
     let mut list_state = app.state().list_state.clone();
     let visible = list_state.visible_range(rows.len(), viewport);
+    let accounts = app.state().provider.terms().accounts.to_lowercase();
     let items: Vec<_> = rows[visible.clone()]
         .iter()
         .map(|row| {
@@ -187,7 +205,7 @@ fn draw_tree(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
             let width = 60usize.saturating_sub(indent.chars().count() + 4).max(10);
             let label = truncate_with_ellipsis(&row.label, width);
             let detail = if row.is_group() {
-                format!("{} subscriptions", row.subscription_count)
+                format!("{} {accounts}", row.subscription_count)
             } else {
                 match row.state.as_deref() {
                     Some(s) if !s.eq_ignore_ascii_case("Enabled") => format!("{s}  {}", row.key),
@@ -239,7 +257,7 @@ fn draw_tree(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         format!(
             "{} ({total}) - Enter opens {}, Space expands",
             app.state().provider.terms().tree,
-            app.state().provider.terms().containers.to_lowercase()
+            opens_onto(app.state().provider)
         )
     };
 
@@ -2391,7 +2409,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("↑↓/jk", "Navigate"),
                 ("Space", "Expand"),
                 ("←→/hl", "Close/Open"),
-                ("Enter", app.state().provider.terms().containers),
+                ("Enter", opens_onto_title(app.state().provider)),
                 ("/", "Filter"),
                 (":", "Command"),
                 ("^P", "Go to"),

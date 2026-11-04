@@ -49,6 +49,16 @@ pub struct Project {
     pub parent: String,
 }
 
+/// A folder or organization: the tree above projects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Node {
+    /// e.g. "folders/456" or "organizations/123"
+    pub name: String,
+    pub display_name: String,
+    /// The parent folder or organization; empty for an organization.
+    pub parent: String,
+}
+
 /// A resource from Cloud Asset Inventory.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Asset {
@@ -240,6 +250,26 @@ impl GcpClient {
         }
     }
 
+    /// Organizations the login can see (`organizations/123`, display name
+    /// usually the domain).
+    pub async fn organizations(&self) -> Result<Vec<Node>> {
+        let url = format!(
+            "{}/v3/organizations:search?pageSize={PAGE_SIZE}",
+            self.resource_manager
+        );
+        Ok(nodes(self.get_all(&url, "organizations").await?))
+    }
+
+    /// Active folders the login can see, with their parent folder or
+    /// organization.
+    pub async fn folders(&self) -> Result<Vec<Node>> {
+        let url = format!(
+            "{}/v3/folders:search?pageSize={PAGE_SIZE}",
+            self.resource_manager
+        );
+        Ok(nodes(self.get_all(&url, "folders").await?))
+    }
+
     /// Every project the login can see.
     pub async fn projects(&self) -> Result<Vec<Project>> {
         let url = format!(
@@ -321,6 +351,35 @@ impl GcpClient {
 }
 
 /// Percent-encode a query string value.
+/// Folders or organizations from Resource Manager, skipping deleted ones.
+fn nodes(items: Vec<Value>) -> Vec<Node> {
+    let text = |v: &Value, k: &str| {
+        v.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    items
+        .iter()
+        .filter(|n| {
+            matches!(
+                n.get("state").and_then(Value::as_str),
+                None | Some("ACTIVE")
+            )
+        })
+        .filter_map(|n| {
+            let name = text(n, "name");
+            (!name.is_empty()).then(|| Node {
+                display_name: Some(text(n, "displayName"))
+                    .filter(|d| !d.is_empty())
+                    .unwrap_or_else(|| name.clone()),
+                parent: text(n, "parent"),
+                name,
+            })
+        })
+        .collect()
+}
+
 fn encode(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
@@ -442,6 +501,56 @@ esac"#,
         assert_eq!(project_of(&assets[0].name), Some("billing-prod"));
         let err = client.assets("other", None).await.unwrap_err();
         assert!(err.0.contains("404"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn organizations_and_active_folders_are_listed() {
+        let (endpoint, _) = serve_paths(|path, _| {
+            if path.starts_with("/v3/organizations:search") {
+                return ok(json!({"organizations": [
+                    {"name": "organizations/1", "displayName": "acme.com", "state": "ACTIVE"}
+                ]}));
+            }
+            if path.starts_with("/v3/folders:search") {
+                if path.contains("pageToken=f2") {
+                    return ok(json!({"folders": [
+                        {"name": "folders/3", "displayName": "Old", "parent": "folders/2",
+                         "state": "DELETE_REQUESTED"}
+                    ]}));
+                }
+                return ok(json!({"folders": [
+                    {"name": "folders/2", "displayName": "Prod", "parent": "organizations/1",
+                     "state": "ACTIVE"},
+                    {"name": "folders/4", "parent": "folders/2"}
+                ], "nextPageToken": "f2"}));
+            }
+            error(404, "unexpected")
+        })
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let client = client(&endpoint, dir.path());
+        let orgs = client.organizations().await.unwrap();
+        assert_eq!(
+            orgs,
+            [Node {
+                name: "organizations/1".into(),
+                display_name: "acme.com".into(),
+                parent: String::new()
+            }]
+        );
+        let folders = client.folders().await.unwrap();
+        assert_eq!(
+            folders
+                .iter()
+                .map(|f| (f.name.as_str(), f.display_name.as_str(), f.parent.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("folders/2", "Prod", "organizations/1"),
+                ("folders/4", "folders/4", "folders/2")
+            ],
+            "deleted folders are left out; a missing display name falls back to the name"
+        );
     }
 
     #[test]

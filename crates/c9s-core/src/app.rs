@@ -594,6 +594,10 @@ impl App {
 
     /// Cache key of the management group tree for the current tenant.
     fn scope_tree_key(&self) -> String {
+        if self.state.provider == Provider::Gcp {
+            let configuration = self.state.gcp_configuration.as_deref().unwrap_or("active");
+            return format!("{SCOPE_TREE_KEY}:gcp:{configuration}");
+        }
         match &self.state.tenant {
             Some(tenant) => format!("{SCOPE_TREE_KEY}:{}", tenant.to_ascii_lowercase()),
             None => SCOPE_TREE_KEY.to_string(),

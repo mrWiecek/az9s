@@ -299,8 +299,8 @@ How the clouds line up:
       change for Azure; the existing tests guard it.
 - [x] **GCP browsing** (~3–4 days; v1.2.0, preview). `:ctx` lists gcloud
       configurations beside Azure tenants; projects → resources (Cloud Asset
-      `searchAllResources`, location as the container) → document. Still to
-      come for GCP: folders as the tree, console links.
+      `searchAllResources`, location as the container) → document. v1.3.0:
+      folders as the tree (`:mg`), console links (`o`).
       Originally: Cloud Asset Inventory is close to Resource
       Graph (one paged search per organization, folder or project, with
       labels and locations); Resource Manager for the hierarchy.

@@ -58,7 +58,7 @@ impl Feature {
             Feature::Policy => "Azure Policy",
             Feature::Rbac => "Azure role assignments",
             Feature::Directory => "Entra ID (groups and applications)",
-            Feature::Tree => "The management group tree",
+            Feature::Tree => "The tree above accounts",
             Feature::Containers => "Resource groups",
         }
     }
@@ -111,22 +111,33 @@ impl Provider {
     /// Whether c9s can show `feature` for this cloud.
     pub fn supports(self, feature: Feature) -> bool {
         match feature {
-            Feature::Policy
-            | Feature::Rbac
-            | Feature::Directory
-            | Feature::Tree
-            | Feature::Containers => self == Provider::Azure,
+            Feature::Policy | Feature::Rbac | Feature::Directory | Feature::Containers => {
+                self == Provider::Azure
+            }
+            // Management groups; GCP folders.
+            Feature::Tree => self != Provider::Aws,
         }
     }
 
     /// Why a command isn't available here, or `None` if it is.
     pub fn unsupported(self, feature: Feature) -> Option<String> {
         (!self.supports(feature)).then(|| {
-            format!(
-                "{} is Azure only: this context is {}. Switch to an Azure context with :ctx.",
-                feature.label(),
-                self.as_str()
-            )
+            if Provider::ALL
+                .iter()
+                .any(|p| *p != Provider::Azure && p.supports(feature))
+            {
+                format!(
+                    "{} isn't available for {} yet. Switch context with :ctx.",
+                    feature.label(),
+                    self.as_str()
+                )
+            } else {
+                format!(
+                    "{} is Azure only: this context is {}. Switch to an Azure context with :ctx.",
+                    feature.label(),
+                    self.as_str()
+                )
+            }
         })
     }
 }
@@ -151,6 +162,9 @@ mod tests {
             assert_eq!(p.supports(Feature::Rbac), p == Provider::Azure);
         }
         assert!(Provider::Azure.unsupported(Feature::Policy).is_none());
+        assert!(Provider::Gcp.supports(Feature::Tree), "folders");
+        let msg = Provider::Aws.unsupported(Feature::Tree).unwrap();
+        assert!(msg.contains("isn't available for aws yet"), "{msg}");
         let msg = Provider::Gcp.unsupported(Feature::Directory).unwrap();
         assert!(
             msg.contains("Azure only") && msg.contains("gcp") && msg.contains(":ctx"),
