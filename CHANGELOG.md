@@ -12,6 +12,22 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-04
+
+### Added
+- **The status bar starts with the context's cloud** (`azure`, and the
+  tenant's name after `:ctx`), first step towards GCP and AWS (ROADMAP,
+  M6). List titles, the breadcrumb and the status bar take their words
+  from the cloud (subscription, resource group, management groups for
+  Azure; projects, locations, folders for GCP; accounts, regions,
+  organizational units for AWS).
+- Under a context that isn't Azure, Azure-only commands (`:policy`,
+  `:compliance`, `:exemption`, `:ra`, `:role`, `:access`, `:group`,
+  `:app`) say so instead of failing.
+
+### Changed
+- The status bar labels the selected subscription `sub:` (was `Sub:`).
+
 ## [1.0.1] - 2026-11-04
 
 ### Fixed
@@ -662,7 +678,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/mrWiecek/c9s/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/mrWiecek/c9s/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/mrWiecek/c9s/compare/v0.22.1...v1.0.0
 [0.22.1]: https://github.com/mrWiecek/c9s/compare/v0.22.0...v0.22.1

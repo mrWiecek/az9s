@@ -12,6 +12,7 @@ pub mod models;
 pub mod palette;
 pub mod paths;
 pub mod policy;
+pub mod provider;
 pub mod query;
 pub mod rbac;
 pub mod resource_type;

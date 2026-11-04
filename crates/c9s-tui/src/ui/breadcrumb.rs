@@ -56,7 +56,7 @@ impl Breadcrumb {
         // Add current view
         spans.push(Span::raw(" > "));
         spans.push(Span::styled(
-            Self::view_name(&state.view),
+            Self::view_name(&state.view, state.provider.terms()),
             Style::default().fg(theme().text),
         ));
 
@@ -81,11 +81,11 @@ impl Breadcrumb {
     }
 
     /// Get human-readable view name
-    fn view_name(view: &ViewMode) -> &'static str {
+    fn view_name(view: &ViewMode, terms: c9s_core::provider::Terms) -> &'static str {
         match view {
-            ViewMode::ManagementGroupTree => "Management Groups",
-            ViewMode::SubscriptionList => "Subscriptions",
-            ViewMode::ResourceGroupList => "Resource Groups",
+            ViewMode::ManagementGroupTree => terms.tree,
+            ViewMode::SubscriptionList => terms.accounts,
+            ViewMode::ResourceGroupList => terms.containers,
             ViewMode::ResourceList => "Resources",
             ViewMode::ResourceTypeSummary => "Resource Types",
             ViewMode::TagSummary => "Tags",
@@ -209,18 +209,36 @@ mod tests {
     #[test]
     fn test_view_names() {
         assert_eq!(
-            Breadcrumb::view_name(&ViewMode::SubscriptionList),
+            Breadcrumb::view_name(
+                &ViewMode::SubscriptionList,
+                c9s_core::provider::Provider::Azure.terms()
+            ),
             "Subscriptions"
         );
-        assert_eq!(Breadcrumb::view_name(&ViewMode::ResourceList), "Resources");
         assert_eq!(
-            Breadcrumb::view_name(&ViewMode::ResourceGroupList),
+            Breadcrumb::view_name(
+                &ViewMode::ResourceList,
+                c9s_core::provider::Provider::Azure.terms()
+            ),
+            "Resources"
+        );
+        assert_eq!(
+            Breadcrumb::view_name(
+                &ViewMode::ResourceGroupList,
+                c9s_core::provider::Provider::Azure.terms()
+            ),
             "Resource Groups"
         );
         assert_eq!(
-            Breadcrumb::view_name(&ViewMode::ResourceDetail),
+            Breadcrumb::view_name(
+                &ViewMode::ResourceDetail,
+                c9s_core::provider::Provider::Azure.terms()
+            ),
             "Resource Detail"
         );
-        assert_eq!(Breadcrumb::view_name(&ViewMode::Logs), "Logs");
+        assert_eq!(
+            Breadcrumb::view_name(&ViewMode::Logs, c9s_core::provider::Provider::Azure.terms()),
+            "Logs"
+        );
     }
 }

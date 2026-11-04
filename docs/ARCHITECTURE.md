@@ -50,6 +50,15 @@ Dependencies only point downward: `c9s → c9s-tui → c9s-core → c9s-azure`.
 
 ## c9s-core
 
+- `provider.rs`: the cloud of the current context (`Provider::Azure`,
+  `Gcp`, `Aws`; `AppState::provider`). c9s shows one context at a time, so
+  rows carry no provider: the context's decides. Each cloud is a `Fetcher`
+  answering the generic requests (tree, accounts, containers, resources,
+  detail); views name levels with its `Terms` (subscription / project /
+  account, resource group / location / region, …); `Provider::supports`
+  gates Azure-only features, and `CommandKind::feature` makes their
+  commands say "Azure only" elsewhere. Adding a cloud: a fetcher, its
+  terms, and a way for `:ctx` to offer its contexts.
 - `app.rs`: `App` owns `AppState`, the `Cache` and the `Loader`.
   - `App::new()` opens the cache, shows cached subscriptions immediately, starts
     background fetches of fresh subscriptions and the management group tree,

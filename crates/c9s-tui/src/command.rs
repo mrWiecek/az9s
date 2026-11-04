@@ -85,6 +85,24 @@ impl Scope {
     }
 }
 
+impl CommandKind {
+    /// The feature beyond browsing a command needs, if any (so it can say
+    /// "Azure only" under another cloud).
+    pub fn feature(&self) -> Option<c9s_core::provider::Feature> {
+        use c9s_core::provider::Feature;
+        match self {
+            CommandKind::Policy { .. }
+            | CommandKind::Compliance { .. }
+            | CommandKind::Exemption { .. } => Some(Feature::Policy),
+            CommandKind::RoleAssignments { .. }
+            | CommandKind::RoleDefinitions
+            | CommandKind::Access(_) => Some(Feature::Rbac),
+            CommandKind::Groups(_) | CommandKind::Apps(_) => Some(Feature::Directory),
+            _ => None,
+        }
+    }
+}
+
 impl Command {
     /// Parse a command string
     pub fn parse(input: &str) -> Self {

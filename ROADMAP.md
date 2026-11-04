@@ -282,7 +282,13 @@ How the clouds line up:
       directories (existing `~/.config/az9s` moved over), `AZ9S_*` variables
       (old names still read), release artifacts, docs, repository (GitHub
       redirects). A renamed binary is breaking: **c9s v1.0.0**, Azure only.
-- [ ] **Provider abstraction in core** (~4–6 days; the main risk). A generic
+- [ ] **Provider abstraction in core** (~4–6 days; the main risk). *Step 1
+      done (v1.1.0): `Provider` with each cloud's terms and capabilities;
+      the status bar shows the context's cloud; titles use its words;
+      Azure-only commands say so elsewhere. Found: one context at a time
+      means rows need no provider field, so this is smaller than planned.
+      Next: `:ctx` listing contexts per cloud, and the fetcher seam for a
+      second cloud.* A generic
       resource (provider, account, container, type, location, tags/labels)
       and hierarchy tree; generic load requests (hierarchy, containers,
       resources, detail) beside an Azure-only set; capability checks so

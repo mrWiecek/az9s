@@ -155,7 +155,7 @@ fn draw_tree(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Management Groups"),
+                    .title(app.state().provider.terms().tree),
             )
             .style(Style::default().fg(theme().subtle))
             .wrap(Wrap { trim: true });
@@ -225,16 +225,22 @@ fn draw_tree(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
         .map_or(0, |t| t.groups.len() + 1);
     let title = if app.state().filter_mode {
         format!(
-            "Management Groups ({total}) - Filter: {}_",
+            "{} ({total}) - Filter: {}_",
+            app.state().provider.terms().tree,
             app.state().filter
         )
     } else if !app.state().filter.is_empty() {
         format!(
-            "Management Groups ({total}) - Filtered by: {}",
+            "{} ({total}) - Filtered by: {}",
+            app.state().provider.terms().tree,
             app.state().filter
         )
     } else {
-        format!("Management Groups ({total}) - Enter opens resource groups, Space expands")
+        format!(
+            "{} ({total}) - Enter opens {}, Space expands",
+            app.state().provider.terms().tree,
+            app.state().provider.terms().containers.to_lowercase()
+        )
     };
 
     let list = SelectableList::new(items)
@@ -266,7 +272,7 @@ fn draw_subscription_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Subscriptions"),
+                    .title(app.state().provider.terms().accounts),
             )
             .style(Style::default().fg(theme().subtle))
             .wrap(Wrap { trim: true });
@@ -307,19 +313,22 @@ fn draw_subscription_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result
     // Create title with filter indicator
     let title = if app.state().filter_mode {
         format!(
-            "Subscriptions ({}) - Filter: {}_",
+            "{} ({}) - Filter: {}_",
+            app.state().provider.terms().accounts,
             filtered_subscriptions.len(),
             app.state().filter
         )
     } else if !app.state().filter.is_empty() {
         format!(
-            "Subscriptions ({}) - Filtered by: {}",
+            "{} ({}) - Filtered by: {}",
+            app.state().provider.terms().accounts,
             filtered_subscriptions.len(),
             app.state().filter
         )
     } else {
         format!(
-            "Subscriptions ({}) - Press Enter to select",
+            "{} ({}) - Press Enter to select",
+            app.state().provider.terms().accounts,
             filtered_subscriptions.len()
         )
     };
@@ -359,7 +368,7 @@ fn draw_resource_group_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Resu
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Resource Groups"),
+                    .title(app.state().provider.terms().containers),
             )
             .style(Style::default().fg(theme().subtle))
             .wrap(Wrap { trim: true });
@@ -406,21 +415,24 @@ fn draw_resource_group_list(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Resu
 
     let title = if app.state().filter_mode {
         format!(
-            "Resource Groups ({}){}  - Filter: {}_",
+            "{} ({}){}  - Filter: {}_",
+            app.state().provider.terms().containers,
             filtered_resource_groups.len(),
             scope_info,
             app.state().filter
         )
     } else if !app.state().filter.is_empty() {
         format!(
-            "Resource Groups ({}){}  - Filtered by: {}",
+            "{} ({}){}  - Filtered by: {}",
+            app.state().provider.terms().containers,
             filtered_resource_groups.len(),
             scope_info,
             app.state().filter
         )
     } else {
         format!(
-            "Resource Groups ({}){}  - Press Enter to view resources",
+            "{} ({}){}  - Press Enter to view resources",
+            app.state().provider.terms().containers,
             filtered_resource_groups.len(),
             scope_info
         )
@@ -2372,7 +2384,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
                 ("↑↓/jk", "Navigate"),
                 ("Space", "Expand"),
                 ("←→/hl", "Close/Open"),
-                ("Enter", "Resource Groups"),
+                ("Enter", app.state().provider.terms().containers),
                 ("/", "Filter"),
                 (":", "Command"),
                 ("^P", "Go to"),
