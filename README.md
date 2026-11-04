@@ -148,9 +148,10 @@ Entra ID), which say so.
 
 ## AWS (preview)
 
-c9s also browses AWS, one CLI profile (one account) at a time: the
-account's resources (type, region, tags) and each resource's document; `o`
-opens the selected resource in the AWS console.
+c9s also browses AWS, one CLI profile at a time: the profile's account,
+or every account of its organization (with the organizational units as
+`:mg`), their resources (type, region, tags) and each resource's document;
+`o` opens the selected resource in the AWS console.
 
 1. Install [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
    and sign in (`aws sso login --profile <profile>`, or `aws configure`).
@@ -168,9 +169,18 @@ opens the selected resource in the AWS console.
    shows `aws · <profile>`; the account opens straight onto its resources;
    `:ctx all` goes back to Azure.
 
-Not yet for AWS: several accounts through Organizations (`:mg`). Not for
-AWS: the Azure-only views (Policy, role assignments, Entra ID), which say
-so.
+**Organizations.** With a profile in the management account (or a
+delegated administrator for AWS Organizations), the accounts list is every
+account in the organization and `:mg` shows the organizational units;
+`Enter` on a unit lists the resources of every account below it. c9s
+reaches another account through a CLI profile that signs in to it (an SSO
+profile with that `sso_account_id`, or a `role_arn` in it), else by
+assuming `OrganizationAccountAccessRole` there; set `aws_role` in the
+config for another role. Accounts it can't reach are reported, the rest
+still listed.
+
+Not for AWS: the Azure-only views (Policy, role assignments, Entra ID),
+which say so.
 
 ## Upgrading from az9s
 

@@ -114,8 +114,8 @@ impl Provider {
             Feature::Policy | Feature::Rbac | Feature::Directory | Feature::Containers => {
                 self == Provider::Azure
             }
-            // Management groups; GCP folders.
-            Feature::Tree => self != Provider::Aws,
+            // Management groups; GCP folders; AWS organizational units.
+            Feature::Tree => true,
         }
     }
 
@@ -163,8 +163,10 @@ mod tests {
         }
         assert!(Provider::Azure.unsupported(Feature::Policy).is_none());
         assert!(Provider::Gcp.supports(Feature::Tree), "folders");
-        let msg = Provider::Aws.unsupported(Feature::Tree).unwrap();
-        assert!(msg.contains("isn't available for aws yet"), "{msg}");
+        assert!(
+            Provider::Aws.supports(Feature::Tree),
+            "organizational units"
+        );
         let msg = Provider::Gcp.unsupported(Feature::Directory).unwrap();
         assert!(
             msg.contains("Azure only") && msg.contains("gcp") && msg.contains(":ctx"),

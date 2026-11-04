@@ -89,6 +89,7 @@ impl App {
         }
         let mut app = Self::with_fetcher(cache, fetcher);
         if let Some(auth) = auth {
+            let aws_role = loaded.config.aws_role.clone();
             app.set_fetcher_factory(Arc::new(
                 move |provider: Provider, context: Option<&str>| {
                     let fetcher: Arc<dyn Fetcher> = match provider {
@@ -96,7 +97,9 @@ impl App {
                         Provider::Gcp => {
                             Arc::new(crate::gcp::GcpFetcher::new(context.map(str::to_string)))
                         }
-                        Provider::Aws => Arc::new(crate::aws::AwsFetcher::new(context?)),
+                        Provider::Aws => {
+                            Arc::new(crate::aws::AwsFetcher::new(context?, aws_role.as_deref()))
+                        }
                     };
                     fetcher.warm_up();
                     Some(fetcher)
@@ -678,6 +681,15 @@ impl App {
         if self.state.view == ViewMode::ManagementGroupTree {
             self.state.view = ViewMode::SubscriptionList;
             self.state.list_state.reset();
+        }
+        if self.state.provider != Provider::Azure {
+            let terms = self.state.provider.terms();
+            self.state.notice = Some(format!(
+                "{} unavailable: {reason}. Showing {}",
+                terms.tree,
+                terms.accounts.to_lowercase()
+            ));
+            return;
         }
         // Azure's 403 message is long (it names the user and the scope); for a
         // user without management group access, say so plainly instead.

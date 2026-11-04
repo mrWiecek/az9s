@@ -38,6 +38,10 @@ refresh_interval = 0
 # while c9s runs. Setting the NO_COLOR environment variable means mono.
 theme = "default"
 
+# AWS: the role c9s assumes in an organization's other accounts when no CLI
+# profile signs in to them (the role AWS Organizations creates by default).
+# aws_role = "OrganizationAccountAccessRole"
+
 # Read-only mode: actions that change Azure (planned, M4) are disabled.
 # The status bar shows RO while it is on.
 read_only = true
@@ -125,6 +129,8 @@ pub struct Config {
     /// Seconds; 0 = off, otherwise at least [`MIN_REFRESH_SECS`].
     pub refresh_interval: u64,
     pub read_only: bool,
+    /// AWS: the role assumed in an organization's other accounts.
+    pub aws_role: Option<String>,
 }
 
 impl Default for Config {
@@ -136,6 +142,7 @@ impl Default for Config {
             theme: ThemeName::Default,
             refresh_interval: 0,
             read_only: true,
+            aws_role: None,
         }
     }
 }
@@ -176,6 +183,7 @@ impl Config {
         }
         let clean = |s: Option<String>| s.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         config.default_subscription = clean(config.default_subscription);
+        config.aws_role = clean(config.aws_role);
         config.tenant = clean(config.tenant).map(|t| t.to_ascii_lowercase());
         Ok(config)
     }

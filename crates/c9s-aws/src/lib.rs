@@ -43,6 +43,9 @@ pub struct Profile {
     /// "sso" for IAM Identity Center profiles, "role" for assumed roles,
     /// "keys" for access keys.
     pub kind: String,
+    /// The account it signs in to, when the files say (`sso_account_id`,
+    /// or the account of `role_arn`).
+    pub account_id: String,
 }
 
 /// The account behind a profile.
@@ -64,6 +67,33 @@ pub struct AwsResource {
     pub tags: Vec<(String, String)>,
     /// The result as returned, for the detail view
     pub document: Value,
+}
+
+/// A root or organizational unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgNode {
+    /// "r-abcd" or "ou-abcd-12345678"
+    pub id: String,
+    pub name: String,
+    /// The parent root or unit; empty for a root.
+    pub parent: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgAccount {
+    pub id: String,
+    pub name: String,
+    /// "ACTIVE", "SUSPENDED", …
+    pub status: String,
+    pub parent: String,
+}
+
+/// An AWS Organizations tree.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Organization {
+    pub roots: Vec<OrgNode>,
+    pub units: Vec<OrgNode>,
+    pub accounts: Vec<OrgAccount>,
 }
 
 /// Resources found, and whether that is all of them.
@@ -138,6 +168,7 @@ pub fn parse_profiles(config: &str, credentials: &str) -> Vec<Profile> {
                             name: name.to_string(),
                             region: String::new(),
                             kind: "keys".into(),
+                            account_id: String::new(),
                         });
                         out.len() - 1
                     })
@@ -151,7 +182,17 @@ pub fn parse_profiles(config: &str, credentials: &str) -> Vec<Profile> {
             match key {
                 "region" if out[i].region.is_empty() => out[i].region = value.to_string(),
                 "sso_session" | "sso_start_url" => out[i].kind = "sso".into(),
-                "role_arn" if out[i].kind != "sso" => out[i].kind = "role".into(),
+                "sso_account_id" => out[i].account_id = value.to_string(),
+                "role_arn" => {
+                    if out[i].kind != "sso" {
+                        out[i].kind = "role".into();
+                    }
+                    if out[i].account_id.is_empty() {
+                        if let Some((_, _, account, _)) = arn_parts(value) {
+                            out[i].account_id = account.to_string();
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -205,8 +246,20 @@ fn text(v: &Value, k: &str) -> String {
 /// cached until shortly before they expire.
 pub struct Session {
     program: String,
+    /// The CLI profile, or for an assumed role the role's ARN.
     pub profile: String,
+    /// Credentials from assuming a role with another session's.
+    assume: Option<Assume>,
     cached: Mutex<Option<(Credentials, Instant, Duration)>>,
+}
+
+struct Assume {
+    base: Arc<Session>,
+    role_arn: String,
+    region: String,
+    /// Tests send STS calls here instead of AWS.
+    endpoint: Option<String>,
+    http: reqwest::Client,
 }
 
 impl Session {
@@ -219,6 +272,39 @@ impl Session {
         Self {
             program: program.into(),
             profile: profile.into(),
+            assume: None,
+            cached: Mutex::new(None),
+        }
+    }
+
+    /// Another CLI profile, through the same aws program.
+    pub fn sibling(&self, profile: impl Into<String>) -> Self {
+        Self::with_program(self.program.clone(), profile)
+    }
+
+    /// Credentials for `role_arn`, assumed (STS `AssumeRole`, in `region`)
+    /// with `base`'s. `endpoint` replaces STS in tests.
+    pub fn assume(
+        base: Arc<Session>,
+        role_arn: impl Into<String>,
+        region: &str,
+        endpoint: Option<String>,
+    ) -> Self {
+        let role_arn = role_arn.into();
+        Self {
+            program: base.program.clone(),
+            profile: role_arn.clone(),
+            assume: Some(Assume {
+                base,
+                role_arn,
+                region: if region.is_empty() {
+                    DEFAULT_REGION.into()
+                } else {
+                    region.into()
+                },
+                endpoint,
+                http: reqwest::Client::new(),
+            }),
             cached: Mutex::new(None),
         }
     }
@@ -229,6 +315,16 @@ impl Session {
             if at.elapsed() < *lifetime {
                 return Ok(c.clone());
             }
+        }
+        if let Some(assume) = &self.assume {
+            // Boxed: the base session's credentials are asked for in turn.
+            let (credentials, expiration) = Box::pin(assume_role(assume)).await?;
+            *cached = Some((
+                credentials.clone(),
+                Instant::now(),
+                lifetime_until(&expiration),
+            ));
+            return Ok(credentials);
         }
         let out = run(
             &self.program,
@@ -255,21 +351,22 @@ impl Session {
                 self.profile
             )));
         }
-        // Until five minutes before they expire.
-        let lifetime = chrono::DateTime::parse_from_rfc3339(&text(&v, "Expiration"))
-            .ok()
-            .and_then(|at| {
-                (at.with_timezone(&chrono::Utc) - chrono::Utc::now() - chrono::Duration::minutes(5))
-                    .to_std()
-                    .ok()
-            })
-            .map_or(CREDENTIALS_LIFETIME, |d| d.min(CREDENTIALS_LIFETIME * 6));
+        let lifetime = lifetime_until(&text(&v, "Expiration"));
         *cached = Some((credentials.clone(), Instant::now(), lifetime));
         Ok(credentials)
     }
 
     /// The account and principal behind the profile.
     pub async fn identity(&self) -> Result<Identity> {
+        if let Some(assume) = &self.assume {
+            let account = arn_parts(&assume.role_arn)
+                .map(|(_, _, a, _)| a.to_string())
+                .unwrap_or_default();
+            return Ok(Identity {
+                account,
+                arn: assume.role_arn.clone(),
+            });
+        }
         let out = run(
             &self.program,
             &[
@@ -289,6 +386,153 @@ impl Session {
             arn: text(&v, "Arn"),
         })
     }
+}
+
+/// How long credentials expiring at `expiration` (RFC 3339) may be used:
+/// until five minutes before, at most an hour; unknown: ten minutes.
+fn lifetime_until(expiration: &str) -> Duration {
+    chrono::DateTime::parse_from_rfc3339(expiration)
+        .ok()
+        .and_then(|at| {
+            (at.with_timezone(&chrono::Utc) - chrono::Utc::now() - chrono::Duration::minutes(5))
+                .to_std()
+                .ok()
+        })
+        .map_or(CREDENTIALS_LIFETIME, |d| d.min(CREDENTIALS_LIFETIME * 6))
+}
+
+/// The text of the first `<tag>` in an XML document (STS answers in XML).
+fn xml_text(xml: &str, tag: &str) -> Option<String> {
+    let open = format!("<{tag}>");
+    let start = xml.find(&open)? + open.len();
+    let end = xml[start..].find(&format!("</{tag}>"))? + start;
+    Some(xml[start..end].trim().to_string())
+}
+
+/// Percent-encode a form value.
+fn form_encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// STS `AssumeRole`: the role's credentials and when they expire.
+async fn assume_role(assume: &Assume) -> Result<(Credentials, String)> {
+    let base = assume.base.credentials().await?;
+    let host = format!("sts.{}.amazonaws.com", assume.region);
+    let body = format!(
+        "Action=AssumeRole&Version=2011-06-15&RoleSessionName=c9s&DurationSeconds=3600&RoleArn={}",
+        form_encode(&assume.role_arn)
+    );
+    let xml = signed_post(
+        &assume.http,
+        &base,
+        &assume.region,
+        "sts",
+        assume.endpoint.as_deref(),
+        &host,
+        "/",
+        "application/x-www-form-urlencoded; charset=utf-8",
+        None,
+        body,
+    )
+    .await
+    .map_err(|e| Error(format!("could not assume {}: {e}", assume.role_arn)))?;
+    let field = |tag: &str| xml_text(&xml, tag).unwrap_or_default();
+    let credentials = Credentials {
+        access_key_id: field("AccessKeyId"),
+        secret_access_key: field("SecretAccessKey"),
+        session_token: Some(field("SessionToken")).filter(|t| !t.is_empty()),
+    };
+    if credentials.access_key_id.is_empty() {
+        return Err(Error(format!(
+            "could not assume {}: no credentials in the answer",
+            assume.role_arn
+        )));
+    }
+    Ok((credentials, field("Expiration")))
+}
+
+/// POST `body` to `host` + `path` (or `endpoint` + `path` in tests),
+/// signed for `service` in `region`; the response text, or an error with
+/// AWS's message (JSON or XML).
+#[allow(clippy::too_many_arguments)]
+async fn signed_post(
+    http: &reqwest::Client,
+    credentials: &Credentials,
+    region: &str,
+    service: &str,
+    endpoint: Option<&str>,
+    host: &str,
+    path: &str,
+    content_type: &str,
+    target: Option<&str>,
+    body: String,
+) -> Result<String> {
+    let (base, sign_host) = match endpoint {
+        Some(e) => (
+            e.to_string(),
+            e.split("://").nth(1).unwrap_or(e).to_string(),
+        ),
+        None => (format!("https://{host}"), host.to_string()),
+    };
+    let mut headers = vec![
+        ("content-type".to_string(), content_type.to_string()),
+        ("host".to_string(), sign_host),
+    ];
+    if let Some(target) = target {
+        headers.push(("x-amz-target".into(), target.into()));
+    }
+    let amz_date = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let signed = sigv4::sign(
+        &sigv4::Request {
+            method: "POST",
+            path,
+            query: "",
+            headers,
+            body: body.as_bytes(),
+        },
+        credentials,
+        region,
+        service,
+        &amz_date,
+    );
+    let mut request = http.post(format!("{base}{path}")).body(body);
+    for (k, v) in signed.iter().filter(|(k, _)| k != "host") {
+        request = request.header(k.as_str(), v.as_str());
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| Error(format!("AWS request failed: {e}")))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|e| Error(format!("AWS response: {e}")))?;
+    if status.is_success() {
+        return Ok(text);
+    }
+    let v = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
+    let message = ["message", "Message"]
+        .iter()
+        .find_map(|k| v.get(*k).and_then(Value::as_str))
+        .map(str::to_string)
+        .or_else(|| xml_text(&text, "Message"))
+        .unwrap_or_else(|| text.chars().take(300).collect());
+    let kind = v
+        .get("__type")
+        .and_then(Value::as_str)
+        .map(|t| t.rsplit('#').next().unwrap_or(t).to_string())
+        .or_else(|| xml_text(&text, "Code"))
+        .map(|t| format!("{t} "))
+        .unwrap_or_default();
+    Err(Error(format!("HTTP {}: {kind}{message}", status.as_u16())))
 }
 
 /// The parts of an ARN: `arn:partition:service:region:account:resource`.
@@ -370,14 +614,115 @@ impl AwsClient {
         &self.region
     }
 
+    /// A client like this one (region, test endpoint) for another session.
+    pub fn with_session(&self, session: Arc<Session>) -> Self {
+        Self {
+            http: self.http.clone(),
+            session,
+            region: self.region.clone(),
+            endpoint: self.endpoint.clone(),
+        }
+    }
+
+    /// A session assuming `role_arn` with this client's credentials (STS in
+    /// the profile's region).
+    pub fn assume_session(&self, role_arn: &str) -> Session {
+        Session::assume(
+            self.session.clone(),
+            role_arn,
+            &self.region,
+            self.endpoint.clone(),
+        )
+    }
+
+    /// One Organizations call (JSON, signed in us-east-1), every page.
+    async fn organizations(&self, action: &str, body: Value, key: &str) -> Result<Vec<Value>> {
+        let mut items = Vec::new();
+        let mut body = body;
+        loop {
+            let page = self
+                .post(
+                    "organizations",
+                    Some("us-east-1"),
+                    "organizations.us-east-1.amazonaws.com",
+                    "/",
+                    "application/x-amz-json-1.1",
+                    Some(&format!("AWSOrganizationsV20161128.{action}")),
+                    &body,
+                )
+                .await?;
+            items.extend(
+                page.get(key)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .cloned(),
+            );
+            match page.get("NextToken").and_then(Value::as_str) {
+                Some(t) if !t.is_empty() => body["NextToken"] = json!(t),
+                _ => return Ok(items),
+            }
+        }
+    }
+
+    /// The organization's tree: roots, organizational units and accounts
+    /// below each. Needs the management account or a delegated
+    /// administrator.
+    pub async fn organization(&self) -> Result<Organization> {
+        let roots = self.organizations("ListRoots", json!({}), "Roots").await?;
+        let node = |v: &Value, parent: &str| OrgNode {
+            id: text(v, "Id"),
+            name: text(v, "Name"),
+            parent: parent.to_string(),
+        };
+        let mut org = Organization {
+            roots: roots.iter().map(|r| node(r, "")).collect(),
+            ..Default::default()
+        };
+        let mut level: Vec<String> = org.roots.iter().map(|r| r.id.clone()).collect();
+        // Breadth first, a level of parents at a time.
+        while !level.is_empty() {
+            let mut next = Vec::new();
+            for parent in level {
+                let body = json!({"ParentId": parent});
+                let ous = self
+                    .organizations(
+                        "ListOrganizationalUnitsForParent",
+                        body.clone(),
+                        "OrganizationalUnits",
+                    )
+                    .await?;
+                let accounts = self
+                    .organizations("ListAccountsForParent", body, "Accounts")
+                    .await?;
+                for ou in &ous {
+                    let ou = node(ou, &parent);
+                    next.push(ou.id.clone());
+                    org.units.push(ou);
+                }
+                org.accounts.extend(accounts.iter().map(|a| OrgAccount {
+                    id: text(a, "Id"),
+                    name: text(a, "Name"),
+                    status: text(a, "Status"),
+                    parent: parent.clone(),
+                }));
+            }
+            level = next;
+        }
+        Ok(org)
+    }
+
     pub fn session(&self) -> &Session {
         &self.session
     }
 
-    /// POST `body` to `host` + `path`, signed for `service`.
+    /// POST JSON `body` to `host` + `path`, signed for `service` in
+    /// `region` (the profile's when `None`).
+    #[allow(clippy::too_many_arguments)]
     async fn post(
         &self,
         service: &str,
+        region: Option<&str>,
         host: &str,
         path: &str,
         content_type: &str,
@@ -385,59 +730,19 @@ impl AwsClient {
         body: &Value,
     ) -> Result<Value> {
         let credentials = self.session.credentials().await?;
-        let body = body.to_string();
-        let (base, sign_host) = match &self.endpoint {
-            Some(e) => (e.clone(), e.split("://").nth(1).unwrap_or(e).to_string()),
-            None => (format!("https://{host}"), host.to_string()),
-        };
-        let mut headers = vec![
-            ("content-type".to_string(), content_type.to_string()),
-            ("host".to_string(), sign_host),
-        ];
-        if let Some(target) = target {
-            headers.push(("x-amz-target".into(), target.into()));
-        }
-        let amz_date = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-        let signed = sigv4::sign(
-            &sigv4::Request {
-                method: "POST",
-                path,
-                query: "",
-                headers,
-                body: body.as_bytes(),
-            },
+        let text = signed_post(
+            &self.http,
             &credentials,
-            &self.region,
+            region.unwrap_or(&self.region),
             service,
-            &amz_date,
-        );
-        let mut request = self.http.post(format!("{base}{path}")).body(body);
-        for (k, v) in signed.iter().filter(|(k, _)| k != "host") {
-            request = request.header(k.as_str(), v.as_str());
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|e| Error(format!("AWS request failed: {e}")))?;
-        let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|e| Error(format!("AWS response: {e}")))?;
-        if !status.is_success() {
-            let v = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
-            let message = ["message", "Message"]
-                .iter()
-                .find_map(|k| v.get(*k).and_then(Value::as_str))
-                .map(str::to_string)
-                .unwrap_or_else(|| text.chars().take(300).collect());
-            let kind = v
-                .get("__type")
-                .and_then(Value::as_str)
-                .map(|t| format!("{} ", t.rsplit('#').next().unwrap_or(t)))
-                .unwrap_or_default();
-            return Err(Error(format!("HTTP {}: {kind}{message}", status.as_u16())));
-        }
+            self.endpoint.as_deref(),
+            host,
+            path,
+            content_type,
+            target,
+            body.to_string(),
+        )
+        .await?;
         if text.trim().is_empty() {
             return Ok(Value::Null);
         }
@@ -459,6 +764,7 @@ impl AwsClient {
             let page = self
                 .post(
                     "resource-explorer-2",
+                    None,
                     &host,
                     "/Search",
                     "application/json",
@@ -523,6 +829,7 @@ impl AwsClient {
             let page = self
                 .post(
                     "tagging",
+                    None,
                     &host,
                     "/",
                     "application/x-amz-json-1.1",
@@ -629,6 +936,8 @@ aws_access_key_id = AKIB
             ],
             "sso-session sections are not profiles; default is listed once"
         );
+        let accounts: Vec<&str> = profiles.iter().map(|p| p.account_id.as_str()).collect();
+        assert_eq!(accounts, ["", "111122223333", "444455556666", ""]);
     }
 
     #[test]
@@ -761,6 +1070,96 @@ esac"#;
                 delay: Default::default(),
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn organization_tree_and_assumed_roles() {
+        let (endpoint, requests) = serve_paths(|path, body| {
+            assert_eq!(path, "/");
+            // STS: a form body, not JSON.
+            if body.is_null() {
+                return c9s_azure::testing::Reply {
+                    status: 200,
+                    headers: vec![],
+                    body: "<AssumeRoleResponse><AssumeRoleResult><Credentials>\
+                           <AccessKeyId>ASIAROLE</AccessKeyId><SecretAccessKey>rs</SecretAccessKey>\
+                           <SessionToken>rt</SessionToken><Expiration>2099-01-01T00:00:00Z</Expiration>\
+                           </Credentials></AssumeRoleResult></AssumeRoleResponse>"
+                        .into(),
+                    delay: Default::default(),
+                };
+            }
+            // Organizations: the mock can't see the target header, so a
+            // parent's answer carries both its units and its accounts.
+            match body.get("ParentId").and_then(Value::as_str) {
+                None => ok(json!({"Roots": [{"Id": "r-1", "Name": "Root"}]})),
+                Some("r-1") if body.get("NextToken").is_none() => ok(json!({
+                    "OrganizationalUnits": [{"Id": "ou-1", "Name": "Prod"}],
+                    "Accounts": [{"Id": "111122223333", "Name": "management", "Status": "ACTIVE"}],
+                    "NextToken": "more"
+                })),
+                Some("r-1") => ok(json!({"OrganizationalUnits": [], "Accounts": []})),
+                Some("ou-1") => ok(json!({
+                    "OrganizationalUnits": [],
+                    "Accounts": [{"Id": "444455556666", "Name": "payments", "Status": "SUSPENDED"}]
+                })),
+                Some(_) => error(404, "unexpected"),
+            }
+        })
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let session = Arc::new(Session::with_program(fake_aws(dir.path(), FAKE), "prod"));
+        let client = AwsClient::with_endpoint(session, "eu-west-1", &endpoint);
+        let org = client.organization().await.unwrap();
+        assert_eq!(org.roots[0].id, "r-1");
+        assert_eq!(
+            (org.units[0].id.as_str(), org.units[0].parent.as_str()),
+            ("ou-1", "r-1")
+        );
+        let accounts: Vec<(&str, &str, &str)> = org
+            .accounts
+            .iter()
+            .map(|a| (a.id.as_str(), a.parent.as_str(), a.status.as_str()))
+            .collect();
+        assert_eq!(
+            accounts,
+            [
+                ("111122223333", "r-1", "ACTIVE"),
+                ("444455556666", "ou-1", "SUSPENDED")
+            ]
+        );
+
+        let role =
+            client.assume_session("arn:aws:iam::444455556666:role/OrganizationAccountAccessRole");
+        let c = role.credentials().await.unwrap();
+        assert_eq!(
+            (c.access_key_id.as_str(), c.session_token.as_deref()),
+            ("ASIAROLE", Some("rt"))
+        );
+        assert_eq!(role.identity().await.unwrap().account, "444455556666");
+        // Cached: no second STS call.
+        role.credentials().await.unwrap();
+        let sts_calls = requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|b| b.is_null())
+            .count();
+        assert_eq!(sts_calls, 1);
+    }
+
+    #[test]
+    fn xml_fields_and_form_values() {
+        assert_eq!(
+            xml_text("<a><Code>AccessDenied</Code></a>", "Code").as_deref(),
+            Some("AccessDenied")
+        );
+        assert_eq!(xml_text("<a/>", "Code"), None);
+        assert_eq!(
+            form_encode("arn:aws:iam::1:role/x"),
+            "arn%3Aaws%3Aiam%3A%3A1%3Arole%2Fx"
+        );
     }
 
     #[cfg(unix)]

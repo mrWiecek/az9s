@@ -385,11 +385,14 @@ pub fn gcp_console_url(id: &str, project: Option<&str>) -> String {
 }
 
 /// AWS console link: a resource by its ARN (the console's ARN redirect),
-/// anything else (an account ID) the console home.
+/// an organizational unit or root in AWS Organizations, anything else (an
+/// account ID) the console home.
 pub fn aws_console_url(id: &str) -> String {
     const CONSOLE: &str = "https://console.aws.amazon.com";
     if id.starts_with("arn:") {
         format!("{CONSOLE}/go/view?arn={}", encode(id))
+    } else if id.starts_with("ou-") || id.starts_with("r-") {
+        format!("{CONSOLE}/organizations/v2/home/accounts")
     } else {
         format!("{CONSOLE}/console/home")
     }
@@ -494,6 +497,7 @@ mod tests {
             aws_console_url("arn:aws:ec2:eu-west-1:1:instance/i-0abc"),
             "https://console.aws.amazon.com/go/view?arn=arn%3Aaws%3Aec2%3Aeu-west-1%3A1%3Ainstance%2Fi-0abc"
         );
+        assert!(aws_console_url("ou-ab12-34cd5678").contains("/organizations/"));
         assert_eq!(
             aws_console_url("111122223333"),
             "https://console.aws.amazon.com/console/home"

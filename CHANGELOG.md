@@ -12,6 +12,27 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-04
+
+### Added
+- **AWS Organizations.** With a profile that can read AWS Organizations
+  (the management account or a delegated administrator), the accounts list
+  is every account in the organization (suspended ones disabled), and
+  `:mg` shows the organizational units with their accounts; `Enter` on a
+  unit lists the resources of every account below it. Other accounts are
+  reached through a CLI profile that signs in to them (an SSO profile's
+  `sso_account_id`, or a `role_arn` in them), else by assuming
+  `OrganizationAccountAccessRole` in them; `aws_role` in the config names
+  another role. Accounts that can't be reached are reported, the rest are
+  still listed. Without Organizations access, a profile shows its own
+  account as before.
+- `o` on an organizational unit opens AWS Organizations in the console.
+
+### Changed
+- Under Google Cloud and AWS, a tree that can't be loaded says why and
+  shows the projects or accounts (instead of Azure's management group
+  message).
+
 ## [1.4.0] - 2026-11-04
 
 ### Added
@@ -737,7 +758,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/mrWiecek/c9s/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/mrWiecek/c9s/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/mrWiecek/c9s/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/mrWiecek/c9s/compare/v1.1.0...v1.2.0

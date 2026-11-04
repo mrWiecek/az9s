@@ -308,7 +308,8 @@ How the clouds line up:
       AWS CLI's profiles; a profile's account → resources (Resource
       Explorer in the profile's region; the Tagging API there without it;
       region as the container) → document; `o` opens the console by ARN.
-      Still to come: Organizations (OUs as the tree, a role per account).
+      v1.5.0: Organizations (every account, OUs as the tree; each account
+      through its own CLI profile, else an assumed role, `aws_role`).
       Originally: No inventory that is always
       on: Resource Explorer needs an aggregator index enabled by an admin;
       the Tagging API is per region and misses some untagged resources.

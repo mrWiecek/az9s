@@ -1830,6 +1830,13 @@ impl AppState {
             }
             ViewMode::ManagementGroupTree => {
                 let row = self.selected_tree_row()?;
+                // AWS: units and accounts by their IDs.
+                if self.provider == crate::provider::Provider::Aws {
+                    return match row.kind {
+                        crate::scope_tree::TreeRowKind::Unplaced => None,
+                        _ => Some(row.key),
+                    };
+                }
                 // GCP: folders and organizations are keyed by resource name.
                 if self.provider == crate::provider::Provider::Gcp {
                     return match row.kind {
