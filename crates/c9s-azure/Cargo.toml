@@ -1,0 +1,31 @@
+[package]
+name = "c9s-azure"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[features]
+# Mock Azure HTTP server and token source for tests in other crates.
+test-util = []
+
+[dependencies]
+tokio = { workspace = true }
+futures = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots"] }
+base64 = "0.13"
+
+# Azure SDK
+azure_core = { workspace = true }
+azure_identity = { workspace = true }
+azure_mgmt_resources = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.8"
+tokio = { workspace = true, features = ["test-util"] }

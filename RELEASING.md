@@ -1,4 +1,4 @@
-# Releasing az9s
+# Releasing c9s
 
 ## Versioning rule
 
@@ -43,7 +43,7 @@ For any version you can answer *what shipped, when, from which code*:
 | What changed in `vX.Y.Z`? | `CHANGELOG.md` section, also on the GitHub Release page |
 | Which code is it? | Tag `vX.Y.Z` → commit → the PR that merged it |
 | What changed between two versions? | `https://github.com/mrWiecek/az9s/compare/vA...vB`, also linked at the bottom of `CHANGELOG.md` |
-| Which build is a user running? | `az9s --version` prints the version and commit, e.g. `az9s 0.1.1 (3f2c1a9b0d4e)` |
+| Which build is a user running? | `c9s --version` prints the version and commit, e.g. `c9s 0.1.1 (3f2c1a9b0d4e)` |
 | Is a downloaded binary genuine? | Compare its hash with `SHA256SUMS` on the release |
 
 **Tags are never moved or deleted.** A bad release is fixed by a newer release,
@@ -57,17 +57,17 @@ Download the archive for your platform from that version's
 [release page](https://github.com/mrWiecek/az9s/releases), or build it from its tag:
 
 ```bash
-cargo install --git https://github.com/mrWiecek/az9s --tag v0.1.0 --locked az9s
+cargo install --git https://github.com/mrWiecek/az9s --tag v0.1.0 --locked c9s
 ```
 
-Check with `az9s --version`. The local cache is only a cache: if an older
+Check with `c9s --version`. The local cache is only a cache: if an older
 version can't read it, delete it and it is rebuilt from Azure.
 
 | OS | Cache location |
 |---|---|
-| Linux / WSL | `~/.local/share/az9s/` |
-| macOS | `~/Library/Application Support/az9s/` |
-| Windows | `%LOCALAPPDATA%\az9s\data\` |
+| Linux / WSL | `~/.local/share/c9s/` |
+| macOS | `~/Library/Application Support/c9s/` |
+| Windows | `%LOCALAPPDATA%\c9s\data\` |
 
 ### Maintainers: a release is broken
 

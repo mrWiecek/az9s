@@ -1,6 +1,6 @@
-# az9s Roadmap
+# c9s Roadmap
 
-az9s is a fast, keyboard-first terminal tool for **platform engineers** who operate Azure,
+c9s (*canines for clouds*; az9s before v1.0.0) is a fast, keyboard-first terminal tool for **platform engineers** who operate Azure,
 in the spirit of k9s: browse everything, find things instantly, act on them safely, and
 see policy compliance without leaving the terminal.
 
@@ -17,7 +17,7 @@ see policy compliance without leaving the terminal.
 3. **Safe by default.** Actions are enabled, but every mutating action needs
    confirmation. Destructive actions need you to type the resource name. A
    `--readonly` flag or config setting disables all actions.
-4. **Bring your own login.** Authentication goes through the Azure CLI (`az login`). az9s
+4. **Bring your own login.** Authentication goes through the Azure CLI (`az login`). c9s
    stores no credentials.
 5. **Open source, cross-platform.** It must work on Linux, macOS and Windows, and CI
    proves that. Licensed under Apache-2.0.
@@ -262,7 +262,7 @@ Started. az9s becomes **c9s**, *canines for clouds* (after k9s, canines for
 Kubernetes), and browses GCP and AWS resources next to Azure. Azure keeps its depth (Policy, RBAC,
 Entra ID); the other clouds get browsing.
 
-Today about half of `az9s-core` (~15k lines) speaks Azure directly: the
+Today about half of `c9s-core` (~15k lines) speaks Azure directly: the
 `Subscription` / `ResourceGroup` / `Resource` models, the management group
 tree, 21 Azure-shaped load requests and a cache keyed by subscription. The
 `Fetcher` trait is the one clean seam.
@@ -278,7 +278,7 @@ How the clouds line up:
 | Inventory | Resource Graph | Cloud Asset Inventory (`searchAllResources`) | Resource Explorer; Tagging API fallback |
 | Login | `az` CLI | `gcloud auth print-access-token` | `aws configure export-credentials` / SSO |
 
-- [ ] **Rename to c9s** (~0.5 day). Crates, binary, config and cache
+- [x] **Rename to c9s** (~0.5 day; v1.0.0). Crates, binary, config and cache
       directories (existing `~/.config/az9s` moved over), `AZ9S_*` variables
       (old names still read), release artifacts, docs, repository (GitHub
       redirects). A renamed binary is breaking: **c9s v1.0.0**, Azure only.
@@ -309,7 +309,8 @@ on the easier cloud), then AWS.
 Open questions before starting:
 
 1. ~~Name~~: **c9s**, decided (free on crates.io; three keys, no Shift).
-   Should `az9s` keep working as an alias for one release?
+   No `az9s` binary is shipped; config, cache and `AZ9S_*` variables carry
+   over, and `alias az9s=c9s` keeps old habits working.
 2. **AWS scope:** single profiles only, or Organizations with a role per
    account (the biggest effort lever)?
 3. Azure-only features stay Azure-only (proposed): IAM views for GCP and
@@ -321,7 +322,7 @@ Open questions before starting:
 
 | Decision | Choice | Status |
 |---|---|---|
-| Name | az9s (binary, crates, data dir); becomes **c9s**, "canines for clouds", in M6 | **Decided** |
+| Name | **c9s**, "canines for clouds" (binary, crates, data dir); az9s before v1.0.0 | **Decided** (done) |
 | Who it's for | Platform engineers; open source | **Decided** |
 | Product shape | Operations tool (not read-only browser) | **Decided** |
 | Generic vs rich views | Generic for all types (M2). Rich views for AKS, VM, App Service/Functions, Key Vault, plus Policy | **Decided** |

@@ -8,16 +8,16 @@ PR when that happens.
 
 ```
 crates/
-├── az9s         # binary: sets up tracing, builds az9s_core::App, calls az9s_tui::run
-├── az9s-core    # app state, navigation, filtering, SQLite cache
-├── az9s-azure   # authentication + Azure API client
-└── az9s-tui     # ratatui/crossterm UI: event loop, key handling, rendering
+├── c9s         # binary: sets up tracing, builds c9s_core::App, calls c9s_tui::run
+├── c9s-core    # app state, navigation, filtering, SQLite cache
+├── c9s-azure   # authentication + Azure API client
+└── c9s-tui     # ratatui/crossterm UI: event loop, key handling, rendering
 ```
 
-Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azure`.
-`az9s-azure` knows nothing about the UI or the cache.
+Dependencies only point downward: `c9s → c9s-tui → c9s-core → c9s-azure`.
+`c9s-azure` knows nothing about the UI or the cache.
 
-## az9s-azure
+## c9s-azure
 
 - `auth.rs`: `AzureAuth` uses `AzureCliCredential` and falls back to
   `DefaultAzureCredential`. It is exposed through the `AuthProvider` trait.
@@ -42,13 +42,13 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   every management group and subscription below a group with its parent, in
   one paged call (`nextLink`); `display_name(group)` names the root.
 - `timing.rs`: always-on duration stats (`timing::timer("azure.token")`),
-  re-exported as `az9s_core::timing`. `az9s --timings` prints a summary on exit.
+  re-exported as `c9s_core::timing`. `c9s --timings` prints a summary on exit.
 - `testing.rs` (feature `test-util`): a static token source and a local mock HTTP
-  server, used by tests in this crate and in `az9s-core`.
+  server, used by tests in this crate and in `c9s-core`.
 - `models.rs`: Azure-side DTOs (`AzureSubscription`, `AzureResourceGroup`,
   `AzureResource`).
 
-## az9s-core
+## c9s-core
 
 - `app.rs`: `App` owns `AppState`, the `Cache` and the `Loader`.
   - `App::new()` opens the cache, shows cached subscriptions immediately, starts
@@ -87,7 +87,7 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
       `LoadRequest::ScopeTree`: the descendants of the tenant root group
       (name = tenant ID).
     - `AzureFetcher` uses ARM (one call per subscription, 16 at a time) and
-      handles the subscription list (Azure CLI). Set `AZ9S_BACKEND=arm` to use it
+      handles the subscription list (Azure CLI). Set `C9S_BACKEND=arm` to use it
       for everything.
     - `Fetcher::warm_up` starts one-time setup in the background at startup.
       `GraphFetcher` uses it to resolve the tenant (and so the token) before
@@ -136,7 +136,7 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   assignment reaches a scope (`Reach::Inherited`/`Here`/`Below`).
   Assignments name roles by an ID at their own scope, so roles are matched
   by GUID. Principal names: `LoadRequest::Principals` asks Microsoft Graph
-  (`az9s_azure::directory::DirectoryClient`, `directoryObjects/getByIds`,
+  (`c9s_azure::directory::DirectoryClient`, `directoryObjects/getByIds`,
   a Graph-audience token from the same login) for the IDs not yet named;
   names accumulate in `AppState::principals` and are cached per tenant.
   One principal's access (`App::open_access`, `AppState::ra_principal`)
@@ -145,7 +145,7 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
   of the principal or any of those groups, each with the group it comes
   `via`. Navigation contexts of `:ra` carry its scope, role and principal
   so `Esc` restores the list as it was.
-- Applications (`az9s_azure::apps`, `az9s_core::apps`, `app_view`):
+- Applications (`c9s_azure::apps`, `c9s_core::apps`, `app_view`):
   `LoadRequest::Applications` loads every registration and service
   principal (cached per tenant); `apps::app_rows` joins them by app ID into
   one row per app (`AppKind`). Opening one loads `AppDetail` fresh: owners,
@@ -218,7 +218,7 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
     or the list itself changes. Replace lists wholesale; don't edit rows in place.
   - `DataSource` (Azure or Cache)
 - `cache/`: a SQLite database at the platform data dir (`directories` crate, e.g.
-  `~/.local/share/az9s/az9s.db` on Linux).
+  `~/.local/share/c9s/c9s.db` on Linux).
   - `migrations.rs`: versioned schema with tables `subscriptions`,
     `resource_groups`, `resources` and `resource_details` (v1), and `kv`
     for whole documents such as the scope tree (v2).
@@ -241,7 +241,7 @@ Dependencies only point downward: `az9s → az9s-tui → az9s-core → az9s-azur
 - `models.rs`: core domain models (`Subscription`, `ResourceGroup`, `Resource`,
   `ResourceDetail`).
 
-## az9s-tui
+## c9s-tui
 
 - `lib.rs`: terminal setup and teardown (raw mode, alternate screen, panic hook),
   plus the main loop: draw → wait for terminal input **or** a load result

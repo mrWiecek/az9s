@@ -1,6 +1,9 @@
-# az9s
+# c9s
 
-![az9s logo](assets/az9s-logo.jpg)
+*Canines for clouds.* A fast, keyboard-first terminal UI for Azure, in the
+spirit of k9s. Formerly **az9s**: see [Upgrading from az9s](#upgrading-from-az9s).
+
+![c9s logo](assets/az9s-logo.jpg)
 
 **A fast, keyboard-first terminal UI for operating Azure, built for platform engineers.**
 
@@ -40,20 +43,20 @@ Download a prebuilt binary for Linux, macOS or Windows from
 [Releases](https://github.com/mrWiecek/az9s/releases), or build from source:
 
 ```bash
-cargo install --git https://github.com/mrWiecek/az9s --locked az9s              # latest
-cargo install --git https://github.com/mrWiecek/az9s --tag v0.3.0 --locked az9s # a specific version
+cargo install --git https://github.com/mrWiecek/az9s --locked c9s              # latest
+cargo install --git https://github.com/mrWiecek/az9s --tag v0.3.0 --locked c9s # a specific version
 ```
 
-`az9s --version` shows the installed version and commit. Versions follow
+`c9s --version` shows the installed version and commit. Versions follow
 SemVer; see [CHANGELOG.md](CHANGELOG.md) for what changed and
 [RELEASING.md](RELEASING.md) for how to roll back.
 
 ## Quick start
 
 ```bash
-az login                                   # authenticate once (az9s uses your Azure CLI login)
-az9s                                       # launch
-az9s --timings                             # launch, print a timing summary on exit
+az login                                   # authenticate once (c9s uses your Azure CLI login)
+c9s                                        # launch
+c9s --timings                              # launch, print a timing summary on exit
 ```
 
 ## Keys
@@ -105,7 +108,7 @@ Requires [just](https://github.com/casey/just).
 
 ```bash
 just run         # run (release mode, logs off)
-just run-debug   # run with debug logs written to az9s.log
+just run-debug   # run with debug logs written to c9s.log
 just run-timings # run, then print Azure/cache/frame timings on exit
 just perf        # rendering benchmark with 100k rows
 just ci          # everything CI runs: fmt check, clippy, tests
@@ -114,20 +117,31 @@ just --list      # all recipes
 
 ```
 crates/
-├── az9s         # binary entry point
-├── az9s-core    # state, navigation, SQLite cache
-├── az9s-azure   # Azure auth + API client
-└── az9s-tui     # ratatui UI
+├── c9s         # binary entry point
+├── c9s-core    # state, navigation, SQLite cache
+├── c9s-azure   # Azure auth + API client
+└── c9s-tui     # ratatui UI
 ```
 
 How it fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## Upgrading from az9s
+
+c9s v1.0.0 is az9s renamed; nothing else changed.
+
+- The command is `c9s`. To keep typing `az9s`: `alias az9s=c9s` (or a
+  `Set-Alias az9s c9s` in PowerShell).
+- On first start c9s moves az9s's config file and cache to its own
+  directories, so settings and cached lists carry over.
+- `AZ9S_CONFIG` and `AZ9S_BACKEND` still work; the new names are
+  `C9S_CONFIG` and `C9S_BACKEND`.
+
 ## Configuration
 
-Optional. `az9s --init-config` writes a commented file with the defaults;
-`az9s --help` shows where it lives (Linux/WSL: `~/.config/az9s/config.toml`;
-macOS: `~/Library/Application Support/az9s/config.toml`; Windows:
-`%APPDATA%\az9s\config\config.toml`). `--config <path>` or `AZ9S_CONFIG`
+Optional. `c9s --init-config` writes a commented file with the defaults;
+`c9s --help` shows where it lives (Linux/WSL: `~/.config/c9s/config.toml`;
+macOS: `~/Library/Application Support/c9s/config.toml`; Windows:
+`%APPDATA%\c9s\config\config.toml`). `--config <path>` or `C9S_CONFIG`
 use another file.
 
 ```toml
@@ -139,7 +153,7 @@ refresh_interval = 120                     # auto-refresh every N s (min 30); 0 
 read_only = true                           # status bar shows RO; actions (M4) disabled
 ```
 
-A mistake in the file (unknown key, wrong type) doesn't stop az9s: it starts
+A mistake in the file (unknown key, wrong type) doesn't stop c9s: it starts
 with the defaults and the status bar names the line and the problem.
 
 ### Themes
@@ -153,7 +167,7 @@ with the defaults and the status bar names the line and the problem.
 | `dracula`, `nord`, `gruvbox`, `catppuccin`, `tokyo-night`, `solarized-dark` | its own, dark | the colour schemes of the same names |
 | `solarized-light` | its own, light | |
 
-Set one with `theme = "nord"` in the config file, or try them while az9s runs
+Set one with `theme = "nord"` in the config file, or try them while c9s runs
 with `:theme <name>` (`:theme` lists them; Tab completes). `:theme` lasts until
 you quit; the config file keeps it.
 
@@ -162,14 +176,14 @@ you quit; the config file keeps it.
 | Symptom | Try |
 |---|---|
 | "Not connected to Azure" | Run `az login`, then press `r` |
-| "the Azure CLI (az) was not found" | Install the Azure CLI and check `az --version` runs in the same terminal. On Windows, update to az9s 0.12.1 or later (earlier versions couldn't start `az.cmd`) |
-| "No read access to management groups" | Expected without Reader on management groups: az9s starts on the subscription list, and `:sub`, `:rg`, `:res` work. Set `start = "sub"` in the config to skip the tree |
+| "the Azure CLI (az) was not found" | Install the Azure CLI and check `az --version` runs in the same terminal. On Windows, update to c9s 0.12.1 or later (earlier versions couldn't start `az.cmd`) |
+| "No read access to management groups" | Expected without Reader on management groups: c9s starts on the subscription list, and `:sub`, `:rg`, `:res` work. Set `start = "sub"` in the config to skip the tree |
 | "Management group tree unavailable" | You need read access on the tenant root management group; `:sub` and `:rg all` still work |
 | Status bar says "Resource Graph unavailable … used ARM" | Lists still load, but more slowly; check `just run-debug` logs |
-| A resource you just changed looks stale | Resource Graph can lag ARM briefly; press `r`, or run with `AZ9S_BACKEND=arm` |
-| `o` says "No browser could be started" (e.g. WSL) | The Portal link is copied instead; paste it into a browser. On WSL, installing `wslu` (`wslview`) helps, though az9s also tries `cmd.exe` |
+| A resource you just changed looks stale | Resource Graph can lag ARM briefly; press `r`, or run with `C9S_BACKEND=arm` |
+| `o` says "No browser could be started" (e.g. WSL) | The Portal link is copied instead; paste it into a browser. On WSL, installing `wslu` (`wslview`) helps, though c9s also tries `cmd.exe` |
 | `:ctx` switch fails with "no token for tenant" | Run `az login --tenant <id>` once for that tenant, then switch again |
-| Something feels slow | Run `az9s --timings` and include the table in an issue |
+| Something feels slow | Run `c9s --timings` and include the table in an issue |
 
 ## Contributing
 
