@@ -15,9 +15,9 @@ build-release:
 run:
     RUST_LOG=off cargo run --release --quiet
 
-# Run the app with debug logging to az9s.log
+# Run the app with debug logging to c9s.log
 run-debug:
-    RUST_LOG=debug cargo run 2> az9s.log
+    RUST_LOG=debug cargo run 2> c9s.log
 
 # Run and print a timing summary on exit (Azure calls, cache, frame times)
 run-timings:
@@ -25,7 +25,7 @@ run-timings:
 
 # Rendering performance checks with 100k rows (release build)
 perf:
-    cargo test --release -p az9s-tui --test render_large_list -- --ignored --nocapture
+    cargo test --release -p c9s-tui --test render_large_list -- --ignored --nocapture
 
 # Run all tests
 test:
@@ -49,9 +49,9 @@ ci:
 bump part:
     bash scripts/bump-version.sh {{part}}
 
-# Install the az9s binary from source
+# Install the c9s binary from source
 install:
-    cargo install --path crates/az9s --locked
+    cargo install --path crates/c9s --locked
 
 # Remove build artifacts
 clean:

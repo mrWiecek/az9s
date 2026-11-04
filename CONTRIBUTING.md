@@ -1,6 +1,6 @@
-# Contributing to az9s
+# Contributing to c9s
 
-Thanks for helping. az9s is in early development, so the [roadmap](ROADMAP.md) is the
+Thanks for helping. c9s is in early development, so the [roadmap](ROADMAP.md) is the
 best place to find work that will be accepted.
 
 ## Setup
@@ -11,7 +11,7 @@ best place to find work that will be accepted.
 3. Build and run:
    ```bash
    just run          # release build, logging off
-   just run-debug    # debug build, logs to az9s.log
+   just run-debug    # debug build, logs to c9s.log
    ```
 
 ## Before opening a PR
@@ -21,7 +21,7 @@ just ci   # fmt --check, clippy -D warnings, tests
 ```
 
 - Keep PRs small and focused on one roadmap item or bug.
-- Add tests for logic in `az9s-core` and `az9s-azure` (parsing, filtering, state
+- Add tests for logic in `c9s-core` and `c9s-azure` (parsing, filtering, state
   transitions). UI code is tested by rendering into ratatui's `TestBackend`
   where practical.
 - **Speed is the feature.** Never `await` network I/O on the UI path.

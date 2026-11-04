@@ -12,9 +12,9 @@ labels: bug
 1.
 
 **Environment**
-- az9s version / commit:
+- c9s version / commit:
 - OS and terminal:
 - `az --version` (first line):
 - Rough scale (number of subscriptions / resources):
 
-**Logs** (run `just run-debug` and attach relevant lines from `az9s.log`; remove any IDs you consider sensitive)
+**Logs** (run `just run-debug` and attach relevant lines from `c9s.log`; remove any IDs you consider sensitive)

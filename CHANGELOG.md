@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to az9s are documented in this file.
+All notable changes to c9s (az9s before v1.0.0) are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -11,6 +11,19 @@ Every version below has a git tag (`vX.Y.Z`) and a
 Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-11-04
+
+### Changed
+- **az9s is now c9s**, *canines for clouds*: the command, crates, release
+  archives and docs carry the new name, ahead of browsing other clouds
+  (see ROADMAP, M6). This is the only change, but the command's name is,
+  so the version is 1.0.0.
+- On first start, the az9s config file and cache move to c9s's own
+  directories (e.g. `~/.config/az9s` → `~/.config/c9s`), so settings and
+  cached lists carry over.
+- Environment variables are now `C9S_CONFIG` and `C9S_BACKEND`; the
+  `AZ9S_` names still work. `alias az9s=c9s` keeps the old command.
 
 ## [0.22.1] - 2026-11-04
 
@@ -642,7 +655,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/az9s/compare/v0.22.1...HEAD
+[Unreleased]: https://github.com/mrWiecek/az9s/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/mrWiecek/az9s/compare/v0.22.1...v1.0.0
 [0.22.1]: https://github.com/mrWiecek/az9s/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/mrWiecek/az9s/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/mrWiecek/az9s/compare/v0.20.0...v0.21.0

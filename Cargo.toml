@@ -1,17 +1,17 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/az9s",
-    "crates/az9s-core",
-    "crates/az9s-azure",
-    "crates/az9s-tui",
+    "crates/c9s",
+    "crates/c9s-core",
+    "crates/c9s-azure",
+    "crates/c9s-tui",
 ]
 
 [workspace.package]
-version = "0.22.1"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.88"
-authors = ["az9s contributors"]
+authors = ["c9s contributors"]
 license = "Apache-2.0"
 repository = "https://github.com/mrWiecek/az9s"
 
