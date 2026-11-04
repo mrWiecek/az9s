@@ -228,3 +228,29 @@ async fn settle(app: &mut App, rx: &mut c9s_core::loader::LoadReceiver) {
         app.apply(rx.recv().await.unwrap());
     }
 }
+
+#[tokio::test]
+async fn without_the_azure_cli_c9s_starts_on_ctx() {
+    let mut app = App::offline(Cache::new(Path::new(":memory:")).unwrap());
+    let mut rx = app.take_load_receiver().unwrap();
+    app.start_without_azure(Default::default());
+    assert_eq!(app.state().view, c9s_core::state::ViewMode::TenantList);
+    assert!(
+        app.state()
+            .notice
+            .as_deref()
+            .unwrap_or_default()
+            .contains("No Azure CLI"),
+        "{:?}",
+        app.state().notice
+    );
+    settle(&mut app, &mut rx).await;
+    // Azure requests say how to sign in.
+    app.request(LoadRequest::Subscriptions);
+    settle(&mut app, &mut rx).await;
+    let error = app.state().error.clone().unwrap_or_default();
+    assert!(
+        error.contains("Azure CLI (az) was not found") && error.contains(":ctx"),
+        "{error}"
+    );
+}

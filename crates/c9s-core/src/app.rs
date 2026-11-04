@@ -88,26 +88,49 @@ impl App {
             fetcher.warm_up();
         }
         let mut app = Self::with_fetcher(cache, fetcher);
-        if let Some(auth) = auth {
-            let aws_role = loaded.config.aws_role.clone();
-            app.set_fetcher_factory(Arc::new(
-                move |provider: Provider, context: Option<&str>| {
-                    let fetcher: Arc<dyn Fetcher> = match provider {
-                        Provider::Azure => Self::azure_fetcher(auth.clone(), context),
-                        Provider::Gcp => {
-                            Arc::new(crate::gcp::GcpFetcher::new(context.map(str::to_string)))
-                        }
-                        Provider::Aws => {
-                            Arc::new(crate::aws::AwsFetcher::new(context?, aws_role.as_deref()))
-                        }
-                    };
-                    fetcher.warm_up();
-                    Some(fetcher)
-                },
-            ));
+        // No Azure CLI at all: someone using c9s for Google Cloud or AWS.
+        let azure = auth.is_some() && on_path("az");
+        let aws_role = loaded.config.aws_role.clone();
+        // Every cloud's fetcher: Google Cloud and AWS work without an
+        // Azure login.
+        app.set_fetcher_factory(Arc::new(
+            move |provider: Provider, context: Option<&str>| {
+                let fetcher: Arc<dyn Fetcher> = match provider {
+                    Provider::Azure => Self::azure_fetcher(auth.clone()?, context),
+                    Provider::Gcp => {
+                        Arc::new(crate::gcp::GcpFetcher::new(context.map(str::to_string)))
+                    }
+                    Provider::Aws => {
+                        Arc::new(crate::aws::AwsFetcher::new(context?, aws_role.as_deref()))
+                    }
+                };
+                fetcher.warm_up();
+                Some(fetcher)
+            },
+        ));
+        if !azure {
+            app.start_without_azure(loaded);
+            return Ok(app);
         }
         app.apply_config(loaded);
         Ok(app)
+    }
+
+    /// Start without the Azure CLI: on `:ctx`, so a Google Cloud or AWS
+    /// context can be picked; Azure requests say how to sign in.
+    pub fn start_without_azure(&mut self, loaded: config::Loaded) {
+        self.state.config = loaded.config;
+        self.loader
+            .replace_fetcher(Some(Arc::new(crate::loader::ContextsOnly)));
+        self.state.view = ViewMode::TenantList;
+        self.state.list_state.reset();
+        self.request(LoadRequest::CloudContexts);
+        self.state.notice = Some(match loaded.problem {
+            Some(problem) => format!("Config {problem}"),
+            None => "No Azure CLI (az) found: pick a Google Cloud or AWS context, \
+                     or install the Azure CLI, run az login and restart"
+                .into(),
+        });
     }
 
     /// Start with `loaded`: the first view, and the background loads. Says
@@ -1090,6 +1113,15 @@ impl App {
                         "Azure refresh failed ({e}); showing cached {}{age}",
                         kind.label()
                     ));
+                } else if kind == LoadKind::Subscriptions && self.state.provider == Provider::Azure
+                {
+                    // Not signed in to Azure, perhaps on purpose: the other
+                    // clouds are one command away.
+                    self.state.set_error(Some(format!(
+                        "Failed to load {}: {e}\n\nOther clouds: :ctx lists your gcloud \
+                         configurations and AWS profiles.",
+                        kind.label()
+                    )));
                 } else {
                     self.state
                         .set_error(Some(format!("Failed to load {}: {}", kind.label(), e)));
@@ -1402,6 +1434,22 @@ fn merge(acc: &mut Option<LoadedData>, data: LoadedData) {
         // A tree arrives whole; the newest replaces the rest.
         (Some(_), other) => *acc = Some(other),
     }
+}
+
+/// Whether `program` is on the PATH (`.exe` or `.cmd` on Windows).
+fn on_path(program: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    let names: Vec<String> = if cfg!(windows) {
+        ["exe", "cmd", "bat"]
+            .iter()
+            .map(|ext| format!("{program}.{ext}"))
+            .collect()
+    } else {
+        vec![program.to_string()]
+    };
+    std::env::split_paths(&path).any(|dir| names.iter().any(|n| dir.join(n).is_file()))
 }
 
 #[cfg(test)]

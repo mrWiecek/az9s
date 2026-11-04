@@ -316,8 +316,9 @@ How the clouds line up:
       Several accounts need Organizations (from the management account) and
       a role per account. Credentials from the `aws` CLI, requests signed by
       c9s (no AWS SDK).
-- [ ] **Polish** (~1–2 days). Per-cloud setup docs, help, mock-API tests,
-      CI.
+- [x] **Polish** (v1.5.1). Per-cloud setup docs (`docs/CLOUDS.md`), help,
+      starting without the Azure CLI; mock-API tests run in CI. Still open:
+      trying GCP and AWS against real accounts.
 
 Order: rename first, then the abstraction, then GCP (proves the abstraction
 on the easier cloud), then AWS.
