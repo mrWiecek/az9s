@@ -46,6 +46,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("role", "role definitions, built-in and custom"),
     ("access", "everything one user, group or app can do"),
     ("group", "directory groups and their members"),
+    ("app", "app registrations and enterprise applications"),
     ("ctx", "switch tenant"),
 ];
 
@@ -363,7 +364,7 @@ mod tests {
             ["type", "tag", "exemption", "ctx"],
             "starting with t, then containing t"
         );
-        assert_eq!(texts("").len(), 14);
+        assert_eq!(texts("").len(), 15);
         assert_eq!(texts("comp"), ["compliance"]);
         assert!(texts("xyz").is_empty());
     }

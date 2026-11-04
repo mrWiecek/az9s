@@ -328,6 +328,9 @@ pub fn entra_portal_url(
         "user" => {
             format!("Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/{id}")
         }
+        "application" => {
+            format!("Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/Overview/appId/{app_id}")
+        }
         "servicePrincipal" => {
             format!("Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Overview/objectId/{id}/appId/{app_id}")
         }

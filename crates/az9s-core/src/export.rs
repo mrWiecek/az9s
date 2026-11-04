@@ -111,6 +111,45 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
                 ),
             )
         }
+        ViewMode::AppList => {
+            let rows = state.app_rows();
+            let lines = rows.iter().map(|r| {
+                let soonest = r
+                    .soonest
+                    .as_ref()
+                    .map(|(e, c)| {
+                        format!(
+                            "{} ({} {})",
+                            crate::policy::expiry_label(*e),
+                            c.kind,
+                            c.name
+                        )
+                    })
+                    .unwrap_or_default();
+                tsv(&[
+                    &r.name,
+                    r.kind.label(),
+                    &r.app_id,
+                    &soonest,
+                    r.app.as_ref().map_or("", |a| a.id.as_str()),
+                    r.sp.as_ref().map_or("", |s| s.id.as_str()),
+                ])
+            });
+            (
+                count(rows.len(), "application"),
+                with_header(
+                    "name\tkind\tapp id\tsoonest credential expiry\tregistration object id\tenterprise app object id",
+                    lines,
+                ),
+            )
+        }
+        ViewMode::AppDetail => {
+            let row = state.app_open.as_ref()?;
+            (
+                format!("{} of {}", state.app_tab.title(), row.name),
+                crate::app_view::app_text(state),
+            )
+        }
         ViewMode::GroupList => {
             let rows = state.group_rows();
             let lines = rows.iter().map(|g| {

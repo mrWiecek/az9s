@@ -93,6 +93,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("ra all", "Role assignments in the whole tenant"),
     ("role", "Role definitions, built-in and custom"),
     ("group", "Directory groups and their members"),
+    ("app", "App registrations and enterprise applications"),
     ("ctx", "Switch tenant"),
 ];
 

@@ -66,6 +66,10 @@ impl Fetcher for SlowAzure {
                 LoadRequest::RoleAssignments { .. } => LoadedData::RoleAssignments(vec![]),
                 LoadRequest::Principals { .. } => LoadedData::Principals(vec![]),
                 LoadRequest::Groups => LoadedData::Groups(vec![]),
+                LoadRequest::Applications => LoadedData::Applications(vec![], vec![]),
+                LoadRequest::AppDetail { app_id, .. } => {
+                    LoadedData::AppDetail(app_id, Box::default())
+                }
                 LoadRequest::GroupMembers {
                     group_id,
                     transitive,
