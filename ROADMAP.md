@@ -42,7 +42,7 @@ changes (see [RELEASING.md](RELEASING.md)). The first tagged release is
 | M3 | Policy | 3 wk | Azure Policy at management-group scope: assignments, compliance, exemptions |
 | M4 | Operate | 3 wk | Safe action framework + first actions |
 | M5 | Rich views & polish | ongoing | AKS, Key Vault, logs, themes, packaging |
-| M6 | Multi-cloud: c2t | ~13–19 days | Rename to **c2t** (Cloud to Terminal); browse GCP and AWS next to Azure |
+| M6 | Multi-cloud: c9s | ~13–19 days | Rename to **c9s** ("canines for clouds"); browse GCP and AWS next to Azure |
 
 ---
 
@@ -256,10 +256,10 @@ Work items, in order:
 - Custom keybindings and themes.
 - Packaging for Homebrew, winget, Scoop and AUR.
 
-## M6 — Multi-cloud: c2t (estimate: ~13–19 working days, 7–10 PRs)
+## M6 — Multi-cloud: c9s (estimate: ~13–19 working days, 7–10 PRs)
 
-Proposed, not started. az9s becomes **c2t** ("Cloud to Terminal") and browses
-GCP and AWS resources next to Azure. Azure keeps its depth (Policy, RBAC,
+Started. az9s becomes **c9s**, *canines for clouds* (after k9s, canines for
+Kubernetes), and browses GCP and AWS resources next to Azure. Azure keeps its depth (Policy, RBAC,
 Entra ID); the other clouds get browsing.
 
 Today about half of `az9s-core` (~15k lines) speaks Azure directly: the
@@ -278,10 +278,10 @@ How the clouds line up:
 | Inventory | Resource Graph | Cloud Asset Inventory (`searchAllResources`) | Resource Explorer; Tagging API fallback |
 | Login | `az` CLI | `gcloud auth print-access-token` | `aws configure export-credentials` / SSO |
 
-- [ ] **Rename to c2t** (~0.5 day). Crates, binary, config and cache
+- [ ] **Rename to c9s** (~0.5 day). Crates, binary, config and cache
       directories (existing `~/.config/az9s` moved over), `AZ9S_*` variables
       (old names still read), release artifacts, docs, repository (GitHub
-      redirects). A renamed binary is breaking: **c2t v1.0.0**, Azure only.
+      redirects). A renamed binary is breaking: **c9s v1.0.0**, Azure only.
 - [ ] **Provider abstraction in core** (~4–6 days; the main risk). A generic
       resource (provider, account, container, type, location, tags/labels)
       and hierarchy tree; generic load requests (hierarchy, containers,
@@ -299,7 +299,7 @@ How the clouds line up:
       the Tagging API is per region and misses some untagged resources.
       Several accounts need Organizations (from the management account) and
       a role per account. Credentials from the `aws` CLI, requests signed by
-      c2t (no AWS SDK).
+      c9s (no AWS SDK).
 - [ ] **Polish** (~1–2 days). Per-cloud setup docs, help, mock-API tests,
       CI.
 
@@ -308,8 +308,8 @@ on the easier cloud), then AWS.
 
 Open questions before starting:
 
-1. Is **c2t** final (free on crates.io, Homebrew, GitHub)? Should `az9s`
-   keep working as an alias for one release?
+1. ~~Name~~: **c9s**, decided (free on crates.io; three keys, no Shift).
+   Should `az9s` keep working as an alias for one release?
 2. **AWS scope:** single profiles only, or Organizations with a role per
    account (the biggest effort lever)?
 3. Azure-only features stay Azure-only (proposed): IAM views for GCP and
@@ -321,7 +321,7 @@ Open questions before starting:
 
 | Decision | Choice | Status |
 |---|---|---|
-| Name | az9s (binary, crates, data dir) | **Decided** |
+| Name | az9s (binary, crates, data dir); becomes **c9s**, "canines for clouds", in M6 | **Decided** |
 | Who it's for | Platform engineers; open source | **Decided** |
 | Product shape | Operations tool (not read-only browser) | **Decided** |
 | Generic vs rich views | Generic for all types (M2). Rich views for AKS, VM, App Service/Functions, Key Vault, plus Policy | **Decided** |
@@ -334,4 +334,4 @@ Open questions before starting:
 | Default scope | Tenant root management group | **Decided** |
 | Read backend | Azure Resource Graph for lists, ARM for single-resource reads and writes | Proposed (validate in M1) |
 | Multi-tenant | Switch tenants with `:ctx`; no parallel multi-tenant view | Done (v0.10.0) |
-| Multi-cloud | Rename to c2t; browse GCP and AWS beside Azure (M6) | Proposed (open questions in M6) |
+| Multi-cloud | Rename to c9s; browse GCP and AWS beside Azure (M6) | **Decided** (AWS scope still open, see M6) |
