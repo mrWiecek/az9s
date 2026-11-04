@@ -3,7 +3,7 @@
 *Canines for clouds.* A fast, keyboard-first terminal UI for Azure, in the
 spirit of k9s. Formerly **az9s**: see [Upgrading from az9s](#upgrading-from-az9s).
 
-![c9s logo](assets/az9s-logo.jpg)
+![c9s: k9s for clouds](assets/c9s-banner.png)
 
 **A fast, keyboard-first terminal UI for operating Azure, built for platform engineers.**
 
