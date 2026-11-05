@@ -1533,6 +1533,9 @@ impl TuiApp {
         let Some(id) = self.state().selected_arm_id() else {
             return;
         };
+        // An ID is pasted into shells: no control characters (a newline
+        // would run what follows it).
+        let id = c9s_core::safe_text::clean(&id).into_owned();
         let notice = match self.desktop.copy(&id) {
             Ok(()) => format!("Copied {id}"),
             Err(e) => format!("Could not copy ({e}): {id}"),
@@ -1650,6 +1653,9 @@ impl TuiApp {
             self.state_mut().notice = Some("Nothing to copy here".into());
             return;
         };
+        // Cloud text can carry control characters that would act when
+        // pasted into a shell or terminal.
+        let text = c9s_core::safe_text::clean_lines(&text);
         let size = if text.len() >= 1024 {
             format!("{} KB", text.len() / 1024)
         } else {

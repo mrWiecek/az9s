@@ -1,18 +1,33 @@
+use crate::resource_graph::{CredentialTokenSource, TokenSource, DEFAULT_ENDPOINT};
 use crate::{auth::AuthProvider, models::*, AzureError, Result};
-use azure_mgmt_resources::Client as ResourcesClient;
 use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
-/// Azure API client
+/// Azure Resource Manager lists (the `C9S_BACKEND=arm` fallback) and the
+/// CLI's subscriptions.
 pub struct AzureClient {
-    auth: Arc<dyn AuthProvider>,
+    http: reqwest::Client,
+    endpoint: String,
+    tokens: Arc<dyn TokenSource>,
 }
 
 impl AzureClient {
-    /// Create a new Azure client
+    /// ARM with the Azure CLI's login.
     pub fn new(auth: Arc<dyn AuthProvider>) -> Self {
-        Self { auth }
+        Self::with_endpoint(
+            DEFAULT_ENDPOINT,
+            Arc::new(CredentialTokenSource(auth.credential())),
+        )
+    }
+
+    /// Another endpoint (tests).
+    pub fn with_endpoint(endpoint: &str, tokens: Arc<dyn TokenSource>) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            endpoint: endpoint.trim_end_matches('/').to_string(),
+            tokens,
+        }
     }
 
     /// List all subscriptions
@@ -21,6 +36,7 @@ impl AzureClient {
 
         let output =
             crate::cli::az_command("az", &["account", "list", "--all", "--output", "json"])
+                .map_err(|e| AzureError::ApiError(crate::cli::start_error(&e)))?
                 .output()
                 .await
                 .map_err(|e| AzureError::ApiError(crate::cli::start_error(&e)))?;
@@ -66,84 +82,37 @@ impl AzureClient {
         &self,
         subscription_id: &str,
     ) -> Result<Vec<AzureResourceGroup>> {
-        info!(
-            "Fetching resource groups for subscription {}",
-            subscription_id
+        info!("Fetching resource groups for subscription {subscription_id}");
+        let path = format!(
+            "/subscriptions/{}/resourcegroups?api-version={ARM_API_VERSION}",
+            segment(subscription_id)?
         );
-
-        let credential = self.auth.credential();
-
-        // Create a resources client for the specific subscription
-        let client = ResourcesClient::builder(credential.clone())
-            .build()
-            .map_err(|e| AzureError::ApiError(format!("Failed to create Azure client: {}", e)))?;
-
-        let mut resource_groups = Vec::new();
-        let mut stream = client
-            .resource_groups_client()
-            .list(subscription_id)
-            .into_stream();
-
-        use futures::StreamExt;
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(page) => {
-                    for rg in page.value {
-                        let name = rg.name.as_deref().unwrap_or("unnamed");
-                        let location = rg.location.as_str();
-                        debug!("Found resource group: {} in {}", name, location);
-
-                        // Parse tags from JSON Value to HashMap
-                        let tags = if let Some(tags_value) = &rg.tags {
-                            if let Some(obj) = tags_value.as_object() {
-                                obj.iter()
-                                    .filter_map(|(k, v)| {
-                                        v.as_str().map(|s| (k.clone(), s.to_string()))
-                                    })
-                                    .collect()
-                            } else {
-                                std::collections::HashMap::new()
-                            }
-                        } else {
-                            std::collections::HashMap::new()
-                        };
-
-                        let azure_rg = AzureResourceGroup {
-                            id: rg.id.clone().unwrap_or_default(),
-                            name: rg.name.clone().unwrap_or_else(|| "Unnamed".to_string()),
-                            location: rg.location.clone(),
-                            subscription_id: subscription_id.to_string(),
-                            tags,
-                        };
-                        resource_groups.push(azure_rg);
-                    }
-                }
-                Err(e) => {
-                    warn!("Error fetching resource group page: {}", e);
-                    return Err(AzureError::ApiError(format!(
-                        "Failed to list resource groups: {}",
-                        e
-                    )));
-                }
-            }
-        }
-
-        info!(
-            "Successfully fetched {} resource groups",
-            resource_groups.len()
-        );
-        Ok(resource_groups)
+        let groups = self
+            .list_all(&path)
+            .await?
+            .into_iter()
+            .map(|rg| AzureResourceGroup {
+                id: text(&rg, "id"),
+                name: Some(text(&rg, "name"))
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| "Unnamed".into()),
+                location: text(&rg, "location"),
+                subscription_id: subscription_id.to_string(),
+                tags: tags_to_map(rg.get("tags")),
+            })
+            .collect::<Vec<_>>();
+        info!("Fetched {} resource groups", groups.len());
+        Ok(groups)
     }
 
     /// List resources in a subscription
     pub async fn list_resources(&self, subscription_id: &str) -> Result<Vec<AzureResource>> {
-        info!("Fetching resources for subscription {}", subscription_id);
-        let client = self.resources_client()?;
-        let stream = client
-            .resources_client()
-            .list(subscription_id)
-            .into_stream();
-        collect_resources(stream, subscription_id).await
+        info!("Fetching resources for subscription {subscription_id}");
+        let path = format!(
+            "/subscriptions/{}/resources?api-version={ARM_API_VERSION}",
+            segment(subscription_id)?
+        );
+        Ok(resources(self.list_all(&path).await?, subscription_id))
     }
 
     /// List resources in a single resource group (server-side filtered)
@@ -152,61 +121,151 @@ impl AzureClient {
         subscription_id: &str,
         resource_group: &str,
     ) -> Result<Vec<AzureResource>> {
-        info!(
-            "Fetching resources for resource group {} in subscription {}",
-            resource_group, subscription_id
+        info!("Fetching resources for resource group {resource_group} in {subscription_id}");
+        let path = format!(
+            "/subscriptions/{}/resourceGroups/{}/resources?api-version={ARM_API_VERSION}",
+            segment(subscription_id)?,
+            segment(resource_group)?
         );
-        let client = self.resources_client()?;
-        let stream = client
-            .resources_client()
-            .list_by_resource_group(resource_group, subscription_id)
-            .into_stream();
-        collect_resources(stream, subscription_id).await
+        Ok(resources(self.list_all(&path).await?, subscription_id))
     }
 
-    fn resources_client(&self) -> Result<ResourcesClient> {
-        ResourcesClient::builder(self.auth.credential())
-            .build()
-            .map_err(|e| AzureError::ApiError(format!("Failed to create Azure client: {}", e)))
+    /// Every page of an ARM list (`value`, `nextLink`). A `nextLink` must
+    /// stay on the ARM endpoint: the token is never sent elsewhere.
+    async fn list_all(&self, path: &str) -> Result<Vec<serde_json::Value>> {
+        let token = self.tokens.token().await?;
+        let mut url = format!("{}{path}", self.endpoint);
+        let mut items = Vec::new();
+        loop {
+            let response = self
+                .http
+                .get(&url)
+                .bearer_auth(&token)
+                .send()
+                .await
+                .map_err(|e| AzureError::ApiError(format!("ARM request failed: {e}")))?;
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .map_err(|e| AzureError::ApiError(format!("ARM response: {e}")))?;
+            if !status.is_success() {
+                warn!("ARM list failed: HTTP {}", status.as_u16());
+                return Err(AzureError::Http {
+                    status: status.as_u16(),
+                    message: crate::resource_graph::error_message(&body),
+                });
+            }
+            let page: serde_json::Value = serde_json::from_str(&body)
+                .map_err(|e| AzureError::ApiError(format!("invalid ARM response: {e}")))?;
+            if let Some(serde_json::Value::Array(values)) = page.get("value") {
+                items.extend(values.iter().cloned());
+            }
+            match page.get("nextLink").and_then(|l| l.as_str()) {
+                Some(next) if !next.is_empty() => url = next_page(next, &self.endpoint)?,
+                _ => break,
+            }
+        }
+        debug!("Fetched {} items", items.len());
+        Ok(items)
     }
 }
 
-/// Drain a paged ARM resource listing into `AzureResource`s.
-async fn collect_resources<S>(mut stream: S, subscription_id: &str) -> Result<Vec<AzureResource>>
-where
-    S: futures::Stream<Item = azure_core::Result<azure_mgmt_resources::models::ResourceListResult>>
-        + Unpin,
-{
-    use futures::StreamExt;
-    let mut resources = Vec::new();
-    while let Some(page) = stream.next().await {
-        let page = page.map_err(|e| {
-            warn!("Error fetching resource page: {}", e);
-            AzureError::ApiError(format!("Failed to list resources: {}", e))
-        })?;
-        for resource in page.value {
-            let res = &resource.generic_resource.resource;
-            let resource_group = res
-                .id
-                .as_ref()
-                .and_then(|id| extract_resource_group(id))
-                .unwrap_or_else(|| "Unknown".to_string());
-            resources.push(AzureResource {
-                id: res.id.clone().unwrap_or_default(),
-                name: res.name.clone().unwrap_or_else(|| "Unnamed".to_string()),
-                resource_type: res.type_.clone().unwrap_or_else(|| "Unknown".to_string()),
-                location: res
-                    .location
-                    .clone()
-                    .unwrap_or_else(|| "Unknown".to_string()),
-                resource_group,
-                subscription_id: subscription_id.to_string(),
-                tags: tags_to_map(res.tags.as_ref()),
-            });
-        }
+/// ARM's API version for resource and resource group lists.
+const ARM_API_VERSION: &str = "2021-04-01";
+
+/// A subscription ID or resource group name as one URL path segment:
+/// refused if it could change the path (`/`, `?`, `#`, `..`).
+fn segment(value: &str) -> Result<&str> {
+    let bad = value.is_empty()
+        || value == "."
+        || value == ".."
+        || value
+            .chars()
+            .any(|c| matches!(c, '/' | '\\' | '?' | '#' | '%') || c.is_control());
+    if bad {
+        Err(AzureError::ApiError(format!(
+            "invalid name in an Azure path: {value:?}"
+        )))
+    } else {
+        Ok(value)
     }
-    debug!("Fetched {} resources", resources.len());
-    Ok(resources)
+}
+
+/// The next page's URL, if it stays on `endpoint`'s scheme and host: a
+/// paging link from a response must never carry the token elsewhere.
+pub fn next_page(next: &str, endpoint: &str) -> Result<String> {
+    if same_origin(next, endpoint) {
+        Ok(next.to_string())
+    } else {
+        Err(AzureError::ApiError(format!(
+            "refused to follow a nextLink to another host: {next}"
+        )))
+    }
+}
+
+/// An ARM ID from a response, as a path below the endpoint: it must start
+/// with `/` and can't leave the path (`?`, `#`, `..`, `//`, `@`, `\\`).
+pub fn arm_path(id: &str) -> Result<&str> {
+    let ok = id.starts_with('/')
+        && !id.starts_with("//")
+        && !id.contains("/../")
+        && !id.ends_with("/..")
+        && !id
+            .chars()
+            .any(|c| matches!(c, '?' | '#' | '@' | '\\' | '%') || c.is_control() || c == ' ');
+    if ok {
+        Ok(id)
+    } else {
+        Err(AzureError::InvalidConfig(format!("not an ARM ID: {id}")))
+    }
+}
+
+/// Whether `url` is on the same scheme and host as `endpoint`.
+pub fn same_origin(url: &str, endpoint: &str) -> bool {
+    fn origin(u: &str) -> Option<(&str, &str)> {
+        let (scheme, rest) = u.split_once("://")?;
+        let host = rest.split(['/', '?', '#']).next()?;
+        Some((scheme, host))
+    }
+    match (origin(url), origin(endpoint)) {
+        (Some((s1, h1)), Some((s2, h2))) => {
+            s1.eq_ignore_ascii_case(s2) && h1.eq_ignore_ascii_case(h2) && !h1.contains('@')
+        }
+        _ => false,
+    }
+}
+
+fn text(v: &serde_json::Value, key: &str) -> String {
+    v.get(key)
+        .and_then(|s| s.as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// ARM resources as `AzureResource`s.
+fn resources(items: Vec<serde_json::Value>, subscription_id: &str) -> Vec<AzureResource> {
+    items
+        .iter()
+        .map(|r| {
+            let id = text(r, "id");
+            AzureResource {
+                resource_group: extract_resource_group(&id).unwrap_or_else(|| "Unknown".into()),
+                name: Some(text(r, "name"))
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| "Unnamed".into()),
+                resource_type: Some(text(r, "type"))
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or_else(|| "Unknown".into()),
+                location: Some(text(r, "location"))
+                    .filter(|l| !l.is_empty())
+                    .unwrap_or_else(|| "Unknown".into()),
+                subscription_id: subscription_id.to_string(),
+                tags: tags_to_map(r.get("tags")),
+                id,
+            }
+        })
+        .collect()
 }
 
 /// Convert ARM's JSON tag object into a string map (non-string values are dropped)
@@ -244,6 +303,91 @@ mod tests {
     fn test_extract_resource_group_no_rg() {
         let id = "/subscriptions/sub-id/providers/Microsoft.Compute/virtualMachines/my-vm";
         assert_eq!(extract_resource_group(id), None);
+    }
+
+    #[test]
+    fn next_links_stay_on_the_endpoint() {
+        let arm = "https://management.azure.com";
+        assert!(same_origin(
+            "https://management.azure.com/subscriptions/s/resources?$skiptoken=x",
+            arm
+        ));
+        assert!(!same_origin("https://evil.example/steal", arm));
+        assert!(!same_origin("http://management.azure.com/x", arm));
+        assert!(!same_origin(
+            "https://management.azure.com@evil.example/x",
+            arm
+        ));
+        assert!(!same_origin(
+            "https://management.azure.com.evil.example/x",
+            arm
+        ));
+    }
+
+    #[test]
+    fn arm_ids_stay_paths_on_the_endpoint() {
+        let id = "/providers/Microsoft.Authorization/roleDefinitions/acdd72a7";
+        assert_eq!(arm_path(id).unwrap(), id);
+        for bad in [
+            "@evil.example/providers/Microsoft.Authorization/roleDefinitions/x",
+            "//evil.example/x",
+            "/a/../../x",
+            "/x?y=1",
+            "/x#y",
+            "x/y",
+        ] {
+            assert!(arm_path(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn path_segments_cannot_change_the_path() {
+        assert!(segment("rg-prod").is_ok());
+        assert!(segment("00000000-0000-0000-0000-000000000000").is_ok());
+        for bad in ["", "..", "a/b", "a?b", "a#b", "%2e%2e"] {
+            assert!(segment(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn resources_are_listed_across_pages_on_the_endpoint_only() {
+        use crate::testing::{ok, serve_paths, StaticToken};
+        use std::sync::Mutex;
+        let me = Arc::new(Mutex::new(String::new()));
+        let base = me.clone();
+        let (endpoint, _) = serve_paths(move |path, _| {
+            if path.contains("skiptoken") {
+                return ok(serde_json::json!({"value": [
+                    {"id": "/subscriptions/s/resourceGroups/rg/providers/A/b/two", "name": "two",
+                     "type": "A/b", "location": "westeurope", "tags": {"env": "prod"}}
+                ]}));
+            }
+            let next = format!(
+                "{}/subscriptions/s/resources?$skiptoken=2",
+                base.lock().unwrap()
+            );
+            ok(serde_json::json!({"value": [
+                {"id": "/subscriptions/s/resourceGroups/rg/providers/A/b/one", "name": "one",
+                 "type": "A/b", "location": "westeurope"}
+            ], "nextLink": next}))
+        })
+        .await;
+        *me.lock().unwrap() = endpoint.clone();
+        let client = AzureClient::with_endpoint(&endpoint, Arc::new(StaticToken("t".into())));
+        let found = client.list_resources("s").await.unwrap();
+        assert_eq!(found.len(), 2, "both pages");
+        assert_eq!(found[1].resource_group, "rg");
+        assert_eq!(found[1].tags.get("env").map(String::as_str), Some("prod"));
+
+        // A nextLink to another host is refused rather than followed with
+        // the token.
+        let (evil, _) = serve_paths(|_, _| {
+            ok(serde_json::json!({"value": [], "nextLink": "https://evil.example/x"}))
+        })
+        .await;
+        let client = AzureClient::with_endpoint(&evil, Arc::new(StaticToken("t".into())));
+        let err = client.list_resources("s").await.unwrap_err();
+        assert!(err.to_string().contains("another host"), "{err}");
     }
 
     #[test]

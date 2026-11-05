@@ -1,28 +1,29 @@
 //! Running the Azure CLI.
 //!
-//! On Windows `az` is a batch file (`az.cmd`). `std::process::Command` only
-//! starts `.exe` files by bare name there, so `Command::new("az")` fails with
-//! "program not found" even though `az` works in a shell. Like the Azure
-//! SDK, run it through `cmd /C` on Windows.
+//! On Windows `az` is a batch file (`az.cmd`); [`c9s_exec`] finds it on the
+//! PATH (never in the current directory) and starts it by full path, so
+//! its arguments are quoted safely for `cmd.exe`.
 
 use tokio::process::Command;
 
-/// A command that runs `az` (or `program`, for tests) with `args`.
-pub fn az_command(program: &str, args: &[&str]) -> Command {
-    let mut command = if cfg!(windows) && program == "az" {
-        let mut c = Command::new("cmd");
-        c.args(["/C", "az"]);
-        c
-    } else {
-        Command::new(program)
-    };
-    command.args(args);
-    command
+/// A command that runs `az` (or `program`, for tests) with `args`. An
+/// argument that could change the command line (a tenant from the config
+/// file with `&` in it, say) is refused; so is an `az` that isn't on the
+/// PATH (reported as "not found").
+pub fn az_command(program: &str, args: &[&str]) -> std::io::Result<Command> {
+    c9s_exec::command(program, args).map_err(|e| match e {
+        c9s_exec::Error::NotFound(_) => std::io::Error::from(std::io::ErrorKind::NotFound),
+        c9s_exec::Error::UnsafeArgument(_) => {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
+        }
+    })
 }
 
 /// A readable error for a CLI that could not be started.
 pub fn start_error(e: &std::io::Error) -> String {
-    if e.kind() == std::io::ErrorKind::NotFound {
+    if e.kind() == std::io::ErrorKind::InvalidInput {
+        format!("did not run the Azure CLI: {e}")
+    } else if e.kind() == std::io::ErrorKind::NotFound {
         "the Azure CLI (az) was not found; install it and make sure `az` runs in this shell".into()
     } else {
         format!("could not run the Azure CLI: {e}")
@@ -38,7 +39,10 @@ mod tests {
     /// `az.cmd`. Elsewhere it is skipped when az isn't installed.
     #[tokio::test]
     async fn the_real_azure_cli_can_be_started() {
-        let result = az_command("az", &["--version"]).output().await;
+        let result = match az_command("az", &["--version"]) {
+            Ok(mut command) => command.output().await,
+            Err(e) => Err(e),
+        };
         let required = cfg!(windows) && std::env::var_os("GITHUB_ACTIONS").is_some();
         match result {
             Ok(output) => assert!(

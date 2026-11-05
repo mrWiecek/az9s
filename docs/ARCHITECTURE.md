@@ -13,6 +13,7 @@ crates/
 ├── c9s-azure   # authentication + Azure API client
 ├── c9s-gcp     # Google Cloud over REST (gcloud for tokens)
 ├── c9s-aws     # AWS over SigV4-signed HTTPS (the aws CLI for credentials)
+├── c9s-exec    # starting az, gcloud and aws safely (PATH only, checked arguments)
 └── c9s-tui     # ratatui/crossterm UI: event loop, key handling, rendering
 ```
 
@@ -52,14 +53,36 @@ through a CLI profile with that account, else the configured role.
 `App::switch_to_aws` and `switch_to_gcp` share `switch_cloud`.
 `LoadRequest::CloudContexts` now returns both clouds' contexts.
 
+## Security boundaries
+
+Cloud data is untrusted (see [SECURITY.md](../SECURITY.md)). The places it
+could act are each guarded once:
+
+- terminal: `ui::draw` ends by cleaning every buffer cell
+  (`safe_text::is_unsafe`);
+- clipboard and spreadsheets: `safe_text::clean`, `clean_lines`,
+  `spreadsheet_cell` (used by `export::tsv`);
+- browser: `desktop::check_url` (https, known console hosts, URL-safe
+  characters) and no shell on any platform;
+- processes: `c9s_exec::command` (PATH-only lookup, full path, checked
+  arguments);
+- outbound requests: `client::next_page`, `client::arm_path`,
+  `c9s_aws::valid_region`.
+
 ## c9s-azure
 
-- `auth.rs`: `AzureAuth` uses `AzureCliCredential` and falls back to
-  `DefaultAzureCredential`. It is exposed through the `AuthProvider` trait.
+No Azure SDK: everything is plain HTTPS (reqwest, rustls).
+
+- `auth.rs`: `AzureAuth` gets tokens from `CliCredential`
+  (`az account get-access-token --scope`, cached per scope until five
+  minutes before expiry). It is exposed through the `AuthProvider` trait.
+- `cli.rs`: `az_command` starts `az` through `c9s-exec`.
 - `client.rs`: `AzureClient`.
   - `list_subscriptions` shells out to `az account list --all`.
-  - `list_resource_groups` and `list_resources` call ARM through
-    `azure_mgmt_resources`, one subscription per call, and page through all results.
+  - `list_resource_groups` and `list_resources` call ARM over HTTPS, one
+    subscription per call, and page through `nextLink`.
+  - `next_page` follows a paging link only on the endpoint's own host;
+    `arm_path` accepts an ARM ID from a response only as a path on it.
 - `resource_graph.rs`: Azure Resource Graph REST client.
   - `query_pages` POSTs KQL scoped to a management group or a subscription list
     and hands each 1000-row page to a callback, in order. After the first page

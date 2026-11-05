@@ -184,6 +184,12 @@ still listed.
 Not for AWS: the Azure-only views (Policy, role assignments, Entra ID),
 which say so.
 
+## Security
+
+c9s only reads, uses your cloud CLIs' logins and treats everything the
+clouds return as untrusted. How, and how to report a vulnerability:
+[SECURITY.md](SECURITY.md).
+
 ## Upgrading from az9s
 
 c9s v1.0.0 is az9s renamed; nothing else changed.

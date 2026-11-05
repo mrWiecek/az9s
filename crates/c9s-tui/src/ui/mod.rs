@@ -71,7 +71,22 @@ pub fn draw(f: &mut Frame, app: &mut TuiApp) -> Result<()> {
         app.state_mut().help_scroll = scroll;
     }
 
+    clean_buffer(f.buffer_mut());
     Ok(())
+}
+
+/// The last step of every frame: no cell may carry a control character or
+/// a bidi override, whatever widget put it there. Cloud data is untrusted
+/// (any tenant member can name a resource or tag it), and an escape
+/// sequence reaching the terminal could set its title, write the
+/// clipboard or redraw the screen.
+fn clean_buffer(buf: &mut ratatui::buffer::Buffer) {
+    for cell in buf.content.iter_mut() {
+        if cell.symbol().chars().any(c9s_core::safe_text::is_unsafe) {
+            let cleaned = c9s_core::safe_text::clean(cell.symbol()).into_owned();
+            cell.set_symbol(&cleaned);
+        }
+    }
 }
 
 /// Draw the header with breadcrumb navigation

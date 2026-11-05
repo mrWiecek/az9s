@@ -307,7 +307,11 @@ pub fn portal_url(arm_id: &str, tenant_id: Option<&str>) -> String {
         .filter(|t| !t.is_empty())
         .map(|t| format!("@{t}"))
         .unwrap_or_default();
-    format!("https://portal.azure.com/#{tenant}/resource{arm_id}")
+    format!(
+        "https://portal.azure.com/#{}/resource{}",
+        encode_path(&tenant),
+        encode_path(arm_id)
+    )
 }
 
 /// Google Cloud console link for a project (`projects/ID`), folder
@@ -398,6 +402,19 @@ pub fn aws_console_url(id: &str) -> String {
     }
 }
 
+/// Percent-encode what a URL path can't carry as is (spaces, quotes,
+/// non-ASCII, `%`...), keeping `/` and the characters ARM IDs use.
+fn encode_path(text: &str) -> String {
+    text.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' => (b as char).to_string(),
+            b'-' | b'.' | b'_' | b'~' | b'/' | b'@' | b'!' | b'$' | b'\'' | b'(' | b')' | b'*'
+            | b'+' | b',' | b';' | b'=' | b':' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 /// Percent-encode a URL query value or path segment.
 fn encode(s: &str) -> String {
     s.bytes()
@@ -436,7 +453,11 @@ pub fn entra_portal_url(
         }
         _ => return None,
     };
-    Some(format!("https://portal.azure.com/#{tenant}/view/{blade}"))
+    Some(format!(
+        "https://portal.azure.com/#{}/view/{}",
+        encode_path(&tenant),
+        encode_path(&blade)
+    ))
 }
 
 /// Text for a JSON scalar; `None` for objects, arrays and null.

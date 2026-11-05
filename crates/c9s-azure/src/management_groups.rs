@@ -94,7 +94,9 @@ impl ManagementGroupClient {
                 nodes.extend(items.iter().filter_map(node_from_item));
             }
             match page.get("nextLink").and_then(Value::as_str) {
-                Some(next) if !next.is_empty() => url = next.to_string(),
+                Some(next) if !next.is_empty() => {
+                    url = crate::client::next_page(next, &self.endpoint)?
+                }
                 _ => break,
             }
         }
@@ -129,7 +131,9 @@ impl ManagementGroupClient {
                 }));
             }
             match page.get("nextLink").and_then(Value::as_str) {
-                Some(next) if !next.is_empty() => url = next.to_string(),
+                Some(next) if !next.is_empty() => {
+                    url = crate::client::next_page(next, &self.endpoint)?
+                }
                 _ => break,
             }
         }
@@ -149,6 +153,7 @@ impl ManagementGroupClient {
                 "not a policy definition ID: {id}"
             )));
         }
+        let id = crate::client::arm_path(id)?;
         let url = format!("{}{}?api-version={}", self.endpoint, id, POLICY_API_VERSION);
         self.get(&url).await
     }
@@ -187,7 +192,9 @@ impl ManagementGroupClient {
                 }));
             }
             match page.get("nextLink").and_then(Value::as_str) {
-                Some(next) if !next.is_empty() => url = next.to_string(),
+                Some(next) if !next.is_empty() => {
+                    url = crate::client::next_page(next, &self.endpoint)?
+                }
                 _ => return Ok(rows),
             }
         }
@@ -205,6 +212,7 @@ impl ManagementGroupClient {
                 "not a role definition ID: {id}"
             )));
         }
+        let id = crate::client::arm_path(id)?;
         let url = format!("{}{}?api-version={}", self.endpoint, id, ROLE_API_VERSION);
         self.get(&url).await
     }

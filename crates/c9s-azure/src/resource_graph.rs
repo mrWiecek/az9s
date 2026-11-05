@@ -9,9 +9,9 @@
 //! the remaining quota is reported in `x-ms-user-quota-remaining` and
 //! `x-ms-user-quota-resets-after` headers, and exceeding it returns 429.
 
+use crate::auth::CliCredential;
 use crate::models::{AzureResource, AzureResourceGroup};
 use crate::{timing, AzureError, Result};
-use azure_core::auth::TokenCredential;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::{stream, StreamExt};
@@ -84,6 +84,7 @@ impl TokenSource for CliTenantTokenSource {
                     "tsv",
                 ],
             )
+            .map_err(|e| AzureError::AuthenticationFailed(crate::cli::start_error(&e)))?
             .output()
             .await
             .map_err(|e| AzureError::AuthenticationFailed(crate::cli::start_error(&e)))?;
@@ -113,17 +114,13 @@ impl TokenSource for CliTenantTokenSource {
 }
 
 /// Tokens from an Azure SDK credential (e.g. the Azure CLI credential).
-pub struct CredentialTokenSource(pub Arc<dyn TokenCredential>);
+pub struct CredentialTokenSource(pub Arc<CliCredential>);
 
 impl TokenSource for CredentialTokenSource {
     fn token(&self) -> BoxFuture<'_, Result<String>> {
         async move {
-            let token = self
-                .0
-                .get_token(&[ARM_SCOPE])
-                .await
-                .map_err(|e| AzureError::AuthenticationFailed(e.to_string()))?;
-            Ok(token.token.secret().to_string())
+            let token = self.0.get_token(ARM_SCOPE).await?;
+            Ok(token.secret().to_string())
         }
         .boxed()
     }
@@ -132,19 +129,15 @@ impl TokenSource for CredentialTokenSource {
 /// Tokens from an Azure SDK credential for another audience, e.g.
 /// Microsoft Graph (`https://graph.microsoft.com/.default`).
 pub struct ScopedCredentialTokenSource {
-    pub credential: Arc<dyn TokenCredential>,
+    pub credential: Arc<CliCredential>,
     pub scope: String,
 }
 
 impl TokenSource for ScopedCredentialTokenSource {
     fn token(&self) -> BoxFuture<'_, Result<String>> {
         async move {
-            let token = self
-                .credential
-                .get_token(&[self.scope.as_str()])
-                .await
-                .map_err(|e| AzureError::AuthenticationFailed(e.to_string()))?;
-            Ok(token.token.secret().to_string())
+            let token = self.credential.get_token(&self.scope).await?;
+            Ok(token.secret().to_string())
         }
         .boxed()
     }
@@ -498,7 +491,7 @@ fn parse_hms(value: &str) -> Option<Duration> {
 }
 
 /// Extract `error.message` from an ARM error body, or return the raw text.
-fn error_message(body: &str) -> String {
+pub(crate) fn error_message(body: &str) -> String {
     serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|v| {

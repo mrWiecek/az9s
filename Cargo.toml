@@ -6,11 +6,12 @@ members = [
     "crates/c9s-azure",
     "crates/c9s-gcp",
     "crates/c9s-aws",
+    "crates/c9s-exec",
     "crates/c9s-tui",
 ]
 
 [workspace.package]
-version = "1.5.1"
+version = "1.5.2"
 edition = "2021"
 rust-version = "1.88"
 authors = ["c9s contributors"]
@@ -26,12 +27,6 @@ futures = "0.3"
 ratatui = "0.26"
 crossterm = "0.27"
 
-# Azure SDK. Default features are off so nothing links the system OpenSSL:
-# TLS comes from rustls, which builds anywhere (WSL, minimal containers)
-# without libssl-dev or pkg-config.
-azure_core = { version = "0.19", default-features = false, features = ["enable_reqwest_rustls"] }
-azure_identity = { version = "0.19", default-features = false, features = ["enable_reqwest_rustls", "development", "old_azure_cli"] }
-azure_mgmt_resources = { version = "0.19", default-features = false, features = ["enable_reqwest_rustls", "default_tag"] }
 
 # Data & serialization
 serde = { version = "1.0", features = ["derive"] }

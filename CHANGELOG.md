@@ -12,6 +12,47 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-11-05
+
+### Security
+- **Terminal escape sequences from cloud data are neutralised.** A
+  resource name, tag, group name or API error carrying control characters
+  (an escape sequence that sets the terminal title, writes the clipboard or
+  redraws the screen) or a bidirectional override reached the terminal.
+  Every frame is now cleaned before it is drawn.
+- **Cloud CLIs are started safely.** `az`, `gcloud` and `aws` are looked
+  up on the PATH only (an `az.cmd` in the current directory, e.g. in a
+  cloned repository, no longer runs) and started by full path instead of
+  through `cmd /C` on Windows, so a tenant, gcloud configuration or AWS
+  profile name with `&` or `|` can't run another command. Such names are
+  refused on every platform. The Azure login uses c9s's own
+  `az account get-access-token` credential for the same reason.
+- **No Azure SDK; current TLS.** The Azure SDK (`azure_core` 0.19 could log
+  the `Authorization` header) is gone: Azure is called over plain HTTPS
+  like the other clouds. reqwest 0.12 brings rustls 0.23.46 and
+  rustls-webpki 0.103.16, fixing a TLS key-exchange downgrade and
+  certificate validation advisories in the old stack. `cargo audit`
+  reports no vulnerabilities.
+- **Copying is safe to paste.** `y` and `c` copy without control
+  characters; copied tables defuse spreadsheet formulas (`=`, `+`, `-`,
+  `@` get a leading `'`).
+- **`o` opens only https links to the Azure Portal, Google Cloud console
+  and AWS console**, percent-encoded, and on Windows without `cmd.exe`.
+- **Tokens stay on the API's host.** Paging links are followed only on the
+  same host, ARM IDs from responses must be paths, and an AWS region must
+  look like one before it becomes part of a host name.
+- **The cache is private** (0700 directory, 0600 files on Unix), and AWS
+  credentials no longer show their secret in debug output.
+- **Release pipeline.** Actions are pinned to commit SHAs, jobs get
+  read-only tokens (only publishing writes), checkouts keep no
+  credentials, release builds don't use a shared cache, and every archive
+  gets signed build provenance (`gh attestation verify`). CI runs
+  `cargo audit`; Dependabot proposes updates weekly.
+
+### Added
+- [SECURITY.md](SECURITY.md): how to report a vulnerability, what c9s
+  protects and how, and the known, accepted advisories.
+
 ## [1.5.1] - 2026-11-04
 
 ### Fixed
@@ -773,7 +814,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/mrWiecek/c9s/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/mrWiecek/c9s/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/mrWiecek/c9s/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/mrWiecek/c9s/compare/v1.3.0...v1.4.0

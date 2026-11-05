@@ -18,13 +18,10 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots"] }
 base64 = "0.13"
+c9s-exec = { path = "../c9s-exec" }
 
-# Azure SDK
-azure_core = { workspace = true }
-azure_identity = { workspace = true }
-azure_mgmt_resources = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.8"
