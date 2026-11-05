@@ -127,6 +127,8 @@ How it fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Google Cloud (preview)
 
+Setup and permissions for every cloud: [docs/CLOUDS.md](docs/CLOUDS.md).
+
 c9s also browses Google Cloud: the organization's folders (`:mg`),
 projects, their resources (type, location, labels) and each resource's
 document; `o` opens the selected item in the Google Cloud console.

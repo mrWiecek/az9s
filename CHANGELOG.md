@@ -12,6 +12,21 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-04
+
+### Fixed
+- Without the Azure CLI, c9s starts on `:ctx` (listing gcloud
+  configurations and AWS profiles) instead of an Azure error, so it can be
+  used for Google Cloud or AWS alone. When Azure subscriptions fail to
+  load, the error points to `:ctx` for the other clouds.
+- Help (`?`) covers every cloud: a Clouds section, `:ctx` and `:mg` per
+  cloud, and what `y` and `o` do under Google Cloud and AWS.
+
+### Added
+- [docs/CLOUDS.md](docs/CLOUDS.md): setup and the read permissions each
+  cloud needs (Azure roles, Google Cloud roles and APIs, AWS actions and
+  Organizations).
+
 ## [1.5.0] - 2026-11-04
 
 ### Added
@@ -758,7 +773,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/mrWiecek/c9s/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/mrWiecek/c9s/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/mrWiecek/c9s/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/mrWiecek/c9s/compare/v1.2.0...v1.3.0

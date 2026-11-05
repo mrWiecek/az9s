@@ -220,6 +220,33 @@ pub async fn cloud_contexts() -> Result<CloudContexts, String> {
     }
 }
 
+/// The fetcher without the Azure CLI: it lists the other clouds'
+/// contexts (`:ctx`) and says how to sign in for everything else.
+pub struct ContextsOnly;
+
+/// What Azure requests say without the Azure CLI.
+pub const NOT_SIGNED_IN: &str = "the Azure CLI (az) was not found: install it, run `az login` and \
+     restart, or pick a Google Cloud or AWS context with :ctx";
+
+impl Fetcher for ContextsOnly {
+    fn fetch(&self, request: LoadRequest, _sink: ChunkSink) -> BoxFuture<'static, FetchOutcome> {
+        async move {
+            let data = match request {
+                LoadRequest::CloudContexts => cloud_contexts().await.map(LoadedData::CloudContexts),
+                // No Azure tenants to list; the other clouds' contexts are.
+                LoadRequest::Tenants => Ok(LoadedData::Tenants(vec![])),
+                _ => Err(NOT_SIGNED_IN.to_string()),
+            };
+            FetchOutcome {
+                data,
+                failed_subscriptions: vec![],
+                notice: None,
+            }
+        }
+        .boxed()
+    }
+}
+
 #[derive(Debug)]
 pub enum LoadedData {
     Subscriptions(Vec<Subscription>),
