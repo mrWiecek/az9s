@@ -11,10 +11,11 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+c9s-exec = { path = "../c9s-exec" }
 chrono = { workspace = true }
 # SigV4 signing (HMAC-SHA256, SHA-256); already in the tree through rustls.
 ring = "0.17"
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots"] }
 
 [dev-dependencies]
 c9s-azure = { path = "../c9s-azure", features = ["test-util"] }

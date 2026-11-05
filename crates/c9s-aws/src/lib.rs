@@ -202,21 +202,22 @@ pub fn parse_profiles(config: &str, credentials: &str) -> Vec<Profile> {
     out
 }
 
-/// Runs the AWS CLI (through `cmd /C` on Windows).
-fn aws(program: &str, args: &[&str]) -> Command {
-    let mut command = if cfg!(windows) && program == "aws" {
-        let mut c = Command::new("cmd");
-        c.args(["/C", "aws"]);
-        c
-    } else {
-        Command::new(program)
-    };
-    command.args(args);
-    command
+/// Runs the AWS CLI: found on the PATH only and started by full path (on
+/// Windows `aws.exe` or a batch file), with every argument checked: a
+/// profile name from `~/.aws/config` can't add a command (see
+/// [`c9s_exec`]).
+fn aws(program: &str, args: &[&str]) -> Result<Command> {
+    c9s_exec::command(program, args).map_err(|e| match e {
+        c9s_exec::Error::NotFound(_) => Error(
+            "the AWS CLI (aws) was not found; install AWS CLI v2 and sign in (`aws sso login` or `aws configure`)"
+                .into(),
+        ),
+        e => Error(e.to_string()),
+    })
 }
 
 async fn run(program: &str, args: &[&str]) -> Result<String> {
-    let output = aws(program, args).output().await.map_err(|e| {
+    let output = aws(program, args)?.output().await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error("the AWS CLI (aws) was not found; install AWS CLI v2 and sign in (`aws sso login` or `aws configure`)".into())
         } else {
@@ -297,11 +298,7 @@ impl Session {
             assume: Some(Assume {
                 base,
                 role_arn,
-                region: if region.is_empty() {
-                    DEFAULT_REGION.into()
-                } else {
-                    region.into()
-                },
+                region: valid_region(region).unwrap_or(DEFAULT_REGION).into(),
                 endpoint,
                 http: reqwest::Client::new(),
             }),
@@ -590,16 +587,27 @@ pub struct AwsClient {
     endpoint: Option<String>,
 }
 
+/// A region from the config files, if it looks like one (`eu-west-1`): it
+/// becomes part of every request's host name, so anything else (a region
+/// like `evil.example/x?`) would send signed requests elsewhere.
+pub fn valid_region(region: &str) -> Option<&str> {
+    let ok = !region.is_empty()
+        && region.len() <= 32
+        && region
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    ok.then_some(region)
+}
+
 impl AwsClient {
     pub fn new(session: Arc<Session>, region: &str) -> Self {
+        if !region.is_empty() && valid_region(region).is_none() {
+            tracing::warn!("Ignoring invalid AWS region {region:?}; using {DEFAULT_REGION}");
+        }
         Self {
             http: reqwest::Client::new(),
             session,
-            region: if region.is_empty() {
-                DEFAULT_REGION.into()
-            } else {
-                region.into()
-            },
+            region: valid_region(region).unwrap_or(DEFAULT_REGION).into(),
             endpoint: None,
         }
     }
@@ -938,6 +946,28 @@ aws_access_key_id = AKIB
         );
         let accounts: Vec<&str> = profiles.iter().map(|p| p.account_id.as_str()).collect();
         assert_eq!(accounts, ["", "111122223333", "444455556666", ""]);
+    }
+
+    #[test]
+    fn regions_are_checked_before_they_become_hosts() {
+        assert_eq!(valid_region("eu-west-1"), Some("eu-west-1"));
+        assert_eq!(valid_region("us-gov-west-1"), Some("us-gov-west-1"));
+        for bad in ["", "evil.example/x?", "EU-WEST-1", "eu west", "a@b", "x.y"] {
+            assert_eq!(valid_region(bad), None, "{bad:?}");
+        }
+        let session = Arc::new(Session::with_program("/nonexistent/aws", "p"));
+        let client = AwsClient::new(session, "evil.example/x?");
+        assert_eq!(client.region(), DEFAULT_REGION);
+    }
+
+    #[test]
+    fn profile_names_cannot_add_a_command() {
+        let err = aws(
+            "aws",
+            &["configure", "export-credentials", "--profile", "prod&calc"],
+        )
+        .unwrap_err();
+        assert!(err.0.contains("refused"), "{err}");
     }
 
     #[test]

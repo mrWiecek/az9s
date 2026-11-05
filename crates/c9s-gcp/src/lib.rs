@@ -74,21 +74,21 @@ pub struct Asset {
     pub document: Value,
 }
 
-/// Runs the gcloud CLI (`gcloud.cmd` on Windows, through `cmd /C`).
-fn gcloud(program: &str, args: &[&str]) -> Command {
-    let mut command = if cfg!(windows) && program == "gcloud" {
-        let mut c = Command::new("cmd");
-        c.args(["/C", "gcloud"]);
-        c
-    } else {
-        Command::new(program)
-    };
-    command.args(args);
-    command
+/// Runs the gcloud CLI: found on the PATH only and started by full path
+/// (on Windows `gcloud.cmd`), with every argument checked (see
+/// [`c9s_exec`]).
+fn gcloud(program: &str, args: &[&str]) -> Result<Command> {
+    c9s_exec::command(program, args).map_err(|e| match e {
+        c9s_exec::Error::NotFound(_) => Error(
+            "the Google Cloud CLI (gcloud) was not found; install it and run `gcloud auth login`"
+                .into(),
+        ),
+        e => Error(e.to_string()),
+    })
 }
 
 async fn run(program: &str, args: &[&str]) -> Result<String> {
-    let output = gcloud(program, args).output().await.map_err(|e| {
+    let output = gcloud(program, args)?.output().await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error("the Google Cloud CLI (gcloud) was not found; install it and run `gcloud auth login`".into())
         } else {

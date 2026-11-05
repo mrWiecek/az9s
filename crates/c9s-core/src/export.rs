@@ -396,10 +396,14 @@ fn count(n: usize, noun: &str) -> String {
 }
 
 /// Tab-separated fields; tabs and newlines inside a field become spaces.
+/// Fields come from the clouds and are pasted into spreadsheets: other
+/// control characters are replaced, and a field a spreadsheet would read
+/// as a formula (`=`, `+`, `-`, `@`) starts with `'` (see
+/// [`crate::safe_text::spreadsheet_cell`]).
 fn tsv(fields: &[&str]) -> String {
     fields
         .iter()
-        .map(|f| f.replace(['\t', '\n', '\r'], " "))
+        .map(|f| crate::safe_text::spreadsheet_cell(&f.replace(['\t', '\n', '\r'], " ")))
         .collect::<Vec<_>>()
         .join("\t")
 }

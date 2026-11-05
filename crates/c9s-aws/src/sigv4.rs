@@ -2,13 +2,26 @@
 
 use ring::{digest, hmac};
 
-/// What a request is signed with.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What a request is signed with. `Debug` shows the access key ID only.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Credentials {
     pub access_key_id: String,
     pub secret_access_key: String,
     /// Temporary credentials (SSO, assumed roles) carry a session token.
     pub session_token: Option<String>,
+}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("access_key_id", &self.access_key_id)
+            .field("secret_access_key", &"<redacted>")
+            .field(
+                "session_token",
+                &self.session_token.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -159,6 +172,11 @@ mod tests {
         };
         let headers = sign(&request, &creds, "eu-west-1", "tagging", "20260101T000000Z");
         assert!(headers.contains(&("x-amz-security-token".into(), "T".into())));
+        let shown = format!("{creds:?}");
+        assert!(
+            !shown.contains("\"S\"") && !shown.contains("\"T\""),
+            "{shown}"
+        );
         let auth = &headers
             .iter()
             .find(|(k, _)| k == "authorization")

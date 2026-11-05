@@ -134,7 +134,9 @@ impl DirectoryClient {
                     }),
             );
             match body.get("@odata.nextLink").and_then(Value::as_str) {
-                Some(next) if !next.is_empty() => url = next.to_string(),
+                Some(next) if !next.is_empty() => {
+                    url = crate::client::next_page(next, &self.endpoint)?
+                }
                 _ => break,
             }
         }
@@ -265,7 +267,9 @@ impl DirectoryClient {
                 items.extend(page.iter().cloned());
             }
             match body.get("@odata.nextLink").and_then(Value::as_str) {
-                Some(next) if !next.is_empty() => url = next.to_string(),
+                Some(next) if !next.is_empty() => {
+                    url = crate::client::next_page(next, &self.endpoint)?
+                }
                 _ => return Ok(items),
             }
         }

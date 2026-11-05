@@ -74,7 +74,14 @@ impl App {
 
         let cache_dir = Self::cache_dir()?;
         std::fs::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
-        let cache = Cache::new(&cache_dir.join("c9s.db"))?;
+        // The cache holds the tenant's inventory, role assignments and
+        // directory names: readable by this user only.
+        crate::paths::make_private(&cache_dir, true);
+        let db = cache_dir.join("c9s.db");
+        let cache = Cache::new(&db)?;
+        for file in ["c9s.db", "c9s.db-wal", "c9s.db-shm"] {
+            crate::paths::make_private(&cache_dir.join(file), false);
+        }
 
         let auth = match AzureAuth::new_auto().await {
             Ok(auth) => Some(Arc::new(auth)),

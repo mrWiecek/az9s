@@ -88,3 +88,43 @@ mod tests {
         assert!(env_var("C9S_PATHS_TEST_ONLY_NEITHER").is_none());
     }
 }
+
+/// Make `path` readable by this user only (Unix: 0700 for a directory,
+/// 0600 for a file). Elsewhere, and for a path that doesn't exist, nothing
+/// changes; a failure is logged, not fatal.
+pub fn make_private(path: &std::path::Path, directory: bool) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if !path.exists() {
+            return;
+        }
+        let mode = if directory { 0o700 } else { 0o600 };
+        if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)) {
+            tracing::warn!("Could not restrict {}: {e}", path.display());
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, directory);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod private_tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn cache_files_become_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("c9s.db");
+        std::fs::write(&file, b"x").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        super::make_private(dir.path(), true);
+        super::make_private(&file, false);
+        super::make_private(&dir.path().join("missing"), false);
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(dir.path()), 0o700);
+        assert_eq!(mode(&file), 0o600);
+    }
+}
