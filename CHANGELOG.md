@@ -12,6 +12,19 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-06
+
+### Added
+- **Managed identities in `:app` say which kind they are and where they
+  live.** The list shows *user-assigned MI* or *system-assigned MI*
+  (`/managed` still finds both). The Overview tab has a *Managed identity*
+  section: the type, the Azure resource (the user-assigned identity, or
+  the VM, App Service or other resource a system-assigned identity belongs
+  to) with its resource type, subscription, resource group, ID and Azure
+  Portal link. `o` on a managed identity opens that resource in the Portal
+  instead of the enterprise application. From Microsoft Graph's
+  `alternativeNames`; no new permissions.
+
 ## [1.5.2] - 2026-11-05
 
 ### Security
@@ -814,7 +827,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.5.2...HEAD
+[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/mrWiecek/c9s/compare/v1.5.2...v1.6.0
 [1.5.2]: https://github.com/mrWiecek/c9s/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/mrWiecek/c9s/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/mrWiecek/c9s/compare/v1.4.0...v1.5.0

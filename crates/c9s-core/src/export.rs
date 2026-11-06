@@ -128,7 +128,7 @@ pub fn view_text(state: &AppState) -> Option<(String, String)> {
                     .unwrap_or_default();
                 tsv(&[
                     &r.name,
-                    r.kind.label(),
+                    r.kind_label(),
                     &r.app_id,
                     &soonest,
                     r.app.as_ref().map_or("", |a| a.id.as_str()),

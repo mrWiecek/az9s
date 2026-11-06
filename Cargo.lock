@@ -94,7 +94,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
 name = "c9s"
-version = "1.5.2"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "c9s-azure",
@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "c9s-aws"
-version = "1.5.2"
+version = "1.6.0"
 dependencies = [
  "c9s-azure",
  "c9s-exec",
@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "c9s-azure"
-version = "1.5.2"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "base64 0.13.1",
@@ -142,7 +142,7 @@ dependencies = [
 
 [[package]]
 name = "c9s-core"
-version = "1.5.2"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "c9s-aws",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "c9s-exec"
-version = "1.5.2"
+version = "1.6.0"
 dependencies = [
  "tempfile",
  "tokio",
@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "c9s-gcp"
-version = "1.5.2"
+version = "1.6.0"
 dependencies = [
  "c9s-azure",
  "c9s-exec",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "c9s-tui"
-version = "1.5.2"
+version = "1.6.0"
 dependencies = [
  "anyhow",
  "c9s-core",

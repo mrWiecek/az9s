@@ -4,16 +4,32 @@
 use c9s_core::apps::{AppDetail, Application, ServicePrincipal, MICROSOFT_TENANT};
 use c9s_core::cache::Cache;
 use c9s_core::loader::{ChunkSink, FetchOutcome, Fetcher, LoadReceiver, LoadRequest, LoadedData};
+use c9s_core::models::Subscription;
 use c9s_core::rbac::Principal;
 use c9s_core::state::{AppTab, ViewMode};
 use c9s_core::App;
+use c9s_tui::desktop::Desktop;
 use c9s_tui::{ui, Event, TuiApp};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use ratatui::{backend::TestBackend, Terminal};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// Records what would have been opened.
+#[derive(Clone, Default)]
+struct Opened(Arc<Mutex<Vec<String>>>);
+
+impl Desktop for Opened {
+    fn copy(&mut self, _text: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn open(&mut self, url: &str) -> Result<(), String> {
+        self.0.lock().unwrap().push(url.to_string());
+        Ok(())
+    }
+}
 
 fn in_days(days: i64) -> String {
     (chrono::Utc::now() + chrono::Duration::days(days) + chrono::Duration::hours(days.signum()))
@@ -48,6 +64,7 @@ fn sp(id: &str, app_id: &str, name: &str, sp_type: &str, tenant: &str) -> Servic
         assignment_required: true,
         owner_tenant: tenant.into(),
         credentials: vec![],
+        alternative_names: vec![],
     }
 }
 
@@ -241,4 +258,104 @@ async fn applications_one_row_each_with_tabs() {
     assert_eq!(app.state().view, ViewMode::AppDetail);
     press(&mut app, KeyCode::Esc).await;
     assert_eq!(app.state().view, ViewMode::AppList);
+}
+
+#[tokio::test]
+async fn managed_identities_say_which_kind_and_where_they_live() {
+    let opened = Opened::default();
+    let mut core = App::with_fetcher(
+        Cache::new(Path::new(":memory:")).unwrap(),
+        Some(Arc::new(Graph)),
+    );
+    core.state_mut().subscriptions = vec![Subscription {
+        id: "s1".into(),
+        name: "prod-identity".into(),
+        state: "Enabled".into(),
+        tenant_id: "tenant-1".into(),
+    }];
+    let mut app = TuiApp::with_desktop(core, Box::new(opened.clone()));
+    let mut loads = app.take_load_receiver().unwrap();
+    command(&mut app, "app").await;
+    settle(&mut app, &mut loads).await;
+
+    const UAMI: &str = "/subscriptions/s1/resourceGroups/rg-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-deploy";
+    const VM: &str = "/subscriptions/s1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-web";
+    let mut user = sp("sp-u", "mi-u", "id-deploy", "ManagedIdentity", "");
+    user.alternative_names = vec!["isExplicit=True".into(), UAMI.into()];
+    let mut system = sp("sp-s", "mi-s", "vm-web", "ManagedIdentity", "");
+    system.alternative_names = vec!["isExplicit=False".into(), VM.into()];
+    app.state_mut().service_principals = vec![user, system];
+    app.state_mut().applications = vec![];
+
+    assert_shows(&mut app, &["user-assigned MI", "system-assigned MI"]);
+    // "managed" still finds both.
+    press(&mut app, KeyCode::Char('/')).await;
+    for c in "managed".chars() {
+        press(&mut app, KeyCode::Char(c)).await;
+    }
+    press(&mut app, KeyCode::Enter).await;
+    assert_eq!(app.state().app_rows().len(), 2);
+    press(&mut app, KeyCode::Esc).await; // clears the filter
+
+    // The user-assigned identity: its own resource, and o opens it.
+    let at = app
+        .state()
+        .app_rows()
+        .iter()
+        .position(|r| r.name == "id-deploy")
+        .unwrap();
+    app.state_mut().list_state.selected = at;
+    press(&mut app, KeyCode::Enter).await;
+    settle(&mut app, &mut loads).await;
+    assert_eq!(app.state().view, ViewMode::AppDetail);
+    assert_shows(
+        &mut app,
+        &[
+            "Managed identity",
+            "User-assigned (an Azure resource of its own)",
+            "id-deploy",
+            "Microsoft.ManagedIdentity/userAssignedIdentities",
+            "prod-identity (s1)",
+            "rg-identities",
+            "Portal (o)",
+        ],
+    );
+    press(&mut app, KeyCode::Char('o')).await;
+    assert_eq!(
+        opened.0.lock().unwrap().last().map(String::as_str),
+        Some(format!("https://portal.azure.com/#@tenant-1/resource{UAMI}").as_str())
+    );
+
+    // The system-assigned one: the resource it belongs to.
+    press(&mut app, KeyCode::Esc).await;
+    assert_eq!(
+        app.state().view,
+        ViewMode::AppList,
+        "Esc goes back to the list"
+    );
+    let at = app
+        .state()
+        .app_rows()
+        .iter()
+        .position(|r| r.name == "vm-web")
+        .unwrap();
+    app.state_mut().list_state.selected = at;
+    press(&mut app, KeyCode::Char('o')).await;
+    assert_eq!(
+        opened.0.lock().unwrap().last().map(String::as_str),
+        Some(format!("https://portal.azure.com/#@tenant-1/resource{VM}").as_str()),
+        "o in the list opens the VM too"
+    );
+    press(&mut app, KeyCode::Enter).await;
+    settle(&mut app, &mut loads).await;
+    assert_shows(
+        &mut app,
+        &[
+            "System-assigned (part of the resource below)",
+            "Assigned to",
+            "vm-web",
+            "Microsoft.Compute/virtualMachines",
+            "rg-app",
+        ],
+    );
 }

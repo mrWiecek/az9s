@@ -689,7 +689,7 @@ fn draw_apps(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
             count(AppKind::ManagedIdentity),
         )
     };
-    let name_col = name_width(area.width, 18 + 38 + 36, 44);
+    let name_col = name_width(area.width, 20 + 38 + 36, 44);
     draw_list(f, area, app, title, rows.len(), |i| {
         let r = &rows[i];
         let (expiry, style) = match &r.soonest {
@@ -709,7 +709,7 @@ fn draw_apps(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
                 cell(&r.name, name_col),
                 Style::default().fg(t.text).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(cell(r.kind.label(), 18), kind_style),
+            Span::styled(cell(r.kind_label(), 20), kind_style),
             Span::styled(cell(&r.app_id, 38), Style::default().fg(t.muted)),
             Span::styled(cell(&expiry, 36), style),
         ])
@@ -760,7 +760,7 @@ fn draw_app(f: &mut Frame, area: Rect, app: &mut TuiApp) -> Result<()> {
     let block = Block::default().borders(Borders::ALL).title(format!(
         "{} · {}{loading} · p access, o Portal",
         truncate_with_ellipsis(&row.name, 60),
-        row.kind.label()
+        row.kind_label()
     ));
     let inner = block.inner(area);
     f.render_widget(block, area);
