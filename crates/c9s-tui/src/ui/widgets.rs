@@ -138,14 +138,14 @@ impl<'a> StatefulWidget for SelectableList<'a> {
                     if x >= item_area.x + item_area.width {
                         break;
                     }
-                    buf.get_mut(x, y).set_char(ch).set_style(span_style);
+                    buf[(x, y)].set_char(ch).set_style(span_style);
                     x += 1;
                 }
             }
 
             // Fill the rest of the line with the style
             while x < item_area.x + item_area.width {
-                buf.get_mut(x, y).set_style(style);
+                buf[(x, y)].set_style(style);
                 x += 1;
             }
         }

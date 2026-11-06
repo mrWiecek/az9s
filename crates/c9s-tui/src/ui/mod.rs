@@ -41,9 +41,9 @@ pub fn draw(f: &mut Frame, app: &mut TuiApp) -> Result<()> {
             Constraint::Length(3), // Status bar
             Constraint::Length(3), // Footer (keybindings/command)
         ])
-        .split(f.size());
+        .split(f.area());
 
-    theme::paint_background(f, f.size());
+    theme::paint_background(f, f.area());
     draw_header(f, chunks[0], app);
     draw_content(f, chunks[1], app)?;
     draw_status_bar(f, chunks[2], app);
@@ -56,7 +56,7 @@ pub fn draw(f: &mut Frame, app: &mut TuiApp) -> Result<()> {
 
     // Command palette
     if app.state().palette.is_some() {
-        draw_palette(f, f.size(), app);
+        draw_palette(f, f.area(), app);
     }
 
     // Draw error overlay if present
@@ -67,7 +67,7 @@ pub fn draw(f: &mut Frame, app: &mut TuiApp) -> Result<()> {
     // Draw help screen if open
     if app.state().help_open {
         let mut scroll = app.state().help_scroll;
-        render_help(f, f.size(), &mut scroll);
+        render_help(f, f.area(), &mut scroll);
         app.state_mut().help_scroll = scroll;
     }
 
@@ -2663,7 +2663,7 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &TuiApp) {
 /// Draw error overlay
 fn draw_error_overlay(f: &mut Frame, app: &TuiApp) {
     if let Some(error) = &app.state().error {
-        let area = centered_rect(60, 20, f.size());
+        let area = centered_rect(60, 20, f.area());
 
         let error_text = format!("Error\n\n{}\n\nPress Esc to dismiss", error);
         let error_widget = Paragraph::new(error_text)
