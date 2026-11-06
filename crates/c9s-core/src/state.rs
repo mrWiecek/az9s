@@ -117,6 +117,14 @@ pub struct AppState {
     pub app_detail: Option<(String, crate::apps::AppDetail)>,
     pub app_tab: AppTab,
 
+    /// The selected field on an application's Overview (`j`/`k`; `y`/`c`
+    /// copy it, `o` offers its page first)
+    pub app_field: usize,
+
+    /// `o` with several pages to open: their names and links, and the one
+    /// highlighted
+    pub portal_choice: Option<(Vec<(String, String)>, usize)>,
+
     /// Every group in the directory, once loaded
     pub groups: Vec<c9s_azure::directory::Group>,
 
