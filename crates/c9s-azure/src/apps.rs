@@ -80,6 +80,22 @@ pub struct ServicePrincipal {
     /// The tenant the app is registered in
     pub owner_tenant: String,
     pub credentials: Vec<Credential>,
+    /// For a managed identity: `isExplicit=True|False` (user- or
+    /// system-assigned) and the Azure resource ID it belongs to.
+    #[serde(default)]
+    pub alternative_names: Vec<String>,
+}
+
+/// Where a managed identity lives in Azure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedIdentity {
+    /// User-assigned (a `userAssignedIdentities` resource of its own), or
+    /// system-assigned (part of the resource it identifies); `None` when
+    /// Graph doesn't say.
+    pub user_assigned: Option<bool>,
+    /// The ARM ID: the user-assigned identity resource, or the resource a
+    /// system-assigned identity belongs to (a VM, an App Service...).
+    pub resource_id: Option<String>,
 }
 
 /// A delegated permission grant: scopes the app may use on an API, for
@@ -273,12 +289,49 @@ impl ServicePrincipal {
                 .unwrap_or(false),
             owner_tenant: text(item, "appOwnerOrganizationId").to_ascii_lowercase(),
             credentials: credentials(item),
+            alternative_names: item
+                .get("alternativeNames")
+                .and_then(Value::as_array)
+                .map(|names| {
+                    names
+                        .iter()
+                        .filter_map(|n| n.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
             id,
         })
     }
 
     pub fn is_managed_identity(&self) -> bool {
         self.sp_type.eq_ignore_ascii_case("ManagedIdentity")
+    }
+
+    /// For a managed identity: user- or system-assigned, and its Azure
+    /// resource (from `alternativeNames`).
+    pub fn managed_identity(&self) -> Option<ManagedIdentity> {
+        if !self.is_managed_identity() {
+            return None;
+        }
+        let user_assigned = self.alternative_names.iter().find_map(|n| {
+            let value = n.strip_prefix("isExplicit=")?;
+            Some(value.eq_ignore_ascii_case("true"))
+        });
+        let resource_id = self
+            .alternative_names
+            .iter()
+            .find(|n| n.to_ascii_lowercase().starts_with("/subscriptions/"))
+            .cloned();
+        Some(ManagedIdentity {
+            user_assigned: user_assigned.or_else(|| {
+                // Older identities may lack isExplicit: the resource type tells.
+                resource_id.as_ref().map(|id| {
+                    id.to_ascii_lowercase()
+                        .contains("/providers/microsoft.managedidentity/userassignedidentities/")
+                })
+            }),
+            resource_id,
+        })
     }
 
     /// One of Microsoft's own applications.
@@ -312,7 +365,8 @@ fn role_grant(item: &Value) -> RoleGrant {
 const APP_SELECT: &str = "id,appId,displayName,signInAudience,createdDateTime,identifierUris,\
      passwordCredentials,keyCredentials,requiredResourceAccess,api,appRoles,web,spa,publicClient";
 const SP_SELECT: &str = "id,appId,displayName,servicePrincipalType,accountEnabled,\
-     appRoleAssignmentRequired,appOwnerOrganizationId,passwordCredentials,keyCredentials";
+     appRoleAssignmentRequired,appOwnerOrganizationId,passwordCredentials,keyCredentials,\
+     alternativeNames";
 const RESOURCE_SELECT: &str = "id,appId,displayName,oauth2PermissionScopes,appRoles";
 
 impl DirectoryClient {
@@ -420,6 +474,47 @@ impl DirectoryClient {
 }
 
 #[cfg(test)]
+mod managed_identity_tests {
+    use super::*;
+
+    fn mi(names: &[&str]) -> ServicePrincipal {
+        ServicePrincipal {
+            sp_type: "ManagedIdentity".into(),
+            alternative_names: names.iter().map(|n| n.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn user_and_system_assigned_identities_and_their_resources() {
+        let uami = "/subscriptions/s1/resourcegroups/rg-id/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-deploy";
+        assert_eq!(
+            mi(&["isExplicit=True", uami]).managed_identity(),
+            Some(ManagedIdentity {
+                user_assigned: Some(true),
+                resource_id: Some(uami.into())
+            })
+        );
+        let vm =
+            "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-1";
+        let system = mi(&["isExplicit=False", vm]).managed_identity().unwrap();
+        assert_eq!(system.user_assigned, Some(false));
+        assert_eq!(system.resource_id.as_deref(), Some(vm));
+        // Without isExplicit, the resource type says which it is.
+        assert_eq!(
+            mi(&[uami]).managed_identity().unwrap().user_assigned,
+            Some(true)
+        );
+        assert_eq!(mi(&[]).managed_identity().unwrap().user_assigned, None);
+        let app = ServicePrincipal {
+            sp_type: "Application".into(),
+            ..Default::default()
+        };
+        assert_eq!(app.managed_identity(), None);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::testing::{ok, serve_paths, StaticToken};
@@ -462,7 +557,9 @@ mod tests {
                      "servicePrincipalType": "Application", "accountEnabled": true,
                      "appRoleAssignmentRequired": true, "appOwnerOrganizationId": "T"},
                     {"id": "sp-mi", "appId": "mi-1", "displayName": "vm-identity",
-                     "servicePrincipalType": "ManagedIdentity"},
+                     "servicePrincipalType": "ManagedIdentity",
+                     "alternativeNames": ["isExplicit=False",
+                        "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm-1"]},
                     {"id": "sp-ms", "appId": "ms-1", "displayName": "Office 365",
                      "appOwnerOrganizationId": MICROSOFT_TENANT}
                 ]}))
@@ -471,6 +568,11 @@ mod tests {
         .await;
         let client = DirectoryClient::with_endpoint(endpoint, Arc::new(StaticToken("t".into())));
         let (apps, sps) = client.applications().await.unwrap();
+        assert_eq!(
+            sps[1].managed_identity().unwrap().user_assigned,
+            Some(false),
+            "alternativeNames are read"
+        );
         let app = &apps[0];
         assert_eq!(app.app_id, "app-1", "app IDs lowercase, to join the two");
         assert_eq!(app.redirect_uris, ["https://billing/cb"]);

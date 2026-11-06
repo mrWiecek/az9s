@@ -279,6 +279,9 @@ fn overview(out: &mut Vec<Line>, row: &AppRow, state: &AppState) {
         None => main.push(("Registration", "none in this tenant".into())),
     }
     rows(out, "Application", &main);
+    if let Some(mi) = row.managed_identity() {
+        managed_identity(out, &mi, state);
+    }
     match &row.sp {
         Some(sp) => {
             let publisher = if sp.is_microsoft() {
@@ -331,6 +334,89 @@ fn overview(out: &mut Vec<Line>, row: &AppRow, state: &AppState) {
             )],
         );
     }
+}
+
+/// The parts of an ARM ID: subscription, resource group, resource type
+/// (`Microsoft.Compute/virtualMachines`) and name.
+fn arm_parts(id: &str) -> (String, String, String, String) {
+    let parts: Vec<&str> = id.split('/').filter(|p| !p.is_empty()).collect();
+    let after = |key: &str| {
+        parts
+            .windows(2)
+            .find(|w| w[0].eq_ignore_ascii_case(key))
+            .map(|w| w[1].to_string())
+            .unwrap_or_default()
+    };
+    let resource_type = parts
+        .iter()
+        .rposition(|p| p.eq_ignore_ascii_case("providers"))
+        .and_then(|i| Some(format!("{}/{}", parts.get(i + 1)?, parts.get(i + 2)?)))
+        .unwrap_or_default();
+    let name = parts.last().map(|n| n.to_string()).unwrap_or_default();
+    (
+        after("subscriptions"),
+        after("resourceGroups"),
+        resource_type,
+        name,
+    )
+}
+
+/// The Azure Portal page of a managed identity's resource, in the
+/// resource's own tenant when its subscription is known.
+fn identity_portal_url(resource_id: &str, state: &AppState) -> String {
+    let (sub, ..) = arm_parts(resource_id);
+    let tenant = state
+        .subscriptions
+        .iter()
+        .find(|s| s.id.eq_ignore_ascii_case(&sub))
+        .map(|s| s.tenant_id.clone())
+        .filter(|t| !t.is_empty())
+        .or_else(|| state.tenant.clone())
+        .or_else(|| state.portal_tenant());
+    crate::detail::portal_url(resource_id, tenant.as_deref())
+}
+
+/// For a managed identity: the Portal page of its Azure resource (the
+/// user-assigned identity, or the resource a system-assigned one belongs
+/// to), which `o` opens instead of the enterprise application.
+pub fn managed_identity_url(row: &AppRow, state: &AppState) -> Option<String> {
+    let id = row.managed_identity()?.resource_id?;
+    Some(identity_portal_url(&id, state))
+}
+
+/// Where a managed identity lives in Azure: the user-assigned identity
+/// resource, or the resource a system-assigned one belongs to, with its
+/// Portal link (`o` opens it).
+fn managed_identity(out: &mut Vec<Line>, mi: &crate::apps::ManagedIdentity, state: &AppState) {
+    let kind = match mi.user_assigned {
+        Some(true) => "User-assigned (an Azure resource of its own)",
+        Some(false) => "System-assigned (part of the resource below)",
+        None => "Unknown (Microsoft Graph doesn't say)",
+    };
+    let mut items = vec![("Type", kind.to_string())];
+    match &mi.resource_id {
+        Some(id) => {
+            let (sub, rg, resource_type, name) = arm_parts(id);
+            let known = state
+                .subscriptions
+                .iter()
+                .find(|s| s.id.eq_ignore_ascii_case(&sub));
+            let subscription = known.map(|s| format!("{} ({sub})", s.name)).unwrap_or(sub);
+            let resource_label = if mi.user_assigned == Some(false) {
+                "Assigned to"
+            } else {
+                "Resource"
+            };
+            items.push((resource_label, name));
+            items.push(("Resource type", resource_type));
+            items.push(("Subscription", subscription));
+            items.push(("Resource group", rg));
+            items.push(("Resource ID", id.clone()));
+            items.push(("Portal (o)", identity_portal_url(id, state)));
+        }
+        None => items.push(("Resource", "not given by Microsoft Graph".into())),
+    }
+    rows(out, "Managed identity", &items);
 }
 
 /// The current tab as plain text, for `c`.

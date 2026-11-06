@@ -1706,6 +1706,15 @@ impl TuiApp {
             ViewMode::AppDetail => self.state().app_open.clone(),
             _ => None,
         };
+        // A managed identity opens on its Azure resource: the
+        // user-assigned identity, or what a system-assigned one belongs to.
+        if let Some(url) = app
+            .as_ref()
+            .and_then(|a| c9s_core::app_view::managed_identity_url(a, self.state()))
+        {
+            self.open_url(&url, "the Azure Portal");
+            return;
+        }
         let directory = match self.state().view {
             ViewMode::AppList | ViewMode::AppDetail => app
                 .map(|a| match a.sp {

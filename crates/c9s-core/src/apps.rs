@@ -5,7 +5,8 @@
 
 use crate::policy::Expiry;
 pub use c9s_azure::apps::{
-    AppDetail, Application, Credential, ResourceApi, ServicePrincipal, MICROSOFT_TENANT,
+    AppDetail, Application, Credential, ManagedIdentity, ResourceApi, ServicePrincipal,
+    MICROSOFT_TENANT,
 };
 use std::collections::HashMap;
 
@@ -45,6 +46,21 @@ pub struct AppRow {
 }
 
 impl AppRow {
+    /// Where the managed identity lives, if the row is one.
+    pub fn managed_identity(&self) -> Option<ManagedIdentity> {
+        self.sp.as_ref()?.managed_identity()
+    }
+
+    /// The kind as listed: managed identities say whether they are user- or
+    /// system-assigned.
+    pub fn kind_label(&self) -> &'static str {
+        match self.managed_identity().and_then(|m| m.user_assigned) {
+            Some(true) => "user-assigned MI",
+            Some(false) => "system-assigned MI",
+            None => self.kind.label(),
+        }
+    }
+
     /// The registration's and the enterprise application's credentials.
     pub fn credentials(&self) -> Vec<(&'static str, &Credential)> {
         let app = self
@@ -136,7 +152,9 @@ pub fn app_rows(
     let needle = filter.to_ascii_lowercase();
     rows.into_iter()
         .filter(|r| {
-            [r.name.as_str(), &r.app_id, r.kind.label()]
+            // "managed" finds both kinds of managed identity, "user-assigned"
+            // or "system-assigned" one of them.
+            [r.name.as_str(), &r.app_id, r.kind.label(), r.kind_label()]
                 .iter()
                 .any(|f| f.to_ascii_lowercase().contains(&needle))
         })
