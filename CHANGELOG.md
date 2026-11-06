@@ -12,6 +12,14 @@ Release process, audit and rollback: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-11-06
+
+### Security
+- **ratatui 0.30 and crossterm 0.29.** ratatui 0.26 pulled in `lru` 0.12
+  (RUSTSEC-2026-0002, RUSTSEC-2026-0253: unsoundness) and the unmaintained
+  `paste` (RUSTSEC-2024-0436). `cargo audit` now reports no
+  vulnerabilities and no warnings. Nothing changes on screen.
+
 ## [1.6.0] - 2026-11-06
 
 ### Added
@@ -827,7 +835,8 @@ Already in the codebase before this changelog was started:
 - Resource groups and resources are not yet shown from the cache before Azure
   answers (M1 step 4).
 
-[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/mrWiecek/c9s/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/mrWiecek/c9s/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/mrWiecek/c9s/compare/v1.5.2...v1.6.0
 [1.5.2]: https://github.com/mrWiecek/c9s/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/mrWiecek/c9s/compare/v1.5.0...v1.5.1

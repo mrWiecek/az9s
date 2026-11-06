@@ -85,7 +85,7 @@ fn restore_terminal() -> Result<()> {
 
 /// Main event loop: draw, wait for input, then drain everything queued before
 /// drawing again. Draining means a burst of key repeats costs one redraw.
-async fn run_loop<B: ratatui::backend::Backend>(
+async fn run_loop<B: ratatui::backend::Backend<Error = io::Error>>(
     terminal: &mut Terminal<B>,
     app: &mut TuiApp,
     event_handler: &mut EventHandler,
@@ -142,7 +142,7 @@ fn apply_load(app: &mut TuiApp, result: LoadResult) {
 }
 
 /// Render one frame. Returns an error only if the terminal is gone.
-fn draw_frame<B: ratatui::backend::Backend>(
+fn draw_frame<B: ratatui::backend::Backend<Error = io::Error>>(
     terminal: &mut Terminal<B>,
     app: &mut TuiApp,
 ) -> Result<()> {

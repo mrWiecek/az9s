@@ -57,10 +57,7 @@ describe a group:
 
 ## Known, accepted
 
-- `ratatui` 0.26 depends on `lru` 0.12 (RUSTSEC-2026-0002,
-  RUSTSEC-2026-0253: unsoundness in `IterMut` and in `pop()` when a panic
-  unwinds) and the unmaintained `paste` (RUSTSEC-2024-0436). ratatui uses
-  neither path in a way c9s can reach with outside data; they go away with
-  the ratatui upgrade.
+`cargo audit` reports no vulnerabilities and no warnings.
+
 - The cloud CLIs themselves are trusted: whoever can change `~/.aws/config`
   or the PATH can already run code as you.

@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.6.0"
+version = "1.6.1"
 edition = "2021"
 rust-version = "1.88"
 authors = ["c9s contributors"]
@@ -24,8 +24,8 @@ tokio = { version = "1.35", features = ["full"] }
 futures = "0.3"
 
 # TUI
-ratatui = "0.26"
-crossterm = "0.27"
+ratatui = "0.30"
+crossterm = "0.29"
 
 
 # Data & serialization
